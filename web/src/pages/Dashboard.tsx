@@ -8,7 +8,7 @@ function AgentCard({ agent, running, onRun, onToggle }: { agent: Agent; running:
   const stats = agent.stats;
   let state = <Pill tone="cancelled">Idle</Pill>;
   if (!agent.enabled) state = <Pill tone="off">Off</Pill>;
-  else if (!agent.installed) state = <Pill tone="failed">Command not found</Pill>;
+  else if (agent.errors.length) state = <Pill tone="failed">Profile has problems</Pill>;
   else if (running) state = <Pill tone="running">Working on {running}</Pill>;
   else if (stats?.queued) state = <Pill tone="queued">{stats.queued} queued</Pill>;
   return (
@@ -21,8 +21,10 @@ function AgentCard({ agent, running, onRun, onToggle }: { agent: Agent; running:
         <Switch checked={agent.enabled} onChange={onToggle} label={`Turn ${agent.name} ${agent.enabled ? "off" : "on"}`} />
       </div>
       <div className="row">{state}</div>
-      <div className="cmd" title={[agent.command, ...agent.args].join(" ")}>
-        $ {agent.command} {agent.args.join(" ")}
+      <div className="cmd" title={agent.description}>
+        {[agent.model ?? "default model", `${agent.skills.length + agent.ownSkills.length} skills`, `${agent.mcp.length + agent.ownMcp.length + 1} MCP`, agent.live ? "live" : null]
+          .filter(Boolean)
+          .join(" · ")}
       </div>
       <div className="row">
         <div className="counts grow">
@@ -132,6 +134,15 @@ export function Dashboard() {
         </div>
       )}
 
+      {data.model.limit && (
+        <div className="banner">
+          <span className="grow">
+            <b>Usage limit reached</b> ({data.model.limit.reason}). Agents continue automatically at {new Date(data.model.limit.until).toLocaleTimeString()}.
+          </span>
+          <button onClick={() => void api.del("/api/limit")}>Try now</button>
+        </div>
+      )}
+
       <div className="stats">
         <div className="panel stat">
           <div className="label">Working now</div>
@@ -220,6 +231,45 @@ export function Dashboard() {
           )}
         </Panel>
       </div>
+
+      <Panel title="Agent sessions" hint={data.sessions.length ? `${data.sessions.length} open · kept ${data.settings.liveIdleMinutes} min after the last task` : undefined} tight>
+        {data.sessions.length === 0 ? (
+          <Empty>No open sessions. Live agents keep their Claude session open between tasks on the same thread.</Empty>
+        ) : (
+          <div className="table-wrap">
+            <table>
+              <tbody>
+                {data.sessions.map((session) => (
+                  <tr key={session.key}>
+                    <td>
+                      <b>{session.agent}</b>
+                      <div className="meta">{session.busy ? <Pill tone="running">working</Pill> : `idle, closes at ${new Date(session.closesAt!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}</div>
+                    </td>
+                    <td>
+                      <a href={href(`/history/${session.owner}/${session.repo}/${session.threadKind}/${session.threadNumber}`)}>
+                        {session.owner}/{session.repo}#{session.threadNumber}
+                      </a>
+                      <div className="meta mono">{session.sessionId?.slice(0, 8) ?? "starting"}</div>
+                    </td>
+                    <td className="num meta">
+                      {session.turns} task{session.turns === 1 ? "" : "s"}
+                    </td>
+                    <td>
+                      <button
+                        className="small"
+                        disabled={session.busy}
+                        onClick={() => void api.del(`/api/sessions/${encodeURIComponent(session.key)}`)}
+                      >
+                        Close
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
 
       <Panel
         title="Recently finished"

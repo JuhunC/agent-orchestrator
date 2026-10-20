@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
-export type OutputFormat = "text" | "claude-stream-json" | "codex-json" | "gemini-stream-json";
 
 export interface AgentStats {
   queued: number;
@@ -12,22 +11,73 @@ export interface AgentStats {
   cancelled: number;
 }
 
+export interface GithubPermissions {
+  comment: boolean;
+  push: boolean;
+  pullRequest: boolean;
+  clone: boolean;
+  finalize: boolean;
+}
+
+/** An agent profile (profiles/agents/<name>/agent.md). */
 export interface Agent {
   name: string;
   handle: string;
   description: string;
-  command: string;
-  args: string[];
-  resumeArgs: string[];
-  output: OutputFormat;
-  env: Record<string, string>;
+  model: string | null;
+  prompt: string;
+  toolsAllow: string[] | null;
+  toolsDeny: string[];
+  skills: string[];
+  mcp: string[];
+  subagents: string[];
+  github: GithubPermissions;
+  maxTurns: number | null;
+  maxBudgetUsd: number | null;
   timeoutMinutes: number | null;
-  openPullRequest: boolean;
-  exposeGithubToken: boolean;
+  live: boolean;
+  enabledInFile: boolean;
   enabled: boolean;
-  source: "file" | "ui";
-  installed: boolean;
+  ownSkills: { name: string; description: string }[];
+  ownMcp: string[];
+  errors: string[];
   stats?: AgentStats | null;
+}
+
+export interface Library {
+  skills: { name: string; description: string }[];
+  roles: { name: string; description: string; tools: string[] | null; model: string | null }[];
+  mcp: { name: string; type?: string; target?: string }[];
+}
+
+export interface AgentsResponse {
+  agents: Agent[];
+  library: Library;
+  errors: string[];
+  profilesDir: string;
+}
+
+export interface SessionInfo {
+  key: string;
+  agent: string;
+  owner: string;
+  repo: string;
+  threadKind: ThreadKind;
+  threadNumber: number;
+  sessionId: string | null;
+  busy: boolean;
+  turns: number;
+  startedAt: string;
+  lastUsedAt: string;
+  closesAt: string | null;
+}
+
+export interface ModelInfo {
+  baseUrl: string;
+  custom: boolean;
+  model: string | null;
+  credential: string | null;
+  limit: { until: string; reason: string } | null;
 }
 
 export interface Task {
@@ -60,6 +110,9 @@ export interface Task {
   commits: number | null;
   retryOf: number | null;
   forgotten: boolean;
+  retryAt: string | null;
+  attempts: number;
+  live: boolean;
 }
 
 export interface TaskEvent {
@@ -86,6 +139,9 @@ export interface Settings {
   paused: boolean;
   maxConcurrent: number;
   running: number;
+  liveIdleMinutes: number;
+  maxLiveSessions: number;
+  usageLimitRetries: number;
 }
 
 export interface Setup {
@@ -109,7 +165,7 @@ export interface Setup {
   allowedRepos: string[];
   labelPrefix: string;
   defaultTimeoutMinutes: number;
-  agentsConfigPath: string;
+  profilesDir: string;
 }
 
 export interface Overview {
@@ -117,6 +173,8 @@ export interface Overview {
   running: Task[];
   queued: Task[];
   recent: Task[];
+  sessions: SessionInfo[];
+  model: ModelInfo;
   settings: Settings;
   configured: boolean;
 }
@@ -147,7 +205,9 @@ export type BusMessage =
   | { type: "event"; event: TaskEvent }
   | { type: "delivery"; delivery: Delivery }
   | { type: "agents" }
-  | { type: "settings" };
+  | { type: "settings" }
+  | { type: "sessions" }
+  | { type: "limits" };
 
 export class ApiError extends Error {
   status: number;

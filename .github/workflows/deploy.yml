@@ -120,10 +120,9 @@ jobs:
       - name: Copy compose files
         if: steps.check.outputs.skip != 'true'
         run: |
-          ssh target "mkdir -p '$DEPLOY_PATH/config' '$DEPLOY_PATH/agents-bin'"
+          # The orchestrator fills an empty profiles/ with the example agents on first start.
+          ssh target "mkdir -p '$DEPLOY_PATH/profiles' && (chown 1000:1000 '$DEPLOY_PATH/profiles' 2>/dev/null || true)"
           scp deploy/docker-compose.yml deploy/Caddyfile "target:$DEPLOY_PATH/"
-          # agents.yaml is yours to edit on the server; only seed it the first time.
-          ssh target "test -f '$DEPLOY_PATH/config/agents.yaml'" || scp config/agents.yaml "target:$DEPLOY_PATH/config/agents.yaml"
           if ! ssh target "test -f '$DEPLOY_PATH/.env'"; then
             scp .env.example "target:$DEPLOY_PATH/.env.example"
             echo "::error::$DEPLOY_PATH/.env is missing on the server. Copy .env.example to .env there, fill it in, and re-run this job."

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, connectStream, disconnectStream, onUnauthorized, useApi, useStreamStatus, type Overview, type Settings } from "./api.ts";
+import { AgentDetail } from "./pages/AgentDetail.tsx";
 import { Agents } from "./pages/Agents.tsx";
+import { Library } from "./pages/Library.tsx";
 import { Dashboard } from "./pages/Dashboard.tsx";
 import { Deliveries } from "./pages/Deliveries.tsx";
 import { History, ThreadDetail } from "./pages/History.tsx";
@@ -36,9 +38,15 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
   } else if (section === "tasks") {
     title = "Tasks";
     page = <Tasks />;
+  } else if (section === "agents" && rest[0]) {
+    title = "Agent";
+    page = <AgentDetail key={rest[0]} name={rest[0]} />;
   } else if (section === "agents") {
     title = "Agents";
     page = <Agents />;
+  } else if (section === "library") {
+    title = "Library";
+    page = <Library />;
   } else if (section === "history" && rest.length === 4) {
     title = "Thread history";
     page = <ThreadDetail key={rest.join("/")} owner={rest[0]!} repo={rest[1]!} kind={rest[2]!} number={rest[3]!} />;
@@ -57,6 +65,7 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
     { path: "/", key: "", label: "Dashboard", count: overview?.running.length || null },
     { path: "/tasks", key: "tasks", label: "Tasks", count: overview?.queued.length || null },
     { path: "/agents", key: "agents", label: "Agents", count: null },
+    { path: "/library", key: "library", label: "Library", count: null },
     { path: "/history", key: "history", label: "History", count: null },
     { path: "/deliveries", key: "deliveries", label: "Webhooks", count: null },
     { path: "/settings", key: "settings", label: "Settings", count: null },

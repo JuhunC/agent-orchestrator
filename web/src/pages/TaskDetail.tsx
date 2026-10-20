@@ -66,6 +66,14 @@ export function TaskDetail({ id }: { id: number }) {
       </div>
 
       {task.error && task.status !== "succeeded" && <div className="banner error">{task.error}</div>}
+      {task.status === "queued" && task.retryAt && (
+        <div className="banner">
+          <span className="grow">
+            <b>Waiting for the usage limit to reset.</b> It continues automatically at {new Date(task.retryAt).toLocaleString()} (attempt {task.attempts + 1}).
+          </span>
+          <button onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)}>Run now</button>
+        </div>
+      )}
 
       <div className="grid-2">
         <Panel title="Request">

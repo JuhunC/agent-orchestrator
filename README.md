@@ -1,144 +1,165 @@
 # Agent Orchestrator
 
-Run AI coding agents from GitHub. Mention an agent on an issue, pull request, review or discussion (or assign it) and the orchestrator:
+AI agents that take GitHub issues and pull requests from request to merged-ready PR. Mention an agent on an issue (`@aorch-coder please add rate limiting`) and the orchestrator starts a [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk) session for it. The agent:
 
-1. reacts 👀, assigns the agent's handle and labels the thread `agent:<name>`,
-2. checks out the repo on a branch (`agent/<name>/issue-12`, or the PR's own branch),
-3. runs the agent's CLI (`claude -p`, `agent -p`, `codex exec`, `gemini -p`, or your own command like `myClaude -p`) with the thread, the conversation and **everything that agent did on this thread before**,
-4. keeps one progress comment up to date while it works,
-5. commits, pushes and opens (or updates) a pull request, and replies with the agent's summary.
+1. works in a checkout of the repo on its own branch,
+2. uses the skills, MCP servers and subagents in its profile,
+3. reports progress in one live comment,
+4. commits, pushes and opens the PR with the orchestrator's GitHub tools,
+5. replies with a summary, and remembers the thread next time.
 
-An admin UI shows every agent working live, and lets you stop, retry and start agents, turn them on and off, edit them, and clear what they remember.
+An admin UI shows every agent working live, lets you stop or start them, and edits their profiles.
 
 ```
-GitHub ──webhook──▶ orchestrator ──spawn──▶ claude -p / agent -p / codex / gemini / myClaude -p
-   ▲                    │  SQLite: tasks, events, history            │
-   └── comments, PRs ◀──┴──────────── git push ◀── workspace ◀───────┘
+GitHub ──webhook──▶ orchestrator ──▶ Claude Agent SDK session ──▶ your model API
+   ▲                 │  profiles: role, skills, MCP, subagents            (ANTHROPIC_BASE_URL)
+   └─ push, PR, comments ◀── GitHub tools (token stays in the orchestrator)
 ```
 
 ## Quick start
 
 ```bash
-docker run -d --name orchestrator -p 3000:3000 -v orchestrator-data:/data \
-  -e PUBLIC_URL=https://orchestrator.example.com \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  ghcr.io/juhunc/agent-orchestrator:latest
+cp .env.example .env     # set PUBLIC_URL and your model service (ANTHROPIC_*)
+mkdir -p profiles
+docker compose up -d
+docker compose logs orchestrator | grep adminToken
 ```
 
-1. Get the admin token: `docker logs orchestrator | grep adminToken` (or set `ADMIN_TOKEN` yourself).
-2. Open `PUBLIC_URL`, sign in with the token, go to **Settings → Create GitHub App**. GitHub shows you the app it's about to create; confirm, and the credentials are saved in the data volume.
-3. Click **Install on repositories** and pick the repos.
-4. On any issue in those repos: `@aorch-claude please add input validation to the signup form`.
+Open `PUBLIC_URL`, sign in with the token, then **Settings → Create GitHub App**, confirm on GitHub, and **Install on repositories**. Mention `@aorch-coder` on an issue in one of them.
 
-GitHub must be able to reach `PUBLIC_URL/api/github/webhooks`. To try it on a laptop, create a channel at <https://smee.io> and set `WEBHOOK_PROXY_URL` to it.
+GitHub must reach `PUBLIC_URL/api/github/webhooks`. On a laptop, set `WEBHOOK_PROXY_URL` to a channel from <https://smee.io>.
 
-## Talking to agents on GitHub
+### The model service
 
-| Where | How | What the agent works on |
-| --- | --- | --- |
-| New issue | mention the handle in the title or body, or assign it | a new branch, then a PR that `Closes #n` |
-| Issue comment | mention the handle | same branch and PR as before, if there is one |
-| Pull request, review, inline review comment | mention the handle, assign it, or request its review | the PR's own branch (forks: replies only) |
-| Discussion or discussion comment | mention the handle | a new branch and PR, if it changes anything |
+Agents run Claude Code through the Agent SDK, so they use whatever the `ANTHROPIC_*` variables point at:
 
-- Only people with **write** access (configurable with `TRIGGER_MIN_PERMISSION`) can start agents. Others are rejected, and so are bots, so agents can't trigger each other in a loop.
-- **Handles** are GitHub logins. Use ones nobody owns (the defaults `aorch-*` are free) so mentions don't ping strangers. If you want agents to show up as real assignees, create machine accounts with those logins and add them as collaborators.
-- One agent works on one thread at a time. Mention it again while it's busy and the request is queued.
-
-### History and context
-
-Every run is stored: the request, the agent's reply, branch, commits, PR, and the agent's session id. When an agent is mentioned on a thread again, its earlier runs on that thread **and on linked threads** (the PR it opened for an issue, and the other way round) go into the prompt. Agents with `resume_args` also continue their previous CLI session. In the admin UI, **History** shows all of this per thread and can make an agent forget a thread or reset its checkout.
-
-## Agents
-
-Agents are defined in [`config/agents.yaml`](config/agents.yaml) (reloaded on start) or in the admin UI. The image ships with Claude Code, Cursor CLI, OpenAI Codex and Gemini CLI configured.
-
-```yaml
-agents:
-  - name: my-claude              # used in branch names and labels
-    handle: aorch-my-claude      # what people @-mention
-    command: myClaude
-    args: [-p, "{prompt}"]       # or leave {prompt} out to get the prompt on stdin
-    output: text                 # stdout is the reply; `::progress:: …` lines become progress steps
-    env:
-      ANTHROPIC_API_KEY: ${MY_CLAUDE_API_KEY}
-```
-
-| Field | |
+| You have | Set |
 | --- | --- |
-| `command`, `args` | Placeholders: `{prompt}` `{prompt_file}` `{session_id}` `{workdir}` `{branch}` `{repo}` `{task_id}` |
-| `resume_args` | Used instead of `args` when the agent already has a session on this thread |
-| `output` | `claude-stream-json` (Claude Code, Cursor CLI), `codex-json`, `gemini-stream-json`, `text` |
-| `env` | Extra variables; `${NAME}` is read from the orchestrator's environment |
-| `timeout_minutes` | Default `TASK_TIMEOUT_MINUTES` (60) |
-| `open_pull_request` | `false` makes a read-only agent that only replies |
-| `expose_github_token` | Give the agent `GH_TOKEN` for the repo (default off) |
+| An Anthropic API key | `ANTHROPIC_API_KEY` |
+| An Anthropic-compatible service (gateway, proxy, other provider) | `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_MODEL` if it needs specific model names |
+| A Claude subscription | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` |
+| Bedrock / Vertex / Foundry | `CLAUDE_CODE_USE_BEDROCK=1` etc. and the cloud's credentials |
 
-Agents also get `AO_TASK_ID`, `AO_REPO`, `AO_THREAD_KIND`, `AO_THREAD_NUMBER`, `AO_THREAD_URL`, `AO_BRANCH`, `AO_REQUESTED_BY` and `AO_PROMPT_FILE`. They **don't** get the GitHub App key, webhook secret or admin token; only the variables listed in `config.ts` (API keys for the bundled CLIs) plus `AGENT_ENV_PASSTHROUGH` and the agent's own `env`.
+When the service reports a usage limit, tasks pause and continue automatically when it resets (Settings shows the limit and can clear it).
 
-**Custom binaries:** put them in `agents-bin/` next to `docker-compose.yml` on the server (mounted at `/opt/agents/bin`, on `PATH`), or build your own image `FROM ghcr.io/juhunc/agent-orchestrator`.
+## Agent profiles
+
+Profiles are files, in `profiles/` (a git repository: every edit from the admin UI is a commit).
+
+```
+profiles/
+  agents/
+    coder/
+      agent.md          # settings + role prompt
+      skills/<name>/    # skills only this agent has (SKILL.md + files)
+      mcp.json          # MCP servers only this agent has
+  library/
+    skills/<name>/      # shared skills
+    roles/<name>.md     # shared subagents
+    mcp.json            # shared MCP servers
+```
+
+`agents/coder/agent.md`:
+
+```markdown
+---
+handle: aorch-coder            # the GitHub login people mention (pick one nobody owns)
+description: Implements issues end to end
+model: sonnet                  # optional; defaults to ANTHROPIC_MODEL
+skills: [shipping-changes]     # from library/skills
+mcp: [linear]                  # from library/mcp.json
+subagents: [test-writer]       # from library/roles
+tools:
+  deny: [WebSearch]            # or allow: [...] to offer only some built-in tools
+github:
+  push: true                   # commit_and_push
+  pull_request: true           # open_pull_request
+  comment: true                # post_comment
+  clone: true                  # clone_repository (read-only extra repos)
+  finalize: true               # push and open the PR if the agent forgot
+max_turns: 300
+max_budget_usd: 20
+timeout_minutes: 90
+live: true                     # keep the session open between tasks on a thread
+env:
+  SOME_TOOL_TOKEN: ${SOME_TOOL_TOKEN}
+---
+You are a careful senior engineer on this repository. …
+```
+
+- **Role**: the text under the frontmatter is added to Claude Code's system prompt. The repository's own `CLAUDE.md` and `.claude/` settings load too.
+- **Skills** are standard `SKILL.md` folders. For each run the agent's skills are packaged as a plugin outside the repo, so they're never committed.
+- **MCP servers** use Claude Code's `.mcp.json` format (`command`/`args`/`env`, or `url`/`headers`). `${NAME}` is filled from the server's environment, so secrets stay out of the files. Add `"alwaysLoad": true` to always show a server's tools instead of behind tool search.
+- **Subagents** (`library/roles/<name>.md`) have a `description` (when to use them), optional `tools`, `model`, `skills` and `mcp`, and their prompt.
+
+### GitHub tools
+
+Every agent gets a `github` MCP server that runs inside the orchestrator. The installation token never reaches the agent or the model:
+
+| Tool | |
+| --- | --- |
+| `get_thread` | the issue/PR/discussion and its latest comments |
+| `post_comment` | ask a question or share something mid-task |
+| `commit_and_push` | commit and push the task's branch (rebases once if the branch moved) |
+| `open_pull_request` | open or update the PR (`Closes #n` added) |
+| `get_ci_status` | check runs and statuses for the pushed commit |
+| `clone_repository` | read-only clone of another repo into `.deps/` |
+
+Agents push only to `agent/<name>/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to the default branch.
+
+## On GitHub
+
+| Where | How | What happens |
+| --- | --- | --- |
+| New issue | mention the handle, or assign it | branch `agent/<name>/issue-<n>`, then a PR |
+| Issue comment | mention the handle | continues on the same branch and PR |
+| PR, review, inline comment | mention, assign or request review | works on the PR's branch (forks: replies only) |
+| Discussion | mention the handle | branch and PR if it changes anything |
+
+Only people with write access (`TRIGGER_MIN_PERMISSION`) can start agents; bots are ignored, so agents can't trigger each other in a loop.
+
+**Memory**: every run (request, reply, branch, PR, session) is stored per thread. A live agent keeps its Claude session open between tasks on the same thread (`LIVE_SESSION_IDLE_MINUTES`); a closed session is resumed by id next time, and a fresh one gets the thread's history in its prompt. **History** in the admin UI shows it all and can make an agent forget a thread.
 
 ## Configuration
 
-All settings are environment variables; see [`.env.example`](.env.example).
+See [`.env.example`](.env.example) for everything. The main ones:
 
 | Variable | Default | |
 | --- | --- | --- |
-| `GITHUB_URL` | `https://github.com` | Target GitHub. Set it to your GitHub Enterprise Server URL to use GHES. |
-| `GITHUB_API_URL` | derived | `https://api.github.com`, or `$GITHUB_URL/api/v3` for GHES |
 | `PUBLIC_URL` | `http://localhost:3000` | Where GitHub and admins reach the orchestrator |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_WEBHOOK_SECRET`, `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | | Use an existing GitHub App instead of creating one in the UI |
-| `ADMIN_USERS` | | GitHub logins allowed to sign in with GitHub. The account that created the app in the UI is allowed too. |
-| `ADMIN_TOKEN` | generated | Token sign-in for the admin UI and API (`Authorization: Bearer …`) |
-| `MAX_CONCURRENT_TASKS` | `2` | Also adjustable in the UI |
-| `TRIGGER_MIN_PERMISSION` | `write` | `read`, `triage`, `write`, `maintain` or `admin` |
-| `ALLOWED_REPOS` | any | `owner/repo` or `owner/*`, comma separated |
-| `HISTORY_LIMIT` | `10` | Earlier runs given to an agent as context |
-| `PROGRESS_UPDATE_SECONDS` | `20` | How often the progress comment is edited |
-| `AGENT_LABEL_PREFIX` | `agent:` | `none` disables labels |
-| `WEBHOOK_PROXY_URL` | | smee.io channel for local development |
-| `DATA_DIR` | `/data` | SQLite database, workspaces, agent sessions, app credentials |
+| `GITHUB_URL` | `https://github.com` | Your GitHub Enterprise Server URL to use GHES |
+| `ANTHROPIC_*` | | The model service (see above) |
+| `ADMIN_USERS` / `ADMIN_TOKEN` | | Who can sign in to the admin UI |
+| `PROFILES_DIR` | `/profiles` | Agent profiles |
+| `MAX_CONCURRENT_TASKS` | `2` | Agents working at once |
+| `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
+| `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |
+
+Agents see only the model settings, `AGENT_ENV_PASSTHROUGH` and their profile's `env`. The GitHub App key, webhook secret and admin token never reach them.
 
 ## Deploying
 
-`.github/workflows/deploy.yml` runs the tests, publishes a multi-arch image to `ghcr.io/juhunc/agent-orchestrator` (`latest`, `sha-<commit>`, and `vX.Y.Z` for tags), then deploys it to your server over SSH.
+`.github/workflows/deploy.yml` tests, publishes `ghcr.io/juhunc/agent-orchestrator` (amd64 + arm64), and deploys over SSH when `DEPLOY_HOST` and `DEPLOY_SSH_KEY` are set:
 
-On the server (any Linux box with Docker and the compose plugin):
+1. On the server: `mkdir ~/agent-orchestrator`, put a filled-in `.env` there.
+2. In the repo's Actions secrets/variables: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, and preferably `DEPLOY_KNOWN_HOSTS` (`ssh-keyscan your-host`).
+3. Push to `main`. With `DOMAIN` in `.env`, Caddy serves it over HTTPS (`BIND_ADDRESS=127.0.0.1`).
 
-```bash
-mkdir -p ~/agent-orchestrator && cd ~/agent-orchestrator
-curl -fsSLO https://raw.githubusercontent.com/JuhunC/agent-orchestrator/main/.env.example
-cp .env.example .env && nano .env      # PUBLIC_URL, API keys, ADMIN_USERS, DOMAIN for HTTPS
-```
-
-In the GitHub repo, under **Settings → Secrets and variables → Actions**:
-
-| Name | Kind | |
-| --- | --- | --- |
-| `DEPLOY_HOST` | secret or variable | server hostname or IP |
-| `DEPLOY_USER` | secret or variable | SSH user that can run `docker` (default `deploy`) |
-| `DEPLOY_SSH_KEY` | secret | private key for that user |
-| `DEPLOY_KNOWN_HOSTS` | secret or variable | output of `ssh-keyscan your-host` (recommended) |
-| `DEPLOY_PORT`, `DEPLOY_PATH` | variable | default `22` and `agent-orchestrator` |
-
-Every push to `main` then copies `deploy/docker-compose.yml`, pins the new image, restarts the container and waits for its health check. Data lives in the `data` volume and survives deploys. With `DOMAIN` set in `.env`, a Caddy container serves it over HTTPS with an automatic certificate (set `BIND_ADDRESS=127.0.0.1` so port 3000 isn't public).
+The image includes git, Python and common CLI tools. For project toolchains, build on it: `FROM ghcr.io/juhunc/agent-orchestrator` and install what your repos need.
 
 ## Security
 
-- Agents run with their CLI's permission prompts turned off (`--dangerously-skip-permissions`, `--yolo`, …). The container is the sandbox: run it on a machine where that's acceptable, and give agents API keys with sensible spend limits.
-- Only people with write access can start an agent, but the prompt includes the whole thread, and on public repos anyone can comment. Treat thread content as untrusted input (prompt injection) and use `ALLOWED_REPOS` to keep agents off repos you don't control.
-- Agents never get the GitHub App's key. Git operations use short-lived installation tokens passed per command, so tokens aren't written to `.git/config`. Pushes go to `agent/<name>/…` branches or the PR's branch, never the default branch.
-- Agents only see a GitHub token when `expose_github_token: true`.
+- Agents run with permission prompts off (`bypassPermissions`); the container is the sandbox. Use a machine where that's acceptable.
+- Thread content is untrusted input: only write-access users can start agents, but anyone can comment on public repos. Use `ALLOWED_REPOS`.
+- GitHub credentials stay in the orchestrator; agents act on GitHub only through its tools, on agent branches.
 
 ## Development
 
 ```bash
 npm install
-npm test            # unit tests + end-to-end run against a fake GitHub API
+npm test            # unit tests + end-to-end runs of the real Agent SDK against a fake GitHub and a fake model API
 npm run typecheck
 npm run build       # admin UI → web/dist
-npm run dev         # server on :3000 (AUTH_DISABLED=true to skip sign-in)
-npm run dev:web     # UI with hot reload on :5173, proxying /api to :3000
+npm run dev         # server on :3000
+npm run dev:web     # UI with hot reload on :5173
 ```
-
-The server is TypeScript run directly by Node 24 (no build step). The UI is React + Vite.

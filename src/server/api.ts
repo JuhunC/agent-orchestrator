@@ -2,17 +2,13 @@ import { randomBytes } from "node:crypto";
 import { accessSync, constants, existsSync, rmSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { normaliseAgent, toggleAgent } from "../agents/registry.ts";
 import { bus, type BusMessage } from "../bus.ts";
 import { config } from "../config.ts";
 import {
   createTask,
-  deleteAgent,
-  getAgent,
   getSetting,
   getTask,
   linkedThreads,
-  listAgents,
   listDeliveries,
   listEvents,
   listTasks,
@@ -21,31 +17,41 @@ import {
   setSetting,
   taskStats,
   tasksForThread,
-  upsertAgent,
 } from "../db.ts";
 import { ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials } from "../github/app.ts";
 import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
-import { workspaceDir } from "../runner/run-task.ts";
+import { workspaceDir } from "../runtime/workspace.ts";
+import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
+import type { Profile } from "../profiles/types.ts";
+import { createAgent, deleteProfileFile, listProfileFiles, ProfileFileError, readProfileFile, writeProfileFile } from "../profiles/store.ts";
+import { sessions } from "../runtime/manager.ts";
+import { clearLimit, getLimit } from "../runner/limit-store.ts";
 import { startManualTask } from "../triggers.ts";
-import type { Agent, ThreadKind, ThreadRef } from "../types.ts";
+import type { ThreadKind, ThreadRef } from "../types.ts";
 
 const KINDS: ThreadKind[] = ["issue", "pull", "discussion"];
 
-function commandInstalled(command: string): boolean {
-  const candidates = isAbsolute(command) || command.includes("/") ? [command] : (process.env.PATH ?? "").split(delimiter).map((dir) => join(dir, command));
-  return candidates.some((path) => {
-    try {
-      accessSync(path, constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  });
+function agentView(profile: Profile) {
+  const { ownMcp, ...rest } = profile;
+  return {
+    ...rest,
+    ownMcp: Object.keys(ownMcp),
+    ownSkills: profile.ownSkills.map((skill) => ({ name: skill.name, description: skill.description })),
+    dir: undefined,
+  };
 }
 
-function agentView(agent: Agent) {
-  return { ...agent, installed: commandInstalled(agent.command) };
+function modelView() {
+  const base = process.env.ANTHROPIC_BASE_URL;
+  const auth = process.env.ANTHROPIC_AUTH_TOKEN ? "ANTHROPIC_AUTH_TOKEN" : process.env.ANTHROPIC_API_KEY ? "ANTHROPIC_API_KEY" : process.env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : null;
+  return {
+    baseUrl: base ? new URL(base).origin : "https://api.anthropic.com",
+    custom: Boolean(base),
+    model: process.env.ANTHROPIC_MODEL ?? null,
+    credential: auth,
+    limit: getLimit(),
+  };
 }
 
 function threadRef(params: { owner: string; repo: string; kind: string; number: string }): ThreadRef {
@@ -58,6 +64,9 @@ function settingsView() {
     paused: scheduler.paused,
     maxConcurrent: scheduler.maxConcurrent,
     running: scheduler.runningIds().length,
+    liveIdleMinutes: sessions.idleMinutes,
+    maxLiveSessions: sessions.maxLive,
+    usageLimitRetries: config.usageLimitRetries,
   };
 }
 
@@ -87,7 +96,7 @@ async function setupView() {
     allowedRepos: config.allowedRepos,
     labelPrefix: config.labelPrefix,
     defaultTimeoutMinutes: config.defaultTimeoutMinutes,
-    agentsConfigPath: config.agentsConfigPath,
+    profilesDir: config.profilesDir,
   };
 }
 
@@ -107,6 +116,8 @@ function appManifest(name: string) {
       pull_requests: "write",
       discussions: "write",
       workflows: "write",
+      checks: "read",
+      statuses: "read",
       metadata: "read",
     },
     default_events: [
@@ -145,7 +156,9 @@ export function registerApi(app: FastifyInstance): void {
   app.get("/api/overview", async () => {
     const stats = taskStats();
     return {
-      agents: listAgents().map((agent) => ({ ...agentView(agent), stats: stats[agent.name] ?? null })),
+      agents: loadProfiles().agents.map((agent) => ({ ...agentView(agent), stats: stats[agent.name] ?? null })),
+      sessions: sessions.list(),
+      model: modelView(),
       running: listTasks({ status: "running", limit: 50 }),
       queued: listTasks({ status: "queued", limit: 100 }).reverse(),
       recent: listTasks({ status: "succeeded,failed,cancelled", limit: 15 }),
@@ -224,55 +237,93 @@ export function registerApi(app: FastifyInstance): void {
 
   app.post("/api/tasks/cancel-all", async () => ({ cancelled: scheduler.cancelAll() }));
 
-  // ---------- agents ----------
+  // ---------- agents & profiles ----------
   app.get("/api/agents", async () => {
     const stats = taskStats();
-    return listAgents().map((agent) => ({ ...agentView(agent), stats: stats[agent.name] ?? null }));
+    const profiles = loadProfiles();
+    return {
+      agents: profiles.agents.map((agent) => ({ ...agentView(agent), stats: stats[agent.name] ?? null })),
+      library: {
+        skills: Object.values(profiles.library.skills).map((skill) => ({ name: skill.name, description: skill.description })),
+        roles: Object.values(profiles.library.roles).map((role) => ({ name: role.name, description: role.description, tools: role.tools, model: role.model })),
+        mcp: Object.entries(profiles.library.mcp).map(([name, server]) => ({ name, type: server.type, target: server.url ?? server.command })),
+      },
+      errors: [...profiles.errors.map((error) => `${error.file}: ${error.message}`), ...profiles.library.errors],
+      profilesDir: config.profilesDir,
+    };
   });
 
-  app.post<{ Body: Record<string, unknown> }>("/api/agents", async (request, reply) => {
+  app.post<{ Body: { name: string; handle: string } }>("/api/agents", async (request, reply) => {
     try {
-      const input = normaliseAgent(request.body ?? {}, "ui");
-      if (getAgent(input.name)) return reply.code(409).send({ error: `An agent called ${input.name} already exists` });
-      const agent = upsertAgent(input);
+      createAgent(String(request.body?.name ?? ""), String(request.body?.handle ?? ""), request.adminLogin ?? "admin");
       bus.publish({ type: "agents" });
-      return agentView(agent);
+      return { ok: true };
     } catch (error) {
-      return reply.code(400).send({ error: errorMessage(error) });
-    }
-  });
-
-  app.put<{ Params: { name: string }; Body: Record<string, unknown> }>("/api/agents/:name", async (request, reply) => {
-    const existing = getAgent(request.params.name);
-    if (!existing) return reply.code(404).send({ error: "Agent not found" });
-    if (existing.source === "file") return reply.code(409).send({ error: "This agent is defined in agents.yaml. Edit the file and restart." });
-    try {
-      const input = normaliseAgent({ ...request.body, name: existing.name }, "ui");
-      const agent = upsertAgent(input);
-      bus.publish({ type: "agents" });
-      return agentView(agent);
-    } catch (error) {
-      return reply.code(400).send({ error: errorMessage(error) });
+      return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
     }
   });
 
   app.post<{ Params: { name: string }; Body: { enabled: boolean } }>("/api/agents/:name/enabled", async (request, reply) => {
-    const agent = getAgent(request.params.name);
-    if (!agent) return reply.code(404).send({ error: "Agent not found" });
-    toggleAgent(agent, Boolean(request.body?.enabled));
+    if (!loadProfiles().agents.some((agent) => agent.name === request.params.name)) return reply.code(404).send({ error: "Agent not found" });
+    setProfileEnabled(request.params.name, Boolean(request.body?.enabled));
     bus.publish({ type: "agents" });
     scheduler.kick();
-    return agentView(getAgent(agent.name)!);
-  });
-
-  app.delete<{ Params: { name: string } }>("/api/agents/:name", async (request, reply) => {
-    const agent = getAgent(request.params.name);
-    if (!agent) return reply.code(404).send({ error: "Agent not found" });
-    if (agent.source === "file") return reply.code(409).send({ error: "Remove this agent from agents.yaml instead" });
-    deleteAgent(agent.name);
-    bus.publish({ type: "agents" });
     return { ok: true };
   });
+
+  app.get("/api/profiles/files", async () => listProfileFiles());
+
+  app.get<{ Querystring: { path: string } }>("/api/profiles/file", async (request, reply) => {
+    try {
+      return { path: request.query.path, content: readProfileFile(String(request.query.path ?? "")) };
+    } catch (error) {
+      return reply.code(error instanceof ProfileFileError ? 404 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.put<{ Body: { path: string; content: string } }>("/api/profiles/file", async (request, reply) => {
+    try {
+      writeProfileFile(String(request.body?.path ?? ""), String(request.body?.content ?? ""), request.adminLogin ?? "admin");
+      bus.publish({ type: "agents" });
+      return { ok: true };
+    } catch (error) {
+      return reply.code(error instanceof ProfileFileError || error instanceof SyntaxError ? 400 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.delete<{ Querystring: { path: string } }>("/api/profiles/file", async (request, reply) => {
+    try {
+      deleteProfileFile(String(request.query.path ?? ""), request.adminLogin ?? "admin");
+      bus.publish({ type: "agents" });
+      return { ok: true };
+    } catch (error) {
+      return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
+  // ---------- sessions & limits ----------
+  app.get("/api/sessions", async () => sessions.list());
+
+  app.delete<{ Params: { key: string } }>("/api/sessions/:key", async (request, reply) => {
+    const session = sessions.list().find((entry) => entry.key === request.params.key);
+    if (!session) return reply.code(404).send({ error: "No such session" });
+    if (session.busy) return reply.code(409).send({ error: "The session is working on a task; stop the task instead" });
+    sessions.close(request.params.key, "closed from the admin UI");
+    return { ok: true };
+  });
+
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/run-now", async (request, reply) => {
+    if (!scheduler.runNow(Number(request.params.id))) return reply.code(409).send({ error: "That task isn't waiting" });
+    return { ok: true };
+  });
+
+  app.delete("/api/limit", async () => {
+    clearLimit();
+    scheduler.kick();
+    return { ok: true };
+  });
+
+  app.get("/api/model", async () => modelView());
 
   // ---------- history ----------
   app.get("/api/threads", async () => listThreads(200));
@@ -322,9 +373,10 @@ export function registerApi(app: FastifyInstance): void {
   // ---------- settings ----------
   app.get("/api/settings", async () => ({ ...settingsView(), setup: await setupView() }));
 
-  app.put<{ Body: { paused?: boolean; maxConcurrent?: number } }>("/api/settings", async (request) => {
+  app.put<{ Body: { paused?: boolean; maxConcurrent?: number; liveIdleMinutes?: number; maxLiveSessions?: number } }>("/api/settings", async (request) => {
     if (typeof request.body?.paused === "boolean") scheduler.setPaused(request.body.paused);
     if (typeof request.body?.maxConcurrent === "number") scheduler.setMaxConcurrent(request.body.maxConcurrent);
+    sessions.configure({ idleMinutes: request.body?.liveIdleMinutes, maxLive: request.body?.maxLiveSessions });
     return settingsView();
   });
 

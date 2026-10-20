@@ -1,28 +1,8 @@
 export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type TriggerKind = "mention" | "assignment" | "manual" | "retry";
-export type OutputFormat = "text" | "claude-stream-json" | "codex-json" | "gemini-stream-json";
 export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error";
 
-export const OUTPUT_FORMATS: OutputFormat[] = ["text", "claude-stream-json", "codex-json", "gemini-stream-json"];
-
-export interface Agent {
-  name: string;
-  handle: string;
-  description: string;
-  command: string;
-  args: string[];
-  resumeArgs: string[];
-  output: OutputFormat;
-  env: Record<string, string>;
-  timeoutMinutes: number | null;
-  openPullRequest: boolean;
-  exposeGithubToken: boolean;
-  enabled: boolean;
-  source: "file" | "ui";
-  createdAt: string;
-  updatedAt: string;
-}
 
 export interface Task {
   id: number;
@@ -56,6 +36,13 @@ export interface Task {
   commits: number | null;
   retryOf: number | null;
   forgotten: boolean;
+  /** Set while the task waits for a usage limit to reset. */
+  retryAt: string | null;
+  /** How many times a usage limit paused the task. */
+  attempts: number;
+  /** Commit the first attempt started from, so retries count earlier commits. */
+  startSha: string | null;
+  live: boolean;
 }
 
 export interface TaskEvent {

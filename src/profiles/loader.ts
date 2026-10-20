@@ -1,0 +1,209 @@
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
+import { parse } from "yaml";
+import { config } from "../config.ts";
+import { getSetting, setSetting } from "../db.ts";
+import { normaliseMcpServers } from "./mcp.ts";
+import type { Library, Profile, ProfileSet, Role, SkillInfo } from "./types.ts";
+
+const HANDLE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
+const NAME = /^[a-z\d][a-z\d_-]{0,39}$/i;
+
+/** Splits a markdown file into YAML frontmatter and body. */
+export function parseFrontmatter(text: string): { data: Record<string, unknown>; body: string } {
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!match) return { data: {}, body: text.trim() };
+  const data = (parse(match[1]!) ?? {}) as unknown;
+  if (typeof data !== "object" || Array.isArray(data)) throw new Error("Frontmatter must be a YAML map");
+  return { data: data as Record<string, unknown>, body: match[2]!.trim() };
+}
+
+function list(value: unknown, field: string): string[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) throw new Error(`${field} must be a list`);
+  return value.map((item) => String(item));
+}
+
+function optionalNumber(value: unknown, field: string): number | null {
+  if (value === undefined || value === null || value === "") return null;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) throw new Error(`${field} must be a positive number`);
+  return number;
+}
+
+function dirs(path: string): string[] {
+  if (!existsSync(path)) return [];
+  return readdirSync(path)
+    .filter((entry) => !entry.startsWith(".") && statSync(join(path, entry)).isDirectory())
+    .sort();
+}
+
+function loadSkills(dir: string, scope: SkillInfo["scope"], errors: string[]): SkillInfo[] {
+  const skills: SkillInfo[] = [];
+  for (const name of dirs(dir)) {
+    const file = join(dir, name, "SKILL.md");
+    if (!existsSync(file)) {
+      errors.push(`${file}: missing SKILL.md`);
+      continue;
+    }
+    try {
+      const { data } = parseFrontmatter(readFileSync(file, "utf8"));
+      if (!data.description) errors.push(`${file}: add a "description" so the agent knows when to use it`);
+      skills.push({ name, description: String(data.description ?? ""), dir: join(dir, name), scope });
+    } catch (error) {
+      errors.push(`${file}: ${(error as Error).message}`);
+    }
+  }
+  return skills;
+}
+
+function loadRole(file: string): Role {
+  const name = basename(file, ".md");
+  const { data, body } = parseFrontmatter(readFileSync(file, "utf8"));
+  if (!NAME.test(name)) throw new Error(`Invalid role name "${name}"`);
+  if (!data.description) throw new Error(`Role ${name} needs a "description" saying when to use it`);
+  if (!body) throw new Error(`Role ${name} needs a prompt below the frontmatter`);
+  return {
+    name,
+    description: String(data.description),
+    prompt: body,
+    tools: data.tools === undefined ? null : list(data.tools, "tools"),
+    model: data.model ? String(data.model) : null,
+    skills: list(data.skills, "skills"),
+    mcp: list(data.mcp, "mcp"),
+    file,
+  };
+}
+
+function loadLibrary(root: string): Library {
+  const errors: string[] = [];
+  const library: Library = { skills: {}, roles: {}, mcp: {}, errors };
+  for (const skill of loadSkills(join(root, "library", "skills"), "library", errors)) library.skills[skill.name] = skill;
+
+  const rolesDir = join(root, "library", "roles");
+  if (existsSync(rolesDir)) {
+    for (const entry of readdirSync(rolesDir).filter((file) => file.endsWith(".md")).sort()) {
+      try {
+        const role = loadRole(join(rolesDir, entry));
+        library.roles[role.name] = role;
+      } catch (error) {
+        errors.push(`library/roles/${entry}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  const mcpFile = join(root, "library", "mcp.json");
+  if (existsSync(mcpFile)) {
+    try {
+      library.mcp = normaliseMcpServers(readFileSync(mcpFile, "utf8"), "library/mcp.json");
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+  }
+  return library;
+}
+
+const GITHUB_DEFAULTS = { comment: true, push: true, pull_request: true, clone: true, finalize: true };
+
+function loadProfile(root: string, name: string, library: Library): Profile {
+  const dir = join(root, "agents", name);
+  const errors: string[] = [];
+  const { data, body } = parseFrontmatter(readFileSync(join(dir, "agent.md"), "utf8"));
+
+  if (!NAME.test(name)) errors.push(`Folder name "${name}" may only use letters, digits, - and _`);
+  const handle = String(data.handle ?? "").replace(/^@/, "");
+  if (!HANDLE.test(handle)) errors.push(`"handle" must be a valid GitHub login (got "${handle}")`);
+  if (!body) errors.push("Write the agent's role below the frontmatter");
+
+  const tools = (data.tools ?? {}) as { allow?: unknown; deny?: unknown };
+  const github = { ...GITHUB_DEFAULTS, ...((data.github ?? {}) as Record<string, unknown>) };
+  const skills = list(data.skills, "skills");
+  const mcp = list(data.mcp, "mcp");
+  const subagents = list(data.subagents, "subagents");
+  for (const skill of skills) if (!library.skills[skill]) errors.push(`Unknown skill "${skill}" (not in library/skills)`);
+  for (const server of mcp) if (!library.mcp[server]) errors.push(`Unknown MCP server "${server}" (not in library/mcp.json)`);
+  for (const role of subagents) if (!library.roles[role]) errors.push(`Unknown subagent "${role}" (not in library/roles)`);
+
+  const ownSkills = loadSkills(join(dir, "skills"), "agent", errors);
+  let ownMcp = {};
+  if (existsSync(join(dir, "mcp.json"))) {
+    try {
+      ownMcp = normaliseMcpServers(readFileSync(join(dir, "mcp.json"), "utf8"), `agents/${name}/mcp.json`);
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+  }
+
+  const number = (field: string) => {
+    try {
+      return optionalNumber(data[field], field);
+    } catch (error) {
+      errors.push((error as Error).message);
+      return null;
+    }
+  };
+  const enabledInFile = data.enabled !== false;
+  const override = getSetting(`agent_enabled:${name}`);
+  return {
+    name,
+    handle,
+    description: String(data.description ?? ""),
+    model: data.model ? String(data.model) : null,
+    prompt: body,
+    toolsAllow: tools.allow === undefined ? null : list(tools.allow, "tools.allow"),
+    toolsDeny: list(tools.deny, "tools.deny"),
+    skills,
+    mcp,
+    subagents,
+    github: {
+      comment: github.comment !== false,
+      push: github.push !== false,
+      pullRequest: github.pull_request !== false,
+      clone: github.clone !== false,
+      finalize: github.finalize !== false,
+    },
+    maxTurns: number("max_turns"),
+    maxBudgetUsd: number("max_budget_usd"),
+    timeoutMinutes: number("timeout_minutes"),
+    live: data.live !== false,
+    env: Object.fromEntries(Object.entries((data.env ?? {}) as Record<string, unknown>).map(([key, value]) => [key, String(value)])),
+    enabledInFile,
+    enabled: enabledInFile && override !== "false",
+    ownSkills,
+    ownMcp,
+    dir,
+    errors,
+  };
+}
+
+/** Reads every agent profile and the shared library from PROFILES_DIR. Cheap; called per use. */
+export function loadProfiles(root = config.profilesDir): ProfileSet {
+  const set: ProfileSet = { root, agents: [], library: loadLibrary(root), errors: [] };
+  const handles = new Map<string, string>();
+  for (const name of dirs(join(root, "agents"))) {
+    if (!existsSync(join(root, "agents", name, "agent.md"))) continue;
+    try {
+      const profile = loadProfile(root, name, set.library);
+      const other = handles.get(profile.handle.toLowerCase());
+      if (other) profile.errors.push(`Handle @${profile.handle} is also used by ${other}`);
+      handles.set(profile.handle.toLowerCase(), name);
+      set.agents.push(profile);
+    } catch (error) {
+      set.errors.push({ file: `agents/${name}/agent.md`, message: (error as Error).message });
+    }
+  }
+  return set;
+}
+
+export function getProfile(name: string): Profile | null {
+  return loadProfiles().agents.find((profile) => profile.name === name) ?? null;
+}
+
+/** The agent a GitHub login refers to, if it's a usable one. */
+export function profileByHandle(handle: string): Profile | null {
+  return loadProfiles().agents.find((profile) => profile.handle.toLowerCase() === handle.toLowerCase() && !profile.errors.length) ?? null;
+}
+
+export function setProfileEnabled(name: string, enabled: boolean): void {
+  setSetting(`agent_enabled:${name}`, String(enabled));
+}

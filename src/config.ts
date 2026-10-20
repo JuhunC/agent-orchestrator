@@ -25,36 +25,45 @@ const port = int("PORT", 3000);
 const githubUrl = trimSlash(env("GITHUB_URL", "https://github.com"));
 const isDotCom = /^https?:\/\/(www\.)?github\.com$/i.test(githubUrl);
 
-// Credentials the agents may need. Everything else in the orchestrator's
-// environment (GitHub App key, webhook secret, admin token) stays out of the
-// agent process.
+// What agent processes may see from the server's environment: the model provider settings
+// (your own Anthropic-compatible service works through ANTHROPIC_BASE_URL) and proxies.
+// The GitHub App key, webhook secret and admin token are never passed on.
 const DEFAULT_AGENT_ENV = [
   "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
   "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_CUSTOM_HEADERS",
   "ANTHROPIC_MODEL",
+  "ANTHROPIC_SMALL_FAST_MODEL",
+  "ANTHROPIC_DEFAULT_OPUS_MODEL",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+  "CLAUDE_CODE_SUBAGENT_MODEL",
   "CLAUDE_CODE_OAUTH_TOKEN",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
   "AWS_REGION",
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
+  "AWS_PROFILE",
+  "AWS_BEARER_TOKEN_BEDROCK",
   "CLOUD_ML_REGION",
   "ANTHROPIC_VERTEX_PROJECT_ID",
-  "CURSOR_API_KEY",
-  "OPENAI_API_KEY",
-  "OPENAI_BASE_URL",
-  "CODEX_API_KEY",
-  "GEMINI_API_KEY",
-  "GOOGLE_API_KEY",
-  "GOOGLE_CLOUD_PROJECT",
-  "GOOGLE_GENAI_USE_VERTEXAI",
+  "GOOGLE_APPLICATION_CREDENTIALS",
+  "ANTHROPIC_FOUNDRY_API_KEY",
+  "ANTHROPIC_FOUNDRY_RESOURCE",
+  "API_TIMEOUT_MS",
+  "CLAUDE_CODE_MAX_RETRIES",
+  "MAX_THINKING_TOKENS",
   "HTTP_PROXY",
   "HTTPS_PROXY",
   "NO_PROXY",
   "http_proxy",
   "https_proxy",
   "no_proxy",
+  "NODE_EXTRA_CA_CERTS",
   "TZ",
 ];
 
@@ -63,7 +72,9 @@ export const config = {
   host: env("HOST", "0.0.0.0"),
   publicUrl: trimSlash(env("PUBLIC_URL", `http://localhost:${port}`)),
   dataDir: resolve(env("DATA_DIR", "./data")),
-  agentsConfigPath: resolve(env("AGENTS_CONFIG", "./config/agents.yaml")),
+  profilesDir: resolve(env("PROFILES_DIR", "./profiles")),
+  // Example profiles copied into an empty PROFILES_DIR on first start (the image sets this).
+  defaultProfilesDir: env("DEFAULT_PROFILES_DIR") ? resolve(env("DEFAULT_PROFILES_DIR")) : "",
   webDistDir: resolve(env("WEB_DIST_DIR", "./web/dist")),
 
   github: {
@@ -92,6 +103,12 @@ export const config = {
   labelPrefix: env("AGENT_LABEL_PREFIX", "agent:"),
   agentEnvPassthrough: [...DEFAULT_AGENT_ENV, ...list("AGENT_ENV_PASSTHROUGH")],
   agentHome: resolve(env("AGENT_HOME", resolve(env("DATA_DIR", "./data"), "agent-home"))),
+  // Claude Code's update checks and telemetry are off by default on the server.
+  allowNonessentialTraffic: env("ALLOW_NONESSENTIAL_TRAFFIC") === "true",
+
+  liveIdleMinutes: int("LIVE_SESSION_IDLE_MINUTES", 30),
+  maxLiveSessions: int("MAX_LIVE_SESSIONS", 4),
+  usageLimitRetries: int("USAGE_LIMIT_RETRIES", 5),
 
   webhookProxyUrl: env("WEBHOOK_PROXY_URL"),
   // Testing hook: clone from `file:///…/{owner}/{repo}.git` instead of GITHUB_URL.

@@ -6,7 +6,9 @@ export type BusMessage =
   | { type: "event"; event: TaskEvent }
   | { type: "delivery"; delivery: Delivery }
   | { type: "agents" }
-  | { type: "settings" };
+  | { type: "settings" }
+  | { type: "sessions" }
+  | { type: "limits" };
 
 /** In-process fan-out of changes to the admin UI's live stream. */
 class Bus extends EventEmitter {

@@ -1,8 +1,10 @@
 import { config } from "../config.ts";
 import { PROGRESS_MARKER, RESULT_MARKER } from "../github/threads.ts";
-import type { Agent, Task } from "../types.ts";
+import type { Task } from "../types.ts";
 
-export type ProgressPhase = "queued" | "starting" | "working" | "publishing" | "succeeded" | "failed" | "cancelled";
+type Agent = { name: string };
+
+export type ProgressPhase = "queued" | "starting" | "working" | "waiting" | "publishing" | "succeeded" | "failed" | "cancelled";
 
 export interface ProgressState {
   phase: ProgressPhase;
@@ -44,6 +46,7 @@ const HEADLINE: Record<ProgressPhase, string> = {
   queued: "⏳ is queued",
   starting: "🔄 is getting ready",
   working: "🔄 is working on this",
+  waiting: "⏸️ is paused until its usage limit resets",
   publishing: "📤 is pushing its changes",
   succeeded: "✅ finished",
   failed: "❌ stopped with an error",

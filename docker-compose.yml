@@ -1,0 +1,27 @@
+# Quick start:
+#   cp .env.example .env      # set ANTHROPIC_* (your model service) and PUBLIC_URL
+#   mkdir -p profiles         # so it's owned by you, not root
+#   docker compose up -d
+#   docker compose logs orchestrator | grep adminToken   # first sign-in
+# Then open http://localhost:3000 → Settings → Create GitHub App.
+#
+# Agent profiles live in ./profiles (created and filled with examples on first start;
+# a git repository, so every edit is a commit). Data and agent sessions live in the
+# `data` volume.
+
+services:
+  orchestrator:
+    image: ghcr.io/juhunc/agent-orchestrator:latest
+    # To run your local checkout instead of the published image:
+    # build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "3000:3000"
+    volumes:
+      - data:/data
+      - ./profiles:/profiles
+    stop_grace_period: 30s
+
+volumes:
+  data:

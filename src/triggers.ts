@@ -1,12 +1,16 @@
 import { bus } from "./bus.ts";
 import { config } from "./config.ts";
-import { createTask, getAgentByHandle, listAgents, queuedTaskForThread, recentTaskForThread, recordDelivery, updateTask } from "./db.ts";
+import { createTask, queuedTaskForThread, recentTaskForThread, recordDelivery, updateTask } from "./db.ts";
+import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
+import type { Profile } from "./profiles/types.ts";
 import { installationClient, type GitHubClient } from "./github/app.ts";
 import { addEyesReaction, markAgentOnThread, permissionAtLeast, userPermission } from "./github/threads.ts";
 import { errorMessage, log } from "./log.ts";
 import { extractMentions } from "./mentions.ts";
 import { scheduler } from "./runner/scheduler.ts";
-import type { Agent, Delivery, ThreadKind, TriggerKind } from "./types.ts";
+import type { Delivery, ThreadKind, TriggerKind } from "./types.ts";
+
+type Agent = Profile;
 
 /** One "please run agent X on thread Y" derived from a webhook. */
 interface Intent {
@@ -28,11 +32,11 @@ type Payload = Record<string, any>;
 
 function agentsMentionedIn(...texts: (string | null | undefined)[]): Agent[] {
   const handles = new Set(texts.flatMap((text) => extractMentions(text)));
-  return [...handles].map((handle) => getAgentByHandle(handle)).filter((agent): agent is Agent => agent !== null);
+  return [...handles].map((handle) => profileByHandle(handle)).filter((agent): agent is Agent => agent !== null);
 }
 
 function agentForLogin(login: string | undefined): Agent[] {
-  const agent = login ? getAgentByHandle(login) : null;
+  const agent = login ? profileByHandle(login) : null;
   return agent ? [agent] : [];
 }
 
@@ -184,7 +188,7 @@ export async function handleWebhook(event: string, deliveryId: string, payload: 
     const installationId = Number(payload.installation?.id ?? 0);
     if (!repoFull || !installationId) return record(deliveryId, event, payload, "ignored", "No repository or installation in payload");
     if (payload.sender?.type === "Bot") return record(deliveryId, event, payload, "ignored", "Sent by a bot");
-    if (!listAgents().length) return record(deliveryId, event, payload, "ignored", "No agents configured");
+    if (!loadProfiles().agents.length) return record(deliveryId, event, payload, "ignored", "No agents configured");
 
     const intents = intentsFor(event, payload);
     if (!intents.length) return record(deliveryId, event, payload, "ignored", "No agent mentioned or assigned");
@@ -266,7 +270,7 @@ export async function startManualTask(input: {
   requestedBy: string;
   installationId: number;
 }): Promise<number> {
-  const agent = listAgents().find((candidate) => candidate.name === input.agentName);
+  const agent = loadProfiles().agents.find((candidate) => candidate.name === input.agentName);
   if (!agent) throw new Error(`Unknown agent ${input.agentName}`);
   const task = createTask({
     agent: agent.name,

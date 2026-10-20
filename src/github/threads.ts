@@ -232,7 +232,7 @@ export async function findOpenPull(gh: GitHubClient, owner: string, repo: string
 
 export async function openPull(
   gh: GitHubClient,
-  input: { owner: string; repo: string; head: string; base: string; title: string; body: string },
+  input: { owner: string; repo: string; head: string; base: string; title: string; body: string; draft?: boolean },
 ): Promise<{ number: number; url: string }> {
   const { data } = await gh.rest.pulls.create({
     owner: input.owner,
@@ -241,6 +241,24 @@ export async function openPull(
     base: input.base,
     title: input.title,
     body: clampBody(input.body),
+    draft: input.draft ?? false,
   });
   return { number: data.number, url: data.html_url };
+}
+
+export async function updatePull(gh: GitHubClient, owner: string, repo: string, number: number, title: string, body: string): Promise<void> {
+  await gh.rest.pulls.update({ owner, repo, pull_number: number, title, body: clampBody(body) });
+}
+
+/** Check runs and commit statuses for a commit, summarised for an agent. */
+export async function ciStatus(gh: GitHubClient, owner: string, repo: string, ref: string): Promise<string> {
+  const [runs, statuses] = await Promise.all([
+    gh.rest.checks.listForRef({ owner, repo, ref, per_page: 50 }).then(({ data }) => data.check_runs).catch(() => []),
+    gh.rest.repos.getCombinedStatusForRef({ owner, repo, ref }).then(({ data }) => data.statuses).catch(() => []),
+  ]);
+  const lines = [
+    ...runs.map((run) => `- ${run.name}: ${run.status === "completed" ? run.conclusion : run.status}${run.html_url ? ` (${run.html_url})` : ""}`),
+    ...statuses.map((status) => `- ${status.context}: ${status.state}${status.description ? ` — ${status.description}` : ""}`),
+  ];
+  return lines.length ? lines.join("\n") : "No checks have reported for this commit yet.";
 }

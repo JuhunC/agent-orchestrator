@@ -1,5 +1,7 @@
 import type { ThreadContext } from "../github/threads.ts";
-import type { Agent, Task } from "../types.ts";
+import type { Task } from "../types.ts";
+
+type Agent = { name: string; handle: string };
 
 export interface WorkspaceInfo {
   branch: string;
@@ -47,6 +49,71 @@ function historySection(history: Task[]): string {
   ].join("\n");
 }
 
+function workspaceSection(repo: string, thread: ThreadContext, workspace: WorkspaceInfo): string {
+  return workspace.willPush
+    ? [
+        `Your current directory is a git checkout of ${repo} on branch \`${workspace.branch}\` (based on \`${workspace.baseBranch}\`).`,
+        "Make the changes needed directly in this directory and commit as you go if you like.",
+        thread.kind === "pull"
+          ? "Publish with the github tool commit_and_push; that updates this pull request."
+          : "Publish with the github tools: commit_and_push, then open_pull_request.",
+        "Don't change branches or rewrite history that's already pushed.",
+      ].join("\n")
+    : [
+        `Your current directory is a git checkout of ${repo} on branch \`${workspace.branch}\`.`,
+        workspace.canPush
+          ? "You can't push from this agent, so answer in your reply."
+          : "This pull request comes from a fork, so changes can't be pushed. Explain or suggest changes in your reply.",
+      ].join("\n");
+}
+
+const REPLY_INSTRUCTIONS =
+  "When you are done, end with a concise summary for the people on GitHub: what you changed (or found), anything left to do, and any question you need answered. It is posted as a comment.";
+
+/**
+ * The prompt for an agent session that already knows this thread (a live session, or one resumed
+ * with --resume): only what's new since its last run, to save tokens.
+ */
+export function buildFollowUpPrompt(input: {
+  task: Task;
+  thread: ThreadContext;
+  workspace: WorkspaceInfo;
+  /** When this agent last finished on the thread; comments after it are new. */
+  since: string | null;
+  /** The previous attempt stopped at a usage limit. */
+  interrupted: boolean;
+}): string {
+  const { task, thread, workspace, since, interrupted } = input;
+  const kind = KIND_LABEL[thread.kind];
+  const repo = `${task.owner}/${task.repo}`;
+  const fresh = thread.comments.filter((comment) => !comment.fromOrchestrator && (!since || comment.createdAt > since) && comment.body.trim() !== task.requestText.trim());
+  const sections = [
+    interrupted
+      ? `You were interrupted by a usage limit while working on this. Your uncommitted changes are still in the working copy. Continue where you left off.`
+      : `@${task.requestedBy} has a new request for you on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
+    "",
+    "## Request",
+    quote(clip(task.requestText, 20_000)),
+  ];
+  if (fresh.length) {
+    sections.push(
+      "",
+      "## New on the thread since your last run (oldest first)",
+      fresh.map((comment) => `**@${comment.author}** (${comment.createdAt.slice(0, 16).replace("T", " ")}):\n${quote(clip(comment.body, 4000))}`).join("\n\n"),
+    );
+  }
+  sections.push(
+    "",
+    "## Working copy",
+    `${workspaceSection(repo, thread, workspace)}\nThe branch has been refreshed from GitHub, so it includes anything pushed since your last run.`,
+    "",
+    "## How to reply",
+    REPLY_INSTRUCTIONS,
+  );
+  const prompt = sections.join("\n");
+  return prompt.length > MAX_PROMPT ? prompt.slice(0, MAX_PROMPT) + "\n…(prompt truncated)" : prompt;
+}
+
 export function buildPrompt(input: {
   agent: Agent;
   task: Task;
@@ -58,21 +125,7 @@ export function buildPrompt(input: {
   const kind = KIND_LABEL[thread.kind];
   const repo = `${task.owner}/${task.repo}`;
 
-  const workspaceText = workspace.willPush
-    ? [
-        `Your current directory is a git checkout of ${repo} on branch \`${workspace.branch}\` (based on \`${workspace.baseBranch}\`).`,
-        "Make the changes needed directly in this directory. You may commit; anything left uncommitted is committed for you.",
-        thread.kind === "pull"
-          ? "When you finish, the orchestrator pushes the branch, which updates this pull request."
-          : "When you finish, the orchestrator pushes the branch and opens (or updates) a pull request.",
-        "Do not push, change branches, or rewrite history yourself.",
-      ].join("\n")
-    : [
-        `Your current directory is a git checkout of ${repo} on branch \`${workspace.branch}\`.`,
-        workspace.canPush
-          ? "You are configured as a read-only agent: your changes won't be pushed, so answer in your reply."
-          : "This pull request comes from a fork, so changes can't be pushed. Explain or suggest changes in your reply.",
-      ].join("\n");
+  const workspaceText = workspaceSection(repo, thread, workspace);
 
   const conversation = thread.comments
     .filter((comment) => !comment.fromOrchestrator)
@@ -106,7 +159,7 @@ export function buildPrompt(input: {
   sections.push(
     "",
     "## How to reply",
-    "When you are done, end with a concise summary for the people on GitHub: what you changed (or found), anything left to do, and any question you need answered. It is posted as a comment.",
+    REPLY_INSTRUCTIONS,
   );
 
   const prompt = sections.join("\n");

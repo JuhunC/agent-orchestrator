@@ -1,9 +1,13 @@
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { getAgent, getSetting, getTask, queuedTasks, setSetting, tasksWithStatus, updateTask } from "../db.ts";
+import { getSetting, getTask, queuedTasks, setSetting, tasksWithStatus, updateTask } from "../db.ts";
 import { errorMessage, log } from "../log.ts";
 import type { Task } from "../types.ts";
-import { executeTask, markInterrupted, workspaceDir } from "./run-task.ts";
+import { loadProfiles } from "../profiles/loader.ts";
+import { sessions } from "../runtime/manager.ts";
+import { workspaceDir } from "../runtime/workspace.ts";
+import { clearLimit, getLimit } from "./limit-store.ts";
+import { executeTask, markInterrupted } from "./run-task.ts";
 
 /**
  * Runs queued tasks, up to the concurrency limit. Two tasks that share a workspace (same agent
@@ -12,6 +16,7 @@ import { executeTask, markInterrupted, workspaceDir } from "./run-task.ts";
 class Scheduler {
   private running = new Map<number, { controller: AbortController; workspace: string }>();
   private draining: Promise<void>[] = [];
+  private wakeTimer: NodeJS.Timeout | null = null;
 
   get maxConcurrent(): number {
     const stored = Number(getSetting("max_concurrent"));
@@ -46,20 +51,47 @@ class Scheduler {
 
   kick(): void {
     if (this.paused) return;
+    const now = Date.now();
+    let wakeAt = Infinity;
+    const queued = queuedTasks();
+    const profiles = queued.length ? loadProfiles().agents : [];
+    const limit = getLimit();
     const busy = new Set([...this.running.values()].map((entry) => entry.workspace));
-    for (const task of queuedTasks()) {
+    for (const task of queued) {
       if (this.running.size >= this.maxConcurrent) break;
       const workspace = workspaceDir(task);
       if (busy.has(workspace)) continue;
-      const agent = getAgent(task.agent);
-      if (!agent) {
-        this.finishWithoutRunning(task, "cancelled", "The agent was deleted before this task ran");
+      const profile = profiles.find((candidate) => candidate.name === task.agent);
+      if (!profile) {
+        this.finishWithoutRunning(task, "cancelled", "The agent was removed before this task ran");
         continue;
       }
-      if (!agent.enabled) continue;
+      if (!profile.enabled) continue;
+      // Waiting for a usage limit to reset: this task's own, or the model service's.
+      const blockedUntil = Math.max(task.retryAt ? Date.parse(task.retryAt) : 0, limit ? Date.parse(limit.until) : 0);
+      if (blockedUntil > now) {
+        wakeAt = Math.min(wakeAt, blockedUntil);
+        continue;
+      }
       busy.add(workspace);
       this.launch(task, workspace);
     }
+    if (this.wakeTimer) clearTimeout(this.wakeTimer);
+    this.wakeTimer = null;
+    if (Number.isFinite(wakeAt)) {
+      this.wakeTimer = setTimeout(() => this.kick(), Math.min(Math.max(1000, wakeAt - now + 500), 2 ** 31 - 1));
+      this.wakeTimer.unref();
+    }
+  }
+
+  /** Runs a task that's waiting for a usage limit right away, and lifts the limit. */
+  runNow(taskId: number): boolean {
+    const task = getTask(taskId);
+    if (task?.status !== "queued") return false;
+    clearLimit();
+    bus.publish({ type: "task", task: updateTask(task.id, { retryAt: null }) });
+    this.kick();
+    return true;
   }
 
   private launch(task: Task, workspace: string): void {
@@ -110,6 +142,7 @@ class Scheduler {
   async shutdown(): Promise<void> {
     for (const { controller } of this.running.values()) controller.abort("shutdown");
     await this.idle();
+    sessions.closeAll();
   }
 }
 

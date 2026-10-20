@@ -13,9 +13,9 @@ services:
       - "${BIND_ADDRESS:-0.0.0.0}:${HOST_PORT:-3000}:3000"
     volumes:
       - data:/data
-      # Your agents: edit agents.yaml here, and drop custom agent binaries into agents-bin/.
-      - ./config:/app/config:ro
-      - ./agents-bin:/opt/agents/bin:ro
+      # Agent profiles (roles, skills, MCP servers). Filled with examples on first start;
+      # edit them here or in the admin UI.
+      - ./profiles:/profiles
     stop_grace_period: 30s
 
   caddy:

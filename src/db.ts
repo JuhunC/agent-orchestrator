@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { config } from "./config.ts";
-import type { Agent, Delivery, EventKind, Task, TaskEvent, TaskStatus, ThreadKind, ThreadRef } from "./types.ts";
+import type { Delivery, EventKind, Task, TaskEvent, TaskStatus, ThreadKind, ThreadRef } from "./types.ts";
 
 mkdirSync(config.dataDir, { recursive: true });
 
@@ -100,6 +100,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 `);
 
+function addColumn(table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!columns.some((existing) => existing.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+addColumn("tasks", "retry_at", "TEXT");
+addColumn("tasks", "attempts", "INTEGER NOT NULL DEFAULT 0");
+addColumn("tasks", "start_sha", "TEXT");
+addColumn("tasks", "live", "INTEGER NOT NULL DEFAULT 0");
+
 export function now(): string {
   return new Date().toISOString();
 }
@@ -112,83 +121,6 @@ function json<T>(value: unknown, fallback: T): T {
   } catch {
     return fallback;
   }
-}
-
-// ---------- agents ----------
-
-function toAgent(row: Row): Agent {
-  return {
-    name: String(row.name),
-    handle: String(row.handle),
-    description: String(row.description),
-    command: String(row.command),
-    args: json(row.args, []),
-    resumeArgs: json(row.resume_args, []),
-    output: String(row.output) as Agent["output"],
-    env: json(row.env, {}),
-    timeoutMinutes: row.timeout_minutes === null ? null : Number(row.timeout_minutes),
-    openPullRequest: Boolean(row.open_pull_request),
-    exposeGithubToken: Boolean(row.expose_github_token),
-    enabled: Boolean(row.enabled),
-    source: String(row.source) as Agent["source"],
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at),
-  };
-}
-
-export type AgentInput = Omit<Agent, "createdAt" | "updatedAt">;
-
-export function listAgents(): Agent[] {
-  return (db.prepare("SELECT * FROM agents ORDER BY name").all() as Row[]).map(toAgent);
-}
-
-export function getAgent(name: string): Agent | null {
-  const row = db.prepare("SELECT * FROM agents WHERE name = ?").get(name) as Row | undefined;
-  return row ? toAgent(row) : null;
-}
-
-export function getAgentByHandle(handle: string): Agent | null {
-  const row = db.prepare("SELECT * FROM agents WHERE handle = ? COLLATE NOCASE").get(handle) as Row | undefined;
-  return row ? toAgent(row) : null;
-}
-
-export function upsertAgent(agent: AgentInput): Agent {
-  const ts = now();
-  db.prepare(
-    `INSERT INTO agents (name, handle, description, command, args, resume_args, output, env, timeout_minutes,
-       open_pull_request, expose_github_token, enabled, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(name) DO UPDATE SET handle = excluded.handle, description = excluded.description,
-       command = excluded.command, args = excluded.args, resume_args = excluded.resume_args,
-       output = excluded.output, env = excluded.env, timeout_minutes = excluded.timeout_minutes,
-       open_pull_request = excluded.open_pull_request, expose_github_token = excluded.expose_github_token,
-       enabled = excluded.enabled, source = excluded.source, updated_at = excluded.updated_at`,
-  ).run(
-    agent.name,
-    agent.handle,
-    agent.description,
-    agent.command,
-    JSON.stringify(agent.args),
-    JSON.stringify(agent.resumeArgs),
-    agent.output,
-    JSON.stringify(agent.env),
-    agent.timeoutMinutes,
-    agent.openPullRequest ? 1 : 0,
-    agent.exposeGithubToken ? 1 : 0,
-    agent.enabled ? 1 : 0,
-    agent.source,
-    ts,
-    ts,
-  );
-  return getAgent(agent.name)!;
-}
-
-export function setAgentEnabled(name: string, enabled: boolean): void {
-  db.prepare("UPDATE agents SET enabled = ?, updated_at = ? WHERE name = ?").run(enabled ? 1 : 0, now(), name);
-}
-
-export function deleteAgent(name: string): void {
-  db.prepare("DELETE FROM agents WHERE name = ?").run(name);
 }
 
 // ---------- tasks ----------
@@ -226,6 +158,10 @@ function toTask(row: Row): Task {
     commits: row.commits === null ? null : Number(row.commits),
     retryOf: row.retry_of === null ? null : Number(row.retry_of),
     forgotten: Boolean(row.forgotten),
+    retryAt: (row.retry_at as string | null) ?? null,
+    attempts: Number(row.attempts ?? 0),
+    startSha: (row.start_sha as string | null) ?? null,
+    live: Boolean(row.live),
   };
 }
 
@@ -296,6 +232,10 @@ const TASK_COLUMNS: Record<string, string> = {
   threadUrl: "thread_url",
   requestText: "request_text",
   forgotten: "forgotten",
+  retryAt: "retry_at",
+  attempts: "attempts",
+  startSha: "start_sha",
+  live: "live",
 };
 
 export function updateTask(id: number, patch: Partial<Task>): Task {

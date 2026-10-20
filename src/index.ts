@@ -1,14 +1,26 @@
 import { mkdirSync } from "node:fs";
-import { syncAgentsFromFile } from "./agents/registry.ts";
 import { config } from "./config.ts";
 import { getCredentials } from "./github/app.ts";
 import { errorMessage, log } from "./log.ts";
+import { loadProfiles } from "./profiles/loader.ts";
+import { seedProfiles } from "./profiles/seed.ts";
 import { scheduler } from "./runner/scheduler.ts";
+import { sessions } from "./runtime/manager.ts";
 import { buildServer } from "./server/http.ts";
 
 async function main(): Promise<void> {
   mkdirSync(config.agentHome, { recursive: true });
-  syncAgentsFromFile();
+  if (config.defaultProfilesDir) {
+    try {
+      seedProfiles();
+    } catch (error) {
+      log.error("Could not set up the profiles folder; check it's writable by the container user (uid 1000)", { dir: config.profilesDir, error: errorMessage(error) });
+    }
+  }
+  const profiles = loadProfiles();
+  log.info("Loaded agent profiles", { dir: config.profilesDir, agents: profiles.agents.map((agent) => `${agent.name} (@${agent.handle})`) });
+  for (const agent of profiles.agents) if (agent.errors.length) log.warn("Agent profile has errors", { agent: agent.name, errors: agent.errors });
+  for (const problem of [...profiles.errors.map((error) => `${error.file}: ${error.message}`), ...profiles.library.errors]) log.warn("Profile problem", { problem });
 
   const app = await buildServer();
   await app.listen({ port: config.port, host: config.host });
@@ -29,6 +41,7 @@ async function main(): Promise<void> {
     log.info("Forwarding webhooks from relay", { source: config.webhookProxyUrl });
   }
 
+  sessions.start();
   await scheduler.start();
 
   let stopping = false;

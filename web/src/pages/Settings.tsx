@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, useApi, type Installation, type Settings as SettingsData, type Setup } from "../api.ts";
+import { api, useApi, type Installation, type ModelInfo, type Settings as SettingsData, type Setup } from "../api.ts";
 import { Empty, Panel, Switch } from "../components/ui.tsx";
 import { useRoute } from "../router.ts";
 
@@ -188,6 +188,11 @@ export function Settings() {
           </div>
         </Panel>
 
+        <ModelPanel />
+      </div>
+
+      <div className="grid-2">
+        <LivePanel settings={data} onSave={update} />
         <Panel title="Environment" hint="set with environment variables">
           <dl className="kv">
             <dt>GITHUB_URL</dt>
@@ -204,11 +209,68 @@ export function Settings() {
             <dd className="mono">{setup.labelPrefix && setup.labelPrefix !== "none" ? `${setup.labelPrefix}<agent>` : "off"}</dd>
             <dt>Timeout</dt>
             <dd>{setup.defaultTimeoutMinutes} min</dd>
-            <dt>Agents file</dt>
-            <dd className="mono">{setup.agentsConfigPath}</dd>
+            <dt>Profiles</dt>
+            <dd className="mono">{setup.profilesDir}</dd>
           </dl>
         </Panel>
       </div>
     </div>
+  );
+}
+
+function ModelPanel() {
+  const { data } = useApi<ModelInfo>("/api/model", (message) => message.type === "limits");
+  return (
+    <Panel title="Model service" hint="ANTHROPIC_* environment variables">
+      {!data ? (
+        <Empty>Loading…</Empty>
+      ) : (
+        <div className="stack" style={{ gap: 12 }}>
+          <dl className="kv">
+            <dt>Endpoint</dt>
+            <dd className="mono">
+              {data.baseUrl} {data.custom && <span className="badge accent">custom</span>}
+            </dd>
+            <dt>Model</dt>
+            <dd className="mono">{data.model ?? "Claude Code default"}</dd>
+            <dt>Credential</dt>
+            <dd>{data.credential ? <code>{data.credential}</code> : <span className="error-text">none set — agents can't run</span>}</dd>
+            <dt>Usage limit</dt>
+            <dd>{data.limit ? `reached; resets ${new Date(data.limit.until).toLocaleString()}` : "not limited"}</dd>
+          </dl>
+          {data.limit && (
+            <div>
+              <button onClick={() => void api.del("/api/limit")}>Clear limit and retry now</button>
+            </div>
+          )}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function LivePanel({ settings, onSave }: { settings: SettingsData; onSave: (body: Partial<SettingsData>) => Promise<void> }) {
+  const [idle, setIdle] = useState(String(settings.liveIdleMinutes));
+  const [max, setMax] = useState(String(settings.maxLiveSessions));
+  const dirty = Number(idle) !== settings.liveIdleMinutes || Number(max) !== settings.maxLiveSessions;
+  return (
+    <Panel title="Agent sessions" hint="for agents with live: true">
+      <div className="form-grid">
+        <div className="field">
+          <label htmlFor="live-idle">Keep a session open after its last task (minutes)</label>
+          <input id="live-idle" inputMode="numeric" value={idle} onChange={(event) => setIdle(event.target.value.replace(/\D/g, ""))} />
+        </div>
+        <div className="field">
+          <label htmlFor="live-max">Open sessions at most</label>
+          <input id="live-max" inputMode="numeric" value={max} onChange={(event) => setMax(event.target.value.replace(/\D/g, ""))} />
+        </div>
+      </div>
+      <div className="row" style={{ marginTop: 12 }}>
+        <button disabled={!dirty || !Number(idle) || !Number(max)} onClick={() => void onSave({ liveIdleMinutes: Number(idle), maxLiveSessions: Number(max) })}>
+          Save
+        </button>
+        <span className="meta">Closed sessions resume from their saved conversation next time.</span>
+      </div>
+    </Panel>
   );
 }
