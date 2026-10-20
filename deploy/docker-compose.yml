@@ -1,0 +1,37 @@
+# Runs the orchestrator on a server. The deploy workflow copies this file to
+# DEPLOY_PATH (default ~/agent-orchestrator) and runs `docker compose up -d`.
+#
+# Put your settings in .env next to this file (see .env.example in the repo).
+# For automatic HTTPS, set DOMAIN in .env and start with `--profile https`.
+
+services:
+  orchestrator:
+    image: ${IMAGE:-ghcr.io/juhunc/agent-orchestrator:latest}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${HOST_PORT:-3000}:3000"
+    volumes:
+      - data:/data
+      # Your agents: edit agents.yaml here, and drop custom agent binaries into agents-bin/.
+      - ./config:/app/config:ro
+      - ./agents-bin:/opt/agents/bin:ro
+    stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2
+    profiles: [https]
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on: [orchestrator]
+
+volumes:
+  data:
+  caddy-data:

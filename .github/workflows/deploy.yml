@@ -1,0 +1,154 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  image:
+    name: Publish image to ghcr.io
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=long
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - id: ref
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}:sha-${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    name: Deploy over SSH
+    needs: image
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE: ${{ needs.image.outputs.image }}
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST || vars.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER || vars.DEPLOY_USER || 'deploy' }}
+      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
+      DEPLOY_PATH: ${{ vars.DEPLOY_PATH || 'agent-orchestrator' }}
+      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+      DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS || vars.DEPLOY_KNOWN_HOSTS }}
+    steps:
+      - name: Check deploy settings
+        id: check
+        run: |
+          if [ -z "$DEPLOY_HOST" ] || [ -z "$DEPLOY_SSH_KEY" ]; then
+            echo "::notice::DEPLOY_HOST and DEPLOY_SSH_KEY are not set, so the deploy was skipped. The image is published as $IMAGE."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v7
+        if: steps.check.outputs.skip != 'true'
+
+      - name: Set up SSH
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" >> ~/.ssh/known_hosts
+          else
+            echo "::warning::DEPLOY_KNOWN_HOSTS is not set; trusting the host key the server presents now."
+            ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          cat >> ~/.ssh/config <<EOF
+          Host target
+            HostName $DEPLOY_HOST
+            User $DEPLOY_USER
+            Port $DEPLOY_PORT
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            ServerAliveInterval 30
+          EOF
+
+      - name: Copy compose files
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          ssh target "mkdir -p '$DEPLOY_PATH/config' '$DEPLOY_PATH/agents-bin'"
+          scp deploy/docker-compose.yml deploy/Caddyfile "target:$DEPLOY_PATH/"
+          # agents.yaml is yours to edit on the server; only seed it the first time.
+          ssh target "test -f '$DEPLOY_PATH/config/agents.yaml'" || scp config/agents.yaml "target:$DEPLOY_PATH/config/agents.yaml"
+          if ! ssh target "test -f '$DEPLOY_PATH/.env'"; then
+            scp .env.example "target:$DEPLOY_PATH/.env.example"
+            echo "::error::$DEPLOY_PATH/.env is missing on the server. Copy .env.example to .env there, fill it in, and re-run this job."
+            exit 1
+          fi
+          # Pin the exact image this run built; docker compose picks the override up automatically.
+          printf 'services:\n  orchestrator:\n    image: %s\n' "$IMAGE" | ssh target "cat > '$DEPLOY_PATH/docker-compose.override.yml'"
+
+      - name: Pull and restart
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | ssh target "docker login ghcr.io -u '${{ github.actor }}' --password-stdin" >/dev/null
+          ssh target "cd '$DEPLOY_PATH' && docker compose pull orchestrator && docker compose up -d --remove-orphans orchestrator; status=\$?; docker logout ghcr.io >/dev/null; exit \$status"
+          ssh target "cd '$DEPLOY_PATH' && if grep -qE '^DOMAIN=.+' .env; then docker compose --profile https up -d caddy; fi"
+
+      - name: Wait until healthy
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          for i in $(seq 1 30); do
+            state=$(ssh target "cd '$DEPLOY_PATH' && docker inspect --format '{{.State.Health.Status}}' \$(docker compose ps -q orchestrator)" || true)
+            echo "health: $state"
+            if [ "$state" = "healthy" ]; then exit 0; fi
+            sleep 5
+          done
+          ssh target "cd '$DEPLOY_PATH' && docker compose logs --tail 80 orchestrator"
+          exit 1

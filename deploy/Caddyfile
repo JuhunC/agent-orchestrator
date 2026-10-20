@@ -1,0 +1,6 @@
+{$DOMAIN} {
+	reverse_proxy orchestrator:3000 {
+		# Keep the admin UI's live stream open.
+		flush_interval -1
+	}
+}
