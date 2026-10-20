@@ -36,6 +36,8 @@ Object.assign(process.env, {
   DATA_DIR: join(root, "data"),
   AGENTS_CONFIG: agentsFile,
   GITHUB_URL: fake.url,
+  // GitHub Actions sets GITHUB_API_URL for every job; point it at the fake too.
+  GITHUB_API_URL: `${fake.url}/api/v3`,
   GITHUB_APP_ID: "1",
   GITHUB_APP_SLUG: "test-orchestrator",
   GITHUB_APP_PRIVATE_KEY: privateKey,
