@@ -1,6 +1,6 @@
 import { bus } from "./bus.ts";
 import { config } from "./config.ts";
-import { createTask, queuedTaskForThread, recentTaskForThread, recordDelivery, updateTask } from "./db.ts";
+import { createTask, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
 import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
 import type { Profile } from "./profiles/types.ts";
 import { installationClient, type GitHubClient } from "./github/app.ts";
@@ -8,6 +8,7 @@ import { addEyesReaction, markAgentOnThread, permissionAtLeast, userPermission }
 import { errorMessage, log } from "./log.ts";
 import { extractMentions } from "./mentions.ts";
 import { handleProjectItemWebhook } from "./boards/engine.ts";
+import { activityFor, deliver } from "./runner/inbox.ts";
 import { scheduler } from "./runner/scheduler.ts";
 import type { Delivery, ThreadKind, TriggerKind } from "./types.ts";
 
@@ -197,21 +198,41 @@ export async function handleWebhook(event: string, deliveryId: string, payload: 
     if (!loadProfiles().agents.length) return record(deliveryId, event, payload, "ignored", "No agents configured");
 
     const intents = intentsFor(event, payload);
-    if (!intents.length) return record(deliveryId, event, payload, "ignored", "No agent mentioned or assigned");
+    // Agents already working on this thread hear about what people do there.
+    const activity = activityFor(event, payload);
+    const working = activity ? runningTasksForThread(activity.ref) : [];
+    if (!intents.length && !working.length) return record(deliveryId, event, payload, "ignored", "No agent mentioned or assigned, and none working here");
     if (!repoAllowed(repoFull)) return record(deliveryId, event, payload, "rejected", `${repoFull} is not in ALLOWED_REPOS`);
 
     const [owner, repo] = repoFull.split("/") as [string, string];
     const sender = String(payload.sender?.login ?? "");
     const gh = await installationClient(installationId);
     const permission = await userPermission(gh, owner, repo, sender);
-    if (!permissionAtLeast(permission, config.triggerMinPermission)) {
-      return record(deliveryId, event, payload, "rejected", `@${sender} has ${permission} access; ${config.triggerMinPermission} is required`);
-    }
+    const trusted = permissionAtLeast(permission, config.triggerMinPermission);
 
     const outcomes: string[] = [];
-    for (const intent of intents) outcomes.push(await accept(gh, intent, { owner, repo, installationId, sender }));
+    const told = new Set<string>();
+    for (const task of working) {
+      // Mentioning an agent that's already on this thread: tell it now instead of queueing another run.
+      const onThread = task.threadKind === activity!.ref.kind && task.threadNumber === activity!.ref.number;
+      const mention = trusted && onThread && intents.some((intent) => intent.agent.name === task.agent);
+      deliver(task, activity!, { trusted, mention });
+      if (mention) told.add(task.agent);
+      outcomes.push(`Passed to ${task.agent} (task #${task.id})`);
+    }
+    if (intents.length && !trusted) {
+      outcomes.push(`@${sender} has ${permission} access; ${config.triggerMinPermission} is required to start agents`);
+      return record(deliveryId, event, payload, working.length ? "forwarded" : "rejected", outcomes.join("; "));
+    }
+    for (const intent of intents) {
+      if (told.has(intent.agent.name)) {
+        if (intent.reactTo) await addEyesReaction(gh, intent.reactTo).catch(() => undefined);
+        continue;
+      }
+      outcomes.push(await accept(gh, intent, { owner, repo, installationId, sender }));
+    }
     const started = outcomes.filter((outcome) => outcome.startsWith("Queued"));
-    record(deliveryId, event, payload, started.length ? "triggered" : "ignored", outcomes.join("; "));
+    record(deliveryId, event, payload, started.length ? "triggered" : working.length ? "forwarded" : "ignored", outcomes.join("; "));
     scheduler.kick();
   } catch (error) {
     log.error("Webhook handling failed", { event, deliveryId, error: errorMessage(error) });

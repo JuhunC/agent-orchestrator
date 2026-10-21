@@ -1,8 +1,10 @@
+import type { HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
+import { takeInbox } from "../runner/inbox.ts";
 import { errorMessage, log } from "../log.ts";
 import type { Effort, Library, Profile } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
@@ -64,6 +66,22 @@ export interface RunTurnOptions {
 export interface RunTurnOutcome extends TurnOutcome {
   prompt: string;
   live: boolean;
+}
+
+/**
+ * Hooks that hand the agent what people did on GitHub while it works: after each round of tool
+ * calls, and when it's about to finish (so it continues and deals with it instead of stopping).
+ * Subagents don't get it; their parent does, once they report back.
+ */
+function inboxHooks(context: Entry["context"]): Options["hooks"] {
+  const hand = (event: "PostToolBatch" | "Stop"): HookCallback => async (input) => {
+    if (input.agent_id) return {};
+    const task = context.current?.task;
+    const text = task ? takeInbox(task.id) : null;
+    if (!text) return {};
+    return { hookSpecificOutput: { hookEventName: event, additionalContext: text } };
+  };
+  return { PostToolBatch: [{ hooks: [hand("PostToolBatch")] }], Stop: [{ hooks: [hand("Stop")] }] };
 }
 
 function hash(value: unknown): string {
@@ -158,7 +176,18 @@ class Sessions {
     const context: Entry["context"] = { current: null };
     const github = createGithubServer(profile, () => context.current);
     const session = new AgentSession(
-      buildOptions({ profile, library, workspace, env, github, resume, stateDir: join(config.dataDir, "sessions", hash(key)), model: options.model, effort: options.effort }),
+      buildOptions({
+        profile,
+        library,
+        workspace,
+        env,
+        github,
+        resume,
+        stateDir: join(config.dataDir, "sessions", hash(key)),
+        model: options.model,
+        effort: options.effort,
+        hooks: inboxHooks(context),
+      }),
     );
     const entry: Entry = {
       key,

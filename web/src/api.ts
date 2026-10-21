@@ -191,7 +191,7 @@ export interface TaskEvent {
   id: number;
   taskId: number;
   ts: string;
-  kind: "status" | "tool" | "text" | "stderr" | "system" | "error";
+  kind: "status" | "tool" | "text" | "stderr" | "system" | "error" | "github";
   message: string;
 }
 
@@ -202,7 +202,8 @@ export interface Delivery {
   action: string;
   repo: string;
   sender: string;
-  decision: "triggered" | "ignored" | "rejected" | "error";
+  /** forwarded: passed to an agent already working on the thread. */
+  decision: "triggered" | "forwarded" | "ignored" | "rejected" | "error";
   detail: string;
   ts: string;
 }

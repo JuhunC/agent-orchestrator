@@ -14,6 +14,7 @@ import { agentEnv, taskEnv } from "../runtime/options.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
 import type { EventKind, Task, ThreadRef } from "../types.ts";
 import { git } from "./git.ts";
+import { settleInbox } from "./inbox.ts";
 import { retryTime, type DetectedLimit } from "./limits.ts";
 import { setLimit } from "./limit-store.ts";
 import { ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
@@ -279,6 +280,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     state.finishedAt = Date.now();
     state.note = status === "succeeded" ? "" : reason;
     task = patch(task.id, { status, finishedAt: new Date(state.finishedAt).toISOString(), error: status === "succeeded" ? null : reason, resultText: text || task.resultText });
+    // Mentions that arrived too late for the agent to see become a follow-up run.
+    settleInbox(task, status !== "cancelled");
     emit(task.id, "status", status === "succeeded" ? "Finished" : status === "cancelled" ? "Cancelled" : `Failed: ${reason}`);
     await throttle.flush(true);
     await throttle.stop();

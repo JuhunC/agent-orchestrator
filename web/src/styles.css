@@ -597,7 +597,8 @@ button:focus-visible {
   animation: pulse 1.2s ease-in-out infinite;
 }
 .pill.succeeded,
-.pill.triggered {
+.pill.triggered,
+.pill.forwarded {
   color: var(--succeeded);
   background: var(--succeeded-bg);
 }
@@ -813,6 +814,10 @@ button:focus-visible {
 .log .k-status .kind,
 .log .k-system .kind {
   color: #86efac;
+}
+.log .k-github .kind,
+.log .k-github .msg {
+  color: #fcd34d;
 }
 .log .k-error .kind,
 .log .k-error .msg {

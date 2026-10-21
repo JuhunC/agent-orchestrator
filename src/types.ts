@@ -1,7 +1,8 @@
 export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board";
-export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error";
+/** "github": something a person did on the thread while the agent was working. */
+export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error" | "github";
 
 
 export interface Task {
@@ -66,7 +67,8 @@ export interface Delivery {
   action: string;
   repo: string;
   sender: string;
-  decision: "triggered" | "ignored" | "rejected" | "error";
+  /** forwarded: passed to an agent already working on the thread. */
+  decision: "triggered" | "forwarded" | "ignored" | "rejected" | "error";
   detail: string;
   ts: string;
 }

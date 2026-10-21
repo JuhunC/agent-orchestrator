@@ -388,6 +388,17 @@ export function queuedTaskForThread(ref: ThreadRef, agent: string): Task | null 
   return row ? toTask(row) : null;
 }
 
+/** Running tasks on a thread, plus tasks whose pull request this is (an agent working an issue opened it). */
+export function runningTasksForThread(ref: ThreadRef): Task[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND status = 'running'
+         AND ((thread_kind = ? AND thread_number = ?) OR (? = 'pull' AND pr_number = ?)) ORDER BY id`,
+    )
+    .all(ref.owner, ref.repo, ref.kind, ref.number, ref.kind, ref.number) as Row[];
+  return rows.map(toTask);
+}
+
 export function lastSessionId(ref: ThreadRef, agent: string): string | null {
   const row = db
     .prepare(

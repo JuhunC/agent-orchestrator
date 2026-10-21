@@ -12,7 +12,8 @@ export interface ModelRequest {
 }
 
 /** Decides what the "model" answers. Return blocks; tool_use blocks make Claude Code run tools. */
-export type Script = (request: ModelRequest) => Block[] | { status: number; error: { type: string; message: string } };
+type Answer = Block[] | { status: number; error: { type: string; message: string } };
+export type Script = (request: ModelRequest) => Answer | Promise<Answer>;
 
 /**
  * A stand-in for the Anthropic Messages API (ANTHROPIC_BASE_URL). The real Agent SDK and Claude
@@ -65,7 +66,7 @@ export class FakeModel {
     const { prompt, step } = analyse(body.messages ?? []);
     const request: ModelRequest = { body, prompt, step, isAgentLoop };
     this.requests.push(request);
-    const answer = isAgentLoop ? this.script(request) : [{ type: "text" as const, text: "OK" }];
+    const answer = isAgentLoop ? await this.script(request) : [{ type: "text" as const, text: "OK" }];
     if (!Array.isArray(answer)) return this.json(res, answer.status, { type: "error", error: answer.error });
 
     const content = answer.map((block) => (block.type === "tool_use" ? { ...block, id: block.id || `toolu_${this.nextId++}` } : block));

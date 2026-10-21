@@ -99,6 +99,8 @@ export interface SessionSetup {
   /** Per-run model and effort, e.g. from a board column; falls back to the profile. */
   model?: string | null;
   effort?: Effort | null;
+  /** Passes news from GitHub to the agent mid-task (see runner/inbox.ts). */
+  hooks?: Options["hooks"];
 }
 
 const ORCHESTRATOR_NOTES = `
@@ -106,7 +108,8 @@ const ORCHESTRATOR_NOTES = `
 - You are run by an orchestrator in response to a GitHub request. There is no human at the terminal: work autonomously, and ask questions with the github post_comment tool only when you're truly blocked.
 - Your working directory is a git checkout on the branch for this task. Don't switch branches.
 - You can't use \`git push\` or \`gh\` to change GitHub. Publish with the github MCP tools: commit_and_push, then open_pull_request.
-- End with a concise summary for the people on GitHub; it's posted as a comment.`;
+- End with a concise summary for the people on GitHub; it's posted as a comment.
+- People may comment or act on the issue or pull request while you work. The orchestrator passes that on to you as "New activity on GitHub"; take it into account when it arrives.`;
 
 export function buildOptions(setup: SessionSetup): Options {
   const { profile, library, workspace, env, github, resume, stateDir } = setup;
@@ -135,6 +138,7 @@ export function buildOptions(setup: SessionSetup): Options {
   if (profile.maxTurns) options.maxTurns = profile.maxTurns;
   if (profile.maxBudgetUsd) options.maxBudgetUsd = profile.maxBudgetUsd;
   if (resume) options.resume = resume;
+  if (setup.hooks) options.hooks = setup.hooks;
   return options;
 }
 

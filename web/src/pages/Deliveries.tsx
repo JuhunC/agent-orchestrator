@@ -19,6 +19,7 @@ export function Deliveries() {
         <select aria-label="Decision" value={filter} onChange={(event) => setFilter(event.target.value)} style={{ width: "auto" }}>
           <option value="">All decisions</option>
           <option value="triggered">Triggered</option>
+          <option value="forwarded">Forwarded to a running agent</option>
           <option value="ignored">Ignored</option>
           <option value="rejected">Rejected</option>
           <option value="error">Error</option>
