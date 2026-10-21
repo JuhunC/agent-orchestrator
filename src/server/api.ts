@@ -17,6 +17,8 @@ import {
   setSetting,
   taskStats,
   tasksForThread,
+  listBoardItems,
+  listHandoffs,
 } from "../db.ts";
 import { ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials } from "../github/app.ts";
 import { errorMessage } from "../log.ts";
@@ -24,8 +26,10 @@ import { scheduler } from "../runner/scheduler.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import type { Profile } from "../profiles/types.ts";
-import { createAgent, deleteProfileFile, listProfileFiles, ProfileFileError, readProfileFile, writeProfileFile } from "../profiles/store.ts";
+import { createAgent, deleteProfileFile, listProfileFiles, ProfileFileError, readProfileFile, setAgentModel, writeProfileFile } from "../profiles/store.ts";
 import { sessions } from "../runtime/manager.ts";
+import { boardStatus, forgetProjectCache, syncBoard } from "../boards/engine.ts";
+import { loadBoards } from "../boards/loader.ts";
 import { clearLimit, getLimit } from "../runner/limit-store.ts";
 import { startManualTask } from "../triggers.ts";
 import type { ThreadKind, ThreadRef } from "../types.ts";
@@ -119,6 +123,7 @@ function appManifest(name: string) {
       checks: "read",
       statuses: "read",
       metadata: "read",
+      organization_projects: "write",
     },
     default_events: [
       "issues",
@@ -128,6 +133,7 @@ function appManifest(name: string) {
       "pull_request_review_comment",
       "discussion",
       "discussion_comment",
+      "projects_v2_item",
     ],
   };
 }
@@ -271,7 +277,51 @@ export function registerApi(app: FastifyInstance): void {
     return { ok: true };
   });
 
+  app.patch<{ Params: { name: string }; Body: { model?: string | null; effort?: string | null } }>("/api/agents/:name", async (request, reply) => {
+    try {
+      setAgentModel(request.params.name, request.body?.model?.trim() || null, request.body?.effort || null, request.adminLogin ?? "admin");
+      bus.publish({ type: "agents" });
+      return { ok: true };
+    } catch (error) {
+      return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
   app.get("/api/profiles/files", async () => listProfileFiles());
+
+  // ---------- project boards ----------
+  app.get("/api/boards", async () => {
+    const profiles = loadProfiles();
+    const { boards, errors } = loadBoards(profiles);
+    return {
+      boards: boards.map((board) => ({
+        name: board.name,
+        file: `boards/${board.name}.yaml`,
+        project: `${board.owner}/${board.projectNumber}`,
+        statusField: board.statusField,
+        needsHuman: board.needsHuman,
+        pollSeconds: board.pollSeconds,
+        limits: board.limits,
+        columns: Object.values(board.columns).map((column) => ({ ...column, role: undefined, roleText: column.roleName ? null : column.role.slice(0, 300) })),
+        errors: board.errors,
+        status: boardStatus(board.name),
+        items: listBoardItems(board.name).slice(0, 200),
+      })),
+      errors: errors.map((error) => `${error.file}: ${error.message}`),
+      agents: profiles.agents.map((agent) => agent.name),
+      roles: Object.keys(profiles.library.roles),
+    };
+  });
+
+  app.post<{ Params: { name: string } }>("/api/boards/:name/sync", async (request, reply) => {
+    const board = loadBoards().boards.find((candidate) => candidate.name === request.params.name);
+    if (!board) return reply.code(404).send({ error: "No such board" });
+    forgetProjectCache();
+    await syncBoard(board);
+    return boardStatus(board.name);
+  });
+
+  app.get<{ Params: { name: string; item: string } }>("/api/boards/:name/items/:item/handoffs", async (request) => listHandoffs(request.params.name, request.params.item));
 
   app.get<{ Querystring: { path: string } }>("/api/profiles/file", async (request, reply) => {
     try {

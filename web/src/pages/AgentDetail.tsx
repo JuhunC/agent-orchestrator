@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { api, useApi, type AgentsResponse } from "../api.ts";
+import { api, useApi, type AgentsResponse, type ModelInfo } from "../api.ts";
+import { ModelPicker } from "../components/ModelPicker.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
 import { Empty, Panel, Pill } from "../components/ui.tsx";
 import { href, navigate } from "../router.ts";
@@ -27,6 +28,7 @@ const MCP_TEMPLATE = `{
 
 export function AgentDetail({ name }: { name: string }) {
   const { data, reload } = useApi<AgentsResponse>("/api/agents", (message) => message.type === "agents");
+  const modelInfo = useApi<ModelInfo>("/api/model").data;
   const [skill, setSkill] = useState<string | null>(null);
   const [newSkill, setNewSkill] = useState("");
   if (!data) return <Empty>Loading…</Empty>;
@@ -63,7 +65,10 @@ export function AgentDetail({ name }: { name: string }) {
         <Panel title="What it gets" hint="resolved from the files below">
           <dl className="kv">
             <dt>Model</dt>
-            <dd>{agent.model ?? <span className="meta">default (ANTHROPIC_MODEL)</span>}</dd>
+            <dd>
+              {agent.model ?? <span className="meta">default ({modelInfo?.model ?? "ANTHROPIC_MODEL"})</span>}
+              {agent.effort && <span className="meta"> · effort {agent.effort}</span>}
+            </dd>
             <dt>Skills</dt>
             <dd>
               <Chips items={[...agent.skills, ...agent.ownSkills.map((own) => own.name)]} empty="none" />
@@ -118,6 +123,10 @@ export function AgentDetail({ name }: { name: string }) {
           </div>
         </Panel>
       </div>
+
+      <Panel title="Model and effort">
+        <ModelPicker agent={agent.name} model={agent.model} effort={agent.effort} defaultModel={modelInfo?.model ?? null} onSaved={() => void reload()} />
+      </Panel>
 
       <Panel title="agent.md" hint="frontmatter settings, then the role prompt">
         <FileEditor path={`${base}/agent.md`} rows={22} onSaved={() => void reload()} onDeleted={() => navigate("/agents")} deleteLabel="Delete agent" />

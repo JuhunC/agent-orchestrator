@@ -147,3 +147,15 @@ export function repoRemoteUrl(owner: string, repo: string): string {
   }
   return `${config.github.url}/${owner}/${repo}.git`;
 }
+
+/** The installation for an account (an org or user that owns a project board). */
+export async function findOwnerInstallation(owner: string): Promise<number> {
+  const octokit = getApp().octokit;
+  try {
+    const { data } = await octokit.request("GET /orgs/{org}/installation", { org: owner });
+    return data.id;
+  } catch {
+    const { data } = await octokit.request("GET /users/{username}/installation", { username: owner });
+    return data.id;
+  }
+}

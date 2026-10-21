@@ -31,7 +31,32 @@ export class FakeGitHub {
   labels: string[] = [];
   assignees: string[] = [];
   reactions = 0;
+  reviews: { number: number; event: string; body: string }[] = [];
+  prOpened?: (number: number) => void;
+  /** One organization project (acme/1) with a Status field; items map node id → card. */
+  project = {
+    id: "PVT_acme_1",
+    title: "Product",
+    options: ["Backlog", "Ready", "In progress", "In review", "Done", "Needs human"].map((name) => ({ id: `opt_${name.replace(/\s+/g, "_")}`, name })),
+  };
+  items = new Map<string, { id: string; number: number; status: string | null; history: string[] }>();
   private nextId = 1000;
+
+  addItem(number: number, status: string | null = null): string {
+    const id = `PVTI_${number}`;
+    this.items.set(id, { id, number, status, history: status ? [status] : [] });
+    return id;
+  }
+
+  private itemNode(item: { id: string; number: number; status: string | null }) {
+    const issue = this.issues.get(item.number);
+    return {
+      id: item.id,
+      project: { id: this.project.id },
+      fieldValueByName: item.status ? { name: item.status, optionId: `opt_${item.status}` } : null,
+      content: { __typename: issue?.pull ? "PullRequest" : "Issue", number: item.number, title: issue?.title ?? "", repository: { name: "widgets", owner: { login: "acme" } } },
+    };
+  }
 
   constructor() {
     this.server = createServer((req, res) => {
@@ -154,10 +179,51 @@ export class FakeGitHub {
     if (method === "POST" && path === "/repos/acme/widgets/pulls") {
       const number = Math.max(0, ...this.issues.keys()) + 1;
       this.issues.set(number, { number, title: body.title, body: body.body, user: { login: "test-orchestrator[bot]" }, comments: [], pull: { head: body.head, base: body.base } });
+      this.prOpened?.(number);
       return { status: 201, body: { number, html_url: `${this.url}/acme/widgets/pull/${number}` } };
     }
+    if (method === "GET" && (path === "/orgs/acme/installation" || path === "/repos/acme/widgets/installation")) return { status: 200, body: { id: 77 } };
+    if (method === "PATCH" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/))) {
+      const issue = this.issues.get(Number(match[1]))!;
+      if (body.title) issue.title = body.title;
+      if (body.body !== undefined) issue.body = body.body;
+      return { status: 200, body: this.issueJson(issue) };
+    }
+    if (method === "PATCH" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/))) {
+      const pr = this.issues.get(Number(match[1]))!;
+      pr.title = body.title ?? pr.title;
+      pr.body = body.body ?? pr.body;
+      return { status: 200, body: { number: pr.number } };
+    }
+    if (method === "POST" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/reviews$/))) {
+      const pr = this.issues.get(Number(match[1]));
+      // Like GitHub: an app can't approve or block a PR it opened itself.
+      if (pr?.user.login.endsWith("[bot]") && body.event !== "COMMENT") return { status: 422, body: { message: `Unprocessable Entity: "Can not ${body.event === "APPROVE" ? "approve" : "request changes on"} your own pull request"` } };
+      this.reviews.push({ number: Number(match[1]), event: body.event, body: body.body });
+      return { status: 200, body: { id: this.nextId++ } };
+    }
     if (method === "POST" && path === "/graphql") {
-      if (String(body.query).includes("addReaction")) this.reactions++;
+      const query = String(body.query);
+      const vars = body.variables ?? {};
+      if (query.includes("addReaction")) this.reactions++;
+      if (query.includes("query ResolveProject")) {
+        if (vars.owner !== "acme" || vars.number !== 1) return { status: 200, body: { data: { organization: null } } };
+        return { status: 200, body: { data: { organization: { projectV2: { id: this.project.id, title: this.project.title, url: `${this.url}/orgs/acme/projects/1`, field: { id: "F_status", name: vars.field, options: this.project.options } } } } } };
+      }
+      if (query.includes("query BoardItems")) {
+        return { status: 200, body: { data: { node: { items: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [...this.items.values()].map((item) => this.itemNode(item)) } } } } };
+      }
+      if (query.includes("query BoardItem")) {
+        const item = this.items.get(vars.id);
+        return { status: 200, body: { data: { node: item ? this.itemNode(item) : null } } };
+      }
+      if (query.includes("mutation MoveBoardItem")) {
+        const item = this.items.get(vars.item)!;
+        const option = this.project.options.find((candidate) => candidate.id === vars.option)!;
+        item.status = option.name;
+        item.history.push(option.name);
+        return { status: 200, body: { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: item.id } } } } };
+      }
       return { status: 200, body: { data: {} } };
     }
     return { status: 404, body: { message: `Fake GitHub has no route for ${method} ${path}` } };

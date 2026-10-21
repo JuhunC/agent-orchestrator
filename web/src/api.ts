@@ -11,8 +11,13 @@ export interface AgentStats {
   cancelled: number;
 }
 
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+
 export interface GithubPermissions {
   comment: boolean;
+  updateIssue: boolean;
+  review: boolean;
   push: boolean;
   pullRequest: boolean;
   clone: boolean;
@@ -25,6 +30,7 @@ export interface Agent {
   handle: string;
   description: string;
   model: string | null;
+  effort: Effort | null;
   prompt: string;
   toolsAllow: string[] | null;
   toolsDeny: string[];
@@ -113,6 +119,54 @@ export interface Task {
   retryAt: string | null;
   attempts: number;
   live: boolean;
+  board: string | null;
+  boardColumn: string | null;
+  boardItemId: string | null;
+}
+
+export interface BoardColumnInfo {
+  name: string;
+  agent: string | null;
+  roleName: string | null;
+  roleText: string | null;
+  model: string | null;
+  effort: Effort | null;
+  onStart: string | null;
+  movesTo: string[] | "any";
+}
+
+export interface BoardCard {
+  itemId: string;
+  owner: string;
+  repo: string;
+  kind: ThreadKind;
+  number: number;
+  title: string;
+  status: string | null;
+  moves: number;
+  entries: Record<string, number>;
+  updatedAt: string;
+}
+
+export interface BoardInfo {
+  name: string;
+  file: string;
+  project: string;
+  statusField: string;
+  needsHuman: string | null;
+  pollSeconds: number;
+  limits: { movesPerIssue: number; entriesPerColumn: number; budgetUsdPerIssue: number | null };
+  columns: BoardColumnInfo[];
+  errors: string[];
+  status: { project: { title: string; url: string; columns: string[] } | null; lastSyncAt: string | null; error: string | null };
+  items: BoardCard[];
+}
+
+export interface BoardsResponse {
+  boards: BoardInfo[];
+  errors: string[];
+  agents: string[];
+  roles: string[];
 }
 
 export interface TaskEvent {
@@ -207,7 +261,8 @@ export type BusMessage =
   | { type: "agents" }
   | { type: "settings" }
   | { type: "sessions" }
-  | { type: "limits" };
+  | { type: "limits" }
+  | { type: "boards" };
 
 export class ApiError extends Error {
   status: number;
@@ -241,6 +296,7 @@ export const api = {
   get: <T,>(path: string) => request<T>("GET", path),
   post: <T,>(path: string, body: unknown = {}) => request<T>("POST", path, body),
   put: <T,>(path: string, body: unknown) => request<T>("PUT", path, body),
+  patch: <T,>(path: string, body: unknown) => request<T>("PATCH", path, body),
   del: <T,>(path: string) => request<T>("DELETE", path),
 };
 

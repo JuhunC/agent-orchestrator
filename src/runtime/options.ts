@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentDefinition, McpServerConfig, Options } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "../config.ts";
 import { expandMcpServers, expandVars } from "../profiles/mcp.ts";
-import type { Library, McpServers, Profile } from "../profiles/types.ts";
+import type { Effort, Library, McpServers, Profile } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -94,6 +94,9 @@ export interface SessionSetup {
   resume: string | null;
   /** Where this session keeps generated files (the skills plugin). */
   stateDir: string;
+  /** Per-run model and effort, e.g. from a board column; falls back to the profile. */
+  model?: string | null;
+  effort?: Effort | null;
 }
 
 const ORCHESTRATOR_NOTES = `
@@ -105,6 +108,8 @@ const ORCHESTRATOR_NOTES = `
 
 export function buildOptions(setup: SessionSetup): Options {
   const { profile, library, workspace, env, github, resume, stateDir } = setup;
+  const model = setup.model ?? profile.model ?? env.ANTHROPIC_MODEL;
+  const effort = setup.effort ?? profile.effort;
   const mcp = toSdkMcp(profileMcpServers(profile, library));
   const plugin = buildSkillsPlugin(profile, library, join(stateDir, "plugin"));
   const options: Options = {
@@ -123,7 +128,8 @@ export function buildOptions(setup: SessionSetup): Options {
     additionalDirectories: [],
   };
   if (profile.toolsAllow) options.tools = profile.toolsAllow;
-  if (profile.model ?? env.ANTHROPIC_MODEL) options.model = profile.model ?? env.ANTHROPIC_MODEL;
+  if (model) options.model = model;
+  if (effort) options.effort = effort;
   if (profile.maxTurns) options.maxTurns = profile.maxTurns;
   if (profile.maxBudgetUsd) options.maxBudgetUsd = profile.maxBudgetUsd;
   if (resume) options.resume = resume;

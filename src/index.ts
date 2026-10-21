@@ -2,6 +2,8 @@ import { mkdirSync } from "node:fs";
 import { config } from "./config.ts";
 import { getCredentials } from "./github/app.ts";
 import { errorMessage, log } from "./log.ts";
+import { startBoards } from "./boards/engine.ts";
+import { loadBoards } from "./boards/loader.ts";
 import { loadProfiles } from "./profiles/loader.ts";
 import { seedProfiles } from "./profiles/seed.ts";
 import { scheduler } from "./runner/scheduler.ts";
@@ -20,6 +22,9 @@ async function main(): Promise<void> {
   const profiles = loadProfiles();
   log.info("Loaded agent profiles", { dir: config.profilesDir, agents: profiles.agents.map((agent) => `${agent.name} (@${agent.handle})`) });
   for (const agent of profiles.agents) if (agent.errors.length) log.warn("Agent profile has errors", { agent: agent.name, errors: agent.errors });
+  const boards = loadBoards(profiles);
+  if (boards.boards.length) log.info("Loaded project boards", { boards: boards.boards.map((board) => `${board.name} (${board.owner}/${board.projectNumber})`) });
+  for (const board of boards.boards) if (board.errors.length) log.warn("Board has errors", { board: board.name, errors: board.errors });
   for (const problem of [...profiles.errors.map((error) => `${error.file}: ${error.message}`), ...profiles.library.errors]) log.warn("Profile problem", { problem });
 
   const app = await buildServer();
@@ -43,6 +48,7 @@ async function main(): Promise<void> {
 
   sessions.start();
   await scheduler.start();
+  startBoards();
 
   let stopping = false;
   const stop = async (signal: string) => {

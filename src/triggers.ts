@@ -7,6 +7,7 @@ import { installationClient, type GitHubClient } from "./github/app.ts";
 import { addEyesReaction, markAgentOnThread, permissionAtLeast, userPermission } from "./github/threads.ts";
 import { errorMessage, log } from "./log.ts";
 import { extractMentions } from "./mentions.ts";
+import { handleProjectItemWebhook } from "./boards/engine.ts";
 import { scheduler } from "./runner/scheduler.ts";
 import type { Delivery, ThreadKind, TriggerKind } from "./types.ts";
 
@@ -180,6 +181,11 @@ function record(deliveryId: string, event: string, payload: Payload, decision: D
 /** Entry point for verified webhooks. */
 export async function handleWebhook(event: string, deliveryId: string, payload: Payload): Promise<void> {
   try {
+    if (event === "projects_v2_item") {
+      // Board moves, including the orchestrator's own (they start the next column's agent).
+      const detail = await handleProjectItemWebhook(payload);
+      return record(deliveryId, event, payload, /started|card in/.test(detail) ? "triggered" : "ignored", detail);
+    }
     if (event === "ping") return record(deliveryId, event, payload, "ignored", "Ping from GitHub — the webhook works");
     if (event === "installation" || event === "installation_repositories") {
       return record(deliveryId, event, payload, "ignored", `Installation ${payload.action ?? "changed"}`);

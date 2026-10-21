@@ -4,7 +4,7 @@ import { parse } from "yaml";
 import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
 import { normaliseMcpServers } from "./mcp.ts";
-import type { Library, Profile, ProfileSet, Role, SkillInfo } from "./types.ts";
+import { EFFORTS, type Effort, type Library, type Profile, type ProfileSet, type Role, type SkillInfo } from "./types.ts";
 
 const HANDLE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 const NAME = /^[a-z\d][a-z\d_-]{0,39}$/i;
@@ -103,7 +103,14 @@ function loadLibrary(root: string): Library {
   return library;
 }
 
-const GITHUB_DEFAULTS = { comment: true, push: true, pull_request: true, clone: true, finalize: true };
+const GITHUB_DEFAULTS = { comment: true, update_issue: true, review: true, push: true, pull_request: true, clone: true, finalize: true };
+
+export function parseEffort(value: unknown, errors: string[], field = "effort"): Effort | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (EFFORTS.includes(String(value) as Effort)) return String(value) as Effort;
+  errors.push(`${field} must be one of ${EFFORTS.join(", ")}`);
+  return null;
+}
 
 function loadProfile(root: string, name: string, library: Library): Profile {
   const dir = join(root, "agents", name);
@@ -149,6 +156,7 @@ function loadProfile(root: string, name: string, library: Library): Profile {
     handle,
     description: String(data.description ?? ""),
     model: data.model ? String(data.model) : null,
+    effort: parseEffort(data.effort, errors),
     prompt: body,
     toolsAllow: tools.allow === undefined ? null : list(tools.allow, "tools.allow"),
     toolsDeny: list(tools.deny, "tools.deny"),
@@ -157,6 +165,8 @@ function loadProfile(root: string, name: string, library: Library): Profile {
     subagents,
     github: {
       comment: github.comment !== false,
+      updateIssue: github.update_issue !== false,
+      review: github.review !== false,
       push: github.push !== false,
       pullRequest: github.pull_request !== false,
       clone: github.clone !== false,

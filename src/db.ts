@@ -108,6 +108,36 @@ addColumn("tasks", "retry_at", "TEXT");
 addColumn("tasks", "attempts", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "start_sha", "TEXT");
 addColumn("tasks", "live", "INTEGER NOT NULL DEFAULT 0");
+addColumn("tasks", "board", "TEXT");
+addColumn("tasks", "board_column", "TEXT");
+addColumn("tasks", "board_item_id", "TEXT");
+db.exec(`
+CREATE TABLE IF NOT EXISTS board_items (
+  board TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  number INTEGER NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  status TEXT,
+  moves INTEGER NOT NULL DEFAULT 0,
+  entries TEXT NOT NULL DEFAULT '{}',
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (board, item_id)
+);
+CREATE TABLE IF NOT EXISTS board_handoffs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  board TEXT NOT NULL,
+  item_id TEXT NOT NULL,
+  task_id INTEGER,
+  agent TEXT NOT NULL,
+  from_column TEXT NOT NULL,
+  to_column TEXT NOT NULL,
+  note TEXT NOT NULL,
+  ts TEXT NOT NULL
+);
+`);
 
 export function now(): string {
   return new Date().toISOString();
@@ -162,6 +192,9 @@ function toTask(row: Row): Task {
     attempts: Number(row.attempts ?? 0),
     startSha: (row.start_sha as string | null) ?? null,
     live: Boolean(row.live),
+    board: (row.board as string | null) ?? null,
+    boardColumn: (row.board_column as string | null) ?? null,
+    boardItemId: (row.board_item_id as string | null) ?? null,
   };
 }
 
@@ -179,14 +212,17 @@ export interface NewTask {
   requestText: string;
   requestUrl: string;
   retryOf?: number | null;
+  board?: string | null;
+  boardColumn?: string | null;
+  boardItemId?: string | null;
 }
 
 export function createTask(input: NewTask): Task {
   const result = db
     .prepare(
       `INSERT INTO tasks (agent, installation_id, owner, repo, thread_kind, thread_number, thread_title, thread_url,
-         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?)`,
+         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
     )
     .run(
       input.agent,
@@ -203,6 +239,9 @@ export function createTask(input: NewTask): Task {
       input.requestUrl,
       now(),
       input.retryOf ?? null,
+      input.board ?? null,
+      input.boardColumn ?? null,
+      input.boardItemId ?? null,
     );
   return getTask(Number(result.lastInsertRowid))!;
 }
@@ -236,6 +275,9 @@ const TASK_COLUMNS: Record<string, string> = {
   attempts: "attempts",
   startSha: "start_sha",
   live: "live",
+  board: "board",
+  boardColumn: "board_column",
+  boardItemId: "board_item_id",
 };
 
 export function updateTask(id: number, patch: Partial<Task>): Task {
@@ -497,4 +539,101 @@ export function getSession(id: string): { login: string } | null {
 
 export function deleteSession(id: string): void {
   db.prepare("DELETE FROM sessions WHERE id = ?").run(id);
+}
+
+// ---------- boards ----------
+
+export interface BoardItemRow {
+  board: string;
+  itemId: string;
+  owner: string;
+  repo: string;
+  kind: ThreadKind;
+  number: number;
+  title: string;
+  status: string | null;
+  moves: number;
+  entries: Record<string, number>;
+  updatedAt: string;
+}
+
+function toBoardItem(row: Row): BoardItemRow {
+  return {
+    board: String(row.board),
+    itemId: String(row.item_id),
+    owner: String(row.owner),
+    repo: String(row.repo),
+    kind: String(row.kind) as ThreadKind,
+    number: Number(row.number),
+    title: String(row.title),
+    status: (row.status as string | null) ?? null,
+    moves: Number(row.moves),
+    entries: json(row.entries, {}),
+    updatedAt: String(row.updated_at),
+  };
+}
+
+export function getBoardItem(board: string, itemId: string): BoardItemRow | null {
+  const row = db.prepare("SELECT * FROM board_items WHERE board = ? AND item_id = ?").get(board, itemId) as Row | undefined;
+  return row ? toBoardItem(row) : null;
+}
+
+export function listBoardItems(board: string): BoardItemRow[] {
+  return (db.prepare("SELECT * FROM board_items WHERE board = ? ORDER BY updated_at DESC").all(board) as Row[]).map(toBoardItem);
+}
+
+export function saveBoardItem(item: Omit<BoardItemRow, "updatedAt">): void {
+  db.prepare(
+    `INSERT INTO board_items (board, item_id, owner, repo, kind, number, title, status, moves, entries, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(board, item_id) DO UPDATE SET owner = excluded.owner, repo = excluded.repo, kind = excluded.kind,
+       number = excluded.number, title = excluded.title, status = excluded.status, moves = excluded.moves,
+       entries = excluded.entries, updated_at = excluded.updated_at`,
+  ).run(item.board, item.itemId, item.owner, item.repo, item.kind, item.number, item.title, item.status, item.moves, JSON.stringify(item.entries), now());
+}
+
+export interface Handoff {
+  id: number;
+  taskId: number | null;
+  agent: string;
+  fromColumn: string;
+  toColumn: string;
+  note: string;
+  ts: string;
+}
+
+export function addHandoff(board: string, itemId: string, handoff: Omit<Handoff, "id" | "ts">): void {
+  db.prepare("INSERT INTO board_handoffs (board, item_id, task_id, agent, from_column, to_column, note, ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(
+    board,
+    itemId,
+    handoff.taskId,
+    handoff.agent,
+    handoff.fromColumn,
+    handoff.toColumn,
+    handoff.note.slice(0, 8000),
+    now(),
+  );
+}
+
+export function listHandoffs(board: string, itemId: string): Handoff[] {
+  const rows = db.prepare("SELECT * FROM board_handoffs WHERE board = ? AND item_id = ? ORDER BY id").all(board, itemId) as Row[];
+  return rows.map((row) => ({
+    id: Number(row.id),
+    taskId: row.task_id === null ? null : Number(row.task_id),
+    agent: String(row.agent),
+    fromColumn: String(row.from_column),
+    toColumn: String(row.to_column),
+    note: String(row.note),
+    ts: String(row.ts),
+  }));
+}
+
+/** Money spent by agents on one board card. */
+export function boardItemCost(board: string, itemId: string): number {
+  const row = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM tasks WHERE board = ? AND board_item_id = ?").get(board, itemId) as Row;
+  return Number(row.total);
+}
+
+export function activeBoardTasks(board: string, itemId: string): Task[] {
+  return (db.prepare("SELECT * FROM tasks WHERE board = ? AND board_item_id = ? AND status IN ('queued', 'running') ORDER BY id").all(board, itemId) as Row[]).map(toTask);
 }

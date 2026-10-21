@@ -31,8 +31,15 @@ export interface Role {
   file: string;
 }
 
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+export const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+
 export interface GithubPermissions {
   comment: boolean;
+  /** update_issue: edit the issue's title, body and labels. */
+  updateIssue: boolean;
+  /** submit_review: approve, comment on or request changes to the PR. */
+  review: boolean;
   push: boolean;
   pullRequest: boolean;
   clone: boolean;
@@ -46,6 +53,7 @@ export interface Profile {
   handle: string;
   description: string;
   model: string | null;
+  effort: Effort | null;
   /** The role prompt: the body of agent.md, added to Claude Code's system prompt. */
   prompt: string;
   /** Built-in Claude Code tools to offer; null means all of them. */

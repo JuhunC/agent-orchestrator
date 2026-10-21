@@ -22,6 +22,9 @@
   --cancelled: #646c79;
   --cancelled-bg: #eef0f3;
   --log-bg: #0f1218;
+  --queued-border: rgba(161, 92, 7, 0.3);
+  --accent-border: rgba(79, 70, 229, 0.25);
+  --failed-border: rgba(180, 35, 35, 0.3);
   --log-text: #d7dce5;
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.06);
   --radius: 10px;
@@ -54,6 +57,9 @@
     --cancelled: #a2a9b6;
     --cancelled-bg: #222731;
     --log-bg: #0a0c10;
+    --queued-border: rgba(242, 179, 76, 0.3);
+    --accent-border: rgba(140, 134, 255, 0.25);
+    --failed-border: rgba(255, 138, 138, 0.3);
     --shadow: none;
     color-scheme: dark;
   }
@@ -115,6 +121,7 @@ h3 {
 }
 
 .sidebar {
+  position: -webkit-sticky;
   position: sticky;
   top: 0;
   height: 100vh;
@@ -457,9 +464,13 @@ textarea.mono {
   font-family: var(--mono);
   font-size: 12.5px;
 }
+/* Separate rules: an unknown selector (old browsers lack :focus-visible) drops its whole rule. */
 input:focus,
 select:focus,
-textarea:focus,
+textarea:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 button:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -516,7 +527,10 @@ button:focus-visible {
 }
 .switch span {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: var(--border-strong);
   border-radius: 999px;
   transition: background 0.15s;
@@ -650,16 +664,16 @@ button:focus-visible {
   border-radius: var(--radius);
   background: var(--queued-bg);
   color: var(--text);
-  border: 1px solid color-mix(in srgb, var(--queued) 30%, transparent);
+  border: 1px solid var(--queued-border);
   margin-bottom: 16px;
 }
 .banner.info {
   background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 25%, transparent);
+  border-color: var(--accent-border);
 }
 .banner.error {
   background: var(--failed-bg);
-  border-color: color-mix(in srgb, var(--failed) 30%, transparent);
+  border-color: var(--failed-border);
 }
 
 /* ---------- agent cards ---------- */
@@ -875,7 +889,10 @@ blockquote {
 
 .backdrop {
   position: fixed;
-  inset: 0;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
   background: rgba(10, 12, 16, 0.45);
   display: grid;
   place-items: center;
@@ -892,6 +909,7 @@ blockquote {
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
 }
 .dialog .panel-head {
+  position: -webkit-sticky;
   position: sticky;
   top: 0;
   background: var(--panel);
@@ -933,4 +951,27 @@ blockquote {
   content: "";
   flex: 1;
   border-top: 1px solid var(--border);
+}
+
+/* Browsers without flexbox `gap` (Safari < 14.1, Chrome < 84): space items with margins instead.
+   main.tsx adds .no-flex-gap to <html> when needed. */
+.no-flex-gap .row > * + *,
+.no-flex-gap .filters > * + *,
+.no-flex-gap .page-head > * + *,
+.no-flex-gap .panel-head > * + *,
+.no-flex-gap .dialog-foot > * + *,
+.no-flex-gap .check > * + * {
+  margin-left: 8px;
+}
+.no-flex-gap .stack > * + *,
+.no-flex-gap .nav > * + *,
+.no-flex-gap .field > * + *,
+.no-flex-gap .steps > * + * {
+  margin-top: 8px;
+}
+@media (max-width: 860px) {
+  .no-flex-gap .nav > * + * {
+    margin-top: 0;
+    margin-left: 4px;
+  }
 }

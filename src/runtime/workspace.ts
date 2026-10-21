@@ -65,7 +65,8 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
     }
   } else {
     baseBranch = thread.defaultBranch;
-    branch = `agent/${profile.name}/${thread.kind}-${thread.number}`;
+    // Board stages share one branch per issue, so the tester checks out the developer's work.
+    branch = task.board ? `ao/${thread.kind}-${thread.number}` : `agent/${profile.name}/${thread.kind}-${thread.number}`;
     startPoint = (await refExists(dir, `refs/remotes/origin/${branch}`)) ? `origin/${branch}` : `origin/${baseBranch}`;
   }
   if (branch === thread.defaultBranch) canPush = false;

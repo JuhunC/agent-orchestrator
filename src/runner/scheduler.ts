@@ -113,15 +113,16 @@ class Scheduler {
     bus.publish({ type: "task", task: updated });
   }
 
-  cancel(taskId: number): boolean {
+  /** Stops a task. `reason` is shown on GitHub; without one it was cancelled from the admin UI. */
+  cancel(taskId: number, reason?: string): boolean {
     const running = this.running.get(taskId);
     if (running) {
-      running.controller.abort();
+      running.controller.abort(reason ?? "admin");
       return true;
     }
     const task = getTask(taskId);
     if (task?.status === "queued") {
-      this.finishWithoutRunning(task, "cancelled", "Cancelled from the admin UI before it started");
+      this.finishWithoutRunning(task, "cancelled", reason ?? "Cancelled from the admin UI before it started");
       return true;
     }
     return false;

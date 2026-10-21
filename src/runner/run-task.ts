@@ -1,12 +1,14 @@
-import { buildFollowUpPrompt, buildPrompt } from "../agents/prompt.ts";
+import { buildFollowUpPrompt, buildPrompt, type BoardStage } from "../agents/prompt.ts";
+import { moveCard } from "../boards/engine.ts";
+import { allowedMoves, getBoard } from "../boards/loader.ts";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { addEvent, lastSessionId, threadHistory, updateTask } from "../db.ts";
+import { addEvent, addHandoff, getBoardItem, lastSessionId, listHandoffs, threadHistory, updateTask } from "../db.ts";
 import { installationClient, type GitHubClient } from "../github/app.ts";
 import { editComment, fetchThread, postComment, type ThreadContext } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
-import { commitAndPush, openOrUpdatePullRequest, type ToolContext } from "../runtime/github-tools.ts";
+import { commitAndPush, openOrUpdatePullRequest, type BoardContext, type ToolContext } from "../runtime/github-tools.ts";
 import { sessions } from "../runtime/manager.ts";
 import { agentEnv, taskEnv } from "../runtime/options.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
@@ -46,6 +48,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
 
   let gh: GitHubClient | null = null;
   let thread: ThreadContext | null = null;
+  let boardContext: BoardContext | null = null;
   const target = () => ({ owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber, threadNodeId: thread?.nodeId });
   const throttle = new ProgressThrottle(async () => {
     if (!gh || !profile || !task.progressCommentId) return;
@@ -69,7 +72,14 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
   try {
     if (!profile) throw new Error(`Agent "${task.agent}" no longer exists`);
     if (profile.errors.length) throw new Error(`The ${profile.name} profile has errors: ${profile.errors.join("; ")}`);
-    emit(task.id, "status", `Started ${profile.name}`);
+    if (task.board) {
+      const board = getBoard(task.board);
+      const column = board && task.boardColumn ? board.columns[task.boardColumn] : undefined;
+      if (!board || !column || !task.boardItemId) throw new Error(`The ${task.board} board no longer has a "${task.boardColumn}" column`);
+      if (board.errors.length) throw new Error(`The ${board.name} board has errors: ${board.errors.join("; ")}`);
+      boardContext = { board, column: column.name, itemId: task.boardItemId, pendingMove: null };
+    }
+    emit(task.id, "status", `Started ${profile.name}${boardContext ? ` (${boardContext.board.name}: ${boardContext.column})` : ""}`);
     gh = await installationClient(task.installationId);
     thread = await fetchThread(gh, task.owner, task.repo, task.threadKind, task.threadNumber);
     task = patch(task.id, { threadTitle: thread.title, threadUrl: thread.url });
@@ -83,6 +93,12 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
     throttle.start();
 
+    const column = boardContext ? boardContext.board.columns[boardContext.column]! : null;
+    if (boardContext && column?.onStart && getBoardItem(boardContext.board.name, boardContext.itemId)?.status === column.name) {
+      await moveCard(boardContext.board, boardContext.itemId, column.onStart, { agentMove: false, trigger: false, excludeTaskId: task.id });
+      onEvent("system", `Moved the card to ${column.onStart}`);
+    }
+
     emit(task.id, "status", "Preparing workspace");
     const workspace = await prepareWorkspace(task, profile, thread);
     task = patch(task.id, { branch: workspace.branch, baseBranch: workspace.baseBranch, startSha: workspace.startSha });
@@ -90,12 +106,23 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
 
     const history = threadHistory(ref, profile.name, task.id);
     if (history.length) onEvent("system", `Loaded ${history.length} earlier run${history.length === 1 ? "" : "s"} as context`);
+    const stage: BoardStage | null =
+      boardContext && column
+        ? {
+            board: boardContext.board.name,
+            column: column.name,
+            role: column.role,
+            moves: allowedMoves(boardContext.board, column.name),
+            needsHuman: boardContext.board.needsHuman,
+            handoffs: listHandoffs(boardContext.board.name, boardContext.itemId),
+          }
+        : null;
     const prompts = {
-      full: buildPrompt({ agent: profile, task, thread, history, workspace }),
-      followUp: buildFollowUpPrompt({ task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0 }),
+      full: buildPrompt({ agent: profile, task, thread, history, workspace, board: stage }),
+      followUp: buildFollowUpPrompt({ task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0, board: stage }),
     };
 
-    const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0 };
+    const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0, board: boardContext };
     state.phase = "working";
     throttle.markDirty();
     const outcome = await sessions.run({
@@ -107,6 +134,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       resumeSessionId: lastSessionId(ref, profile.name),
       prompts,
       context,
+      model: column?.model ?? null,
+      effort: column?.effort ?? null,
       onEvent,
       signal,
       timeoutMs: (profile.timeoutMinutes ?? config.defaultTimeoutMinutes) * 60_000,
@@ -122,7 +151,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
 
     if (outcome.cancelled) {
       if (signal.reason === "shutdown") await finish("failed", outcome.result, "The orchestrator stopped while this was running. Mention the agent again to retry.");
-      else await finish("cancelled", outcome.result, "Cancelled from the admin UI.");
+      else await finish("cancelled", outcome.result, typeof signal.reason === "string" && signal.reason !== "admin" ? signal.reason : "Cancelled from the admin UI.");
       return;
     }
     if (outcome.limit) {
@@ -158,7 +187,22 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       details = `<details><summary>Changed files (${files.length})</summary>\n\n${list}${files.length > 30 ? "\n- …" : ""}\n</details>`;
     }
     task = patch(task.id, { commits });
+    const move = boardContext?.pendingMove;
+    if (boardContext && move) {
+      details = [`**Moved the card to ${move.to}.** Handoff:\n\n${move.note.split("\n").map((line) => `> ${line}`).join("\n")}`, details].filter(Boolean).join("\n\n");
+    } else if (boardContext) {
+      details = [`The card stays in **${boardContext.column}** (the agent didn't move it).`, details].filter(Boolean).join("\n\n");
+    }
     await finish("succeeded", outcome.result, "", details, commits);
+    if (boardContext && move) {
+      // After the reply is posted: hand the card to the next column (and its agent).
+      addHandoff(boardContext.board.name, boardContext.itemId, { taskId: task.id, agent: profile.name, fromColumn: boardContext.column, toColumn: move.to, note: move.note });
+      const landed = await moveCard(boardContext.board, boardContext.itemId, move.to, { agentMove: true, excludeTaskId: task.id }).catch((error) => {
+        log.warn("Could not move the card", { task: task.id, error: errorMessage(error) });
+        return null;
+      });
+      if (landed) emit(task.id, "system", `Moved the card to ${landed}`);
+    }
   } catch (error) {
     const message = errorMessage(error);
     log.error("Task failed", { task: task.id, error: message });

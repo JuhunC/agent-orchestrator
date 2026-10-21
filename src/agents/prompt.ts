@@ -74,6 +74,33 @@ const REPLY_INSTRUCTIONS =
  * The prompt for an agent session that already knows this thread (a live session, or one resumed
  * with --resume): only what's new since its last run, to save tokens.
  */
+/** The board stage a task belongs to, for its prompt. */
+export interface BoardStage {
+  board: string;
+  column: string;
+  role: string;
+  moves: string[];
+  needsHuman: string | null;
+  handoffs: { agent: string; fromColumn: string; toColumn: string; note: string; ts: string }[];
+}
+
+function boardSection(stage: BoardStage): string {
+  const notes = stage.handoffs.map((handoff) => `**${handoff.agent}** (${handoff.fromColumn} → ${handoff.toColumn}, ${handoff.ts.slice(0, 16).replace("T", " ")}):\n${quote(clip(handoff.note, 3000))}`);
+  return [
+    `## Your stage on the ${stage.board} board: "${stage.column}"`,
+    "This issue is a card on a GitHub Project board. Each column has an agent with its own job; yours is below.",
+    "",
+    stage.role.trim() || "_(no role text)_",
+    "",
+    `When your part is done, call the github tool move_to_column with one of: ${stage.moves.map((move) => `"${move}"`).join(", ")}, and a handoff note for whoever works the card next.`,
+    stage.needsHuman ? `If you're blocked or unsure, move it to "${stage.needsHuman}" and explain why.` : "",
+    "If you don't move the card, it stays in this column. Never merge pull requests.",
+    ...(notes.length ? ["", "### Handoff notes from earlier stages (oldest first)", notes.join("\n\n")] : []),
+  ]
+    .filter((line, index, all) => line !== "" || all[index - 1] !== "")
+    .join("\n");
+}
+
 export function buildFollowUpPrompt(input: {
   task: Task;
   thread: ThreadContext;
@@ -82,6 +109,7 @@ export function buildFollowUpPrompt(input: {
   since: string | null;
   /** The previous attempt stopped at a usage limit. */
   interrupted: boolean;
+  board?: BoardStage | null;
 }): string {
   const { task, thread, workspace, since, interrupted } = input;
   const kind = KIND_LABEL[thread.kind];
@@ -106,6 +134,7 @@ export function buildFollowUpPrompt(input: {
     "",
     "## Working copy",
     `${workspaceSection(repo, thread, workspace)}\nThe branch has been refreshed from GitHub, so it includes anything pushed since your last run.`,
+    ...(input.board ? ["", boardSection(input.board)] : []),
     "",
     "## How to reply",
     REPLY_INSTRUCTIONS,
@@ -120,6 +149,7 @@ export function buildPrompt(input: {
   thread: ThreadContext;
   history: Task[];
   workspace: WorkspaceInfo;
+  board?: BoardStage | null;
 }): string {
   const { agent, task, thread, history, workspace } = input;
   const kind = KIND_LABEL[thread.kind];
@@ -157,6 +187,7 @@ export function buildPrompt(input: {
   const historyText = historySection(history);
   if (historyText) sections.push("", historyText);
   sections.push(
+    ...(input.board ? ["", boardSection(input.board)] : []),
     "",
     "## How to reply",
     REPLY_INSTRUCTIONS,

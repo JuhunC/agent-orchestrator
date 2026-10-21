@@ -22,7 +22,7 @@ function AgentCard({ agent, running, onRun, onToggle }: { agent: Agent; running:
       </div>
       <div className="row">{state}</div>
       <div className="cmd" title={agent.description}>
-        {[agent.model ?? "default model", `${agent.skills.length + agent.ownSkills.length} skills`, `${agent.mcp.length + agent.ownMcp.length + 1} MCP`, agent.live ? "live" : null]
+        {[agent.model ?? "default model", agent.effort ? `effort ${agent.effort}` : null, `${agent.skills.length + agent.ownSkills.length} skills`, `${agent.mcp.length + agent.ownMcp.length + 1} MCP`, agent.live ? "live" : null]
           .filter(Boolean)
           .join(" · ")}
       </div>

@@ -28,6 +28,9 @@ const GITHUB_TOOL_LABELS: Record<string, string> = {
   open_pull_request: "Opening a pull request",
   get_ci_status: "Checking CI",
   clone_repository: "Cloning a repository",
+  move_to_column: "Moving the card",
+  update_issue: "Updating the issue",
+  submit_review: "Reviewing the pull request",
 };
 
 /** A one-line, human description of a Claude Code tool call, for progress comments and the UI. */

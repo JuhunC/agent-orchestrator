@@ -3,6 +3,7 @@ import { api, connectStream, disconnectStream, onUnauthorized, useApi, useStream
 import { AgentDetail } from "./pages/AgentDetail.tsx";
 import { Agents } from "./pages/Agents.tsx";
 import { Library } from "./pages/Library.tsx";
+import { BoardDetail, Boards } from "./pages/Boards.tsx";
 import { Dashboard } from "./pages/Dashboard.tsx";
 import { Deliveries } from "./pages/Deliveries.tsx";
 import { History, ThreadDetail } from "./pages/History.tsx";
@@ -44,6 +45,12 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
   } else if (section === "agents") {
     title = "Agents";
     page = <Agents />;
+  } else if (section === "boards" && rest[0]) {
+    title = "Board";
+    page = <BoardDetail key={rest[0]} name={rest[0]} />;
+  } else if (section === "boards") {
+    title = "Boards";
+    page = <Boards />;
   } else if (section === "library") {
     title = "Library";
     page = <Library />;
@@ -66,6 +73,7 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
     { path: "/tasks", key: "tasks", label: "Tasks", count: overview?.queued.length || null },
     { path: "/agents", key: "agents", label: "Agents", count: null },
     { path: "/library", key: "library", label: "Library", count: null },
+    { path: "/boards", key: "boards", label: "Boards", count: null },
     { path: "/history", key: "history", label: "History", count: null },
     { path: "/deliveries", key: "deliveries", label: "Webhooks", count: null },
     { path: "/settings", key: "settings", label: "Settings", count: null },

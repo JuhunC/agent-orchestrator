@@ -78,6 +78,11 @@ export function ThreadCell({ task, linkTask = true }: { task: Task; linkTask?: b
       <div className="title ellipsis">{task.threadTitle || <span className="meta">(title loads when the task starts)</span>}</div>
       <div className="meta">
         <span className="badge">{KIND_LABEL[task.threadKind]}</span>{" "}
+        {task.boardColumn && (
+          <>
+            <span className="badge accent">{task.boardColumn}</span>{" "}
+          </>
+        )}
         {linkTask ? (
           <a href={href(`/tasks/${task.id}`)} onClick={(event) => event.stopPropagation()}>
             {label}

@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
+import { parse, parseDocument } from "yaml";
 import { loadProfiles, parseFrontmatter } from "./loader.ts";
+import { EFFORTS } from "./types.ts";
 import { normaliseMcpServers } from "./mcp.ts";
 
 /** Files the admin UI may edit, relative to PROFILES_DIR. */
@@ -12,6 +14,7 @@ const EDITABLE = [
   /^agents\/[a-z\d][a-z\d_-]*\/mcp\.json$/i,
   /^agents\/[a-z\d][a-z\d_-]*\/skills\/[a-z\d][a-z\d_-]*\/[\w.-]+(\/[\w.-]+)*$/i,
   /^library\/mcp\.json$/,
+  /^boards\/[a-z\d][a-z\d_-]*\.ya?ml$/i,
   /^library\/roles\/[a-z\d][a-z\d_-]*\.md$/i,
   /^library\/skills\/[a-z\d][a-z\d_-]*\/[\w.-]+(\/[\w.-]+)*$/i,
 ];
@@ -30,6 +33,12 @@ function safePath(path: string): { absolute: string; relative: string } {
 
 /** Checks a file's content before it's saved, so a typo can't break an agent. */
 function validate(rel: string, content: string): void {
+  if (/^boards\/.+\.ya?ml$/.test(rel)) {
+    const data = parse(content) as Record<string, unknown> | null;
+    if (!data || typeof data !== "object" || !/^[\w.-]+\/\d+$/.test(String(data.project ?? ""))) throw new ProfileFileError('A board needs "project: owner/number"');
+    if (!data.columns || typeof data.columns !== "object") throw new ProfileFileError('A board needs a "columns" map');
+    return;
+  }
   if (rel.endsWith(".json")) {
     normaliseMcpServers(content, rel);
     return;
@@ -117,4 +126,26 @@ export function createAgent(name: string, handle: string, author: string): void 
   if (existsSync(join(config.profilesDir, "agents", name))) throw new ProfileFileError(`An agent called ${name} already exists`);
   if (loadProfiles().agents.some((agent) => agent.handle.toLowerCase() === handle.toLowerCase())) throw new ProfileFileError(`@${handle} is already used`);
   writeProfileFile(`agents/${name}/agent.md`, AGENT_TEMPLATE(name, handle.replace(/^@/, "")), author);
+}
+
+/**
+ * Sets frontmatter fields of a profile file (agent.md) from the admin UI, keeping the rest of
+ * the file, comments included. `null` removes a field.
+ */
+export function setFrontmatterFields(path: string, fields: Record<string, string | number | null>, author: string): void {
+  const text = readProfileFile(path);
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  const doc = parseDocument(match ? match[1]! : "");
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === null || value === "") doc.delete(key);
+    else doc.set(key, value);
+  }
+  const front = doc.toString().trimEnd();
+  writeProfileFile(path, `---\n${front}\n---\n${match ? match[2]! : text}`, author);
+}
+
+export function setAgentModel(name: string, model: string | null, effort: string | null, author: string): void {
+  if (effort && !EFFORTS.includes(effort as never)) throw new ProfileFileError(`effort must be one of ${EFFORTS.join(", ")}`);
+  if (model && !/^[\w.:/@[\]-]{1,120}$/.test(model)) throw new ProfileFileError("That doesn't look like a model name");
+  setFrontmatterFields(`agents/${name}/agent.md`, { model, effort }, author);
 }

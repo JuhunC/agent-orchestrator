@@ -1,6 +1,6 @@
 export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
-export type TriggerKind = "mention" | "assignment" | "manual" | "retry";
+export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board";
 export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error";
 
 
@@ -43,6 +43,10 @@ export interface Task {
   /** Commit the first attempt started from, so retries count earlier commits. */
   startSha: string | null;
   live: boolean;
+  /** Set for tasks started by a project board: which board, column and card. */
+  board: string | null;
+  boardColumn: string | null;
+  boardItemId: string | null;
 }
 
 export interface TaskEvent {

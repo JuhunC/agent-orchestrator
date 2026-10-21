@@ -10,7 +10,17 @@ import type { Profile } from "../profiles/types.ts";
 import { git, GitError } from "../runner/git.ts";
 import { mention } from "../runner/progress.ts";
 import type { EventKind, Task } from "../types.ts";
+import { allowedMoves, canMove, type Board } from "../boards/loader.ts";
 import { excludeFromGit, type Workspace } from "./workspace.ts";
+
+/** Set when the task came from a project board column. */
+export interface BoardContext {
+  board: Board;
+  column: string;
+  itemId: string;
+  /** Where the agent asked to move the card; done when the task finishes successfully. */
+  pendingMove: { to: string; note: string } | null;
+}
 
 /** What the GitHub tools act on. Live sessions swap it for each task. */
 export interface ToolContext {
@@ -24,6 +34,7 @@ export interface ToolContext {
   onPullRequest: (pr: { number: number; url: string }) => void;
   comments: number;
   pushes: number;
+  board: BoardContext | null;
 }
 
 const MAX_COMMENTS_PER_TASK = 10;
@@ -170,6 +181,83 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             const pr = await openOrUpdatePullRequest(ctx, args.title, args.body, args.draft);
             ctx.onEvent("tool", `${pr.created ? "Opened" : "Updated"} pull request #${pr.number}`);
             return ok(`${pr.created ? "Opened" : "Updated"} pull request #${pr.number}: ${pr.url}`);
+          })(),
+      ),
+    );
+  }
+
+  tools.push(
+    tool(
+      "move_to_column",
+      "Move this card on the project board when your part is done (board tasks only). The move happens after you finish, and the next column's agent receives your handoff note.",
+      {
+        column: z.string().min(1).describe("Target column, from the allowed list in your instructions"),
+        handoff: z.string().min(1).describe("Note for whoever works the card next: what you did, what's left, what to check"),
+      },
+      (args) =>
+        withContext(async (ctx) => {
+          if (!ctx.board) return fail("This task isn't from a project board, so there's no card to move.");
+          const { board, column } = ctx.board;
+          const target = Object.keys(board.columns).find((name) => name.toLowerCase() === args.column.toLowerCase()) ?? (board.needsHuman?.toLowerCase() === args.column.toLowerCase() ? board.needsHuman : null);
+          if (!target || !canMove(board, column, target)) return fail(`You can't move the card from "${column}" to "${args.column}". Allowed: ${allowedMoves(board, column).join(", ")}.`);
+          ctx.board.pendingMove = { to: target, note: args.handoff };
+          ctx.onEvent("tool", `Will move the card to ${target}`);
+          return ok(`The card will move to "${target}" when you finish. Wrap up now.`);
+        })(),
+    ),
+  );
+
+  if (profile.github.updateIssue) {
+    tools.push(
+      tool(
+        "update_issue",
+        "Edit the current issue: its title, its description (e.g. to add acceptance criteria), or labels.",
+        {
+          title: z.string().optional(),
+          body: z.string().optional().describe("The full new description (replaces the old one)"),
+          add_labels: z.array(z.string()).optional(),
+          remove_labels: z.array(z.string()).optional(),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo, threadNumber, threadKind } = ctx.task;
+            if (threadKind === "discussion") return fail("Discussions can't be edited with this tool.");
+            if (args.title || args.body !== undefined) {
+              await ctx.gh.rest.issues.update({ owner, repo, issue_number: threadNumber, ...(args.title ? { title: args.title } : {}), ...(args.body !== undefined ? { body: args.body } : {}) });
+            }
+            if (args.add_labels?.length) await ctx.gh.rest.issues.addLabels({ owner, repo, issue_number: threadNumber, labels: args.add_labels });
+            for (const label of args.remove_labels ?? []) await ctx.gh.rest.issues.removeLabel({ owner, repo, issue_number: threadNumber, name: label }).catch(() => undefined);
+            ctx.onEvent("tool", "Updated the issue");
+            return ok("Updated the issue.");
+          })(),
+      ),
+    );
+  }
+
+  if (profile.github.review) {
+    tools.push(
+      tool(
+        "submit_review",
+        "Submit a review on this task's pull request: approve it, request changes, or comment. Reviews never merge.",
+        {
+          event: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]),
+          body: z.string().min(1).describe("Your findings, with file:line references"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo } = ctx.task;
+            const pr = ctx.task.threadKind === "pull" ? { number: ctx.task.threadNumber } : await findOpenPull(ctx.gh, owner, repo, ctx.workspace.branch);
+            if (!pr) return fail("There's no open pull request for this task's branch yet.");
+            try {
+              await ctx.gh.rest.pulls.createReview({ owner, repo, pull_number: pr.number, event: args.event, body: args.body });
+            } catch (error) {
+              // GitHub doesn't let an app approve or block a PR it opened itself; leave the verdict as a comment review.
+              if (args.event === "COMMENT" || !/own pull request|Can not (approve|request changes)/i.test(errorMessage(error))) throw error;
+              const verdict = args.event === "APPROVE" ? "Approved" : "Changes requested";
+              await ctx.gh.rest.pulls.createReview({ owner, repo, pull_number: pr.number, event: "COMMENT", body: `**${verdict}.**\n\n${args.body}` });
+            }
+            ctx.onEvent("tool", `Reviewed pull request #${pr.number}: ${args.event.toLowerCase().replace("_", " ")}`);
+            return ok(`Submitted a ${args.event} review on #${pr.number}.`);
           })(),
       ),
     );

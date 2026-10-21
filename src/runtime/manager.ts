@@ -4,7 +4,7 @@ import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
 import { errorMessage, log } from "../log.ts";
-import type { Library, Profile } from "../profiles/types.ts";
+import type { Effort, Library, Profile } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
 import { createGithubServer, type ToolContext } from "./github-tools.ts";
 import { buildOptions, PER_TASK_ENV } from "./options.ts";
@@ -53,6 +53,9 @@ export interface RunTurnOptions {
   /** The full prompt for a fresh session, and the shorter one for a session that already knows the thread. */
   prompts: { full: string; followUp: string };
   context: ToolContext;
+  /** Board column overrides for this turn. */
+  model?: string | null;
+  effort?: Effort | null;
   onEvent: EventSink;
   signal: AbortSignal;
   timeoutMs: number;
@@ -155,7 +158,7 @@ class Sessions {
     const context: Entry["context"] = { current: null };
     const github = createGithubServer(profile, () => context.current);
     const session = new AgentSession(
-      buildOptions({ profile, library, workspace, env, github, resume, stateDir: join(config.dataDir, "sessions", hash(key)) }),
+      buildOptions({ profile, library, workspace, env, github, resume, stateDir: join(config.dataDir, "sessions", hash(key)), model: options.model, effort: options.effort }),
     );
     const entry: Entry = {
       key,
@@ -181,7 +184,14 @@ class Sessions {
     const { task, profile, env, prompts, context, onEvent, signal, timeoutMs } = options;
     const key = sessionKey(task);
     const stableEnv = Object.fromEntries(Object.entries(env).filter(([name]) => !PER_TASK_ENV.has(name)));
-    const configHash = hash({ profile: { ...profile, enabled: undefined, enabledInFile: undefined }, library: options.library, env: stableEnv, cwd: options.workspace.dir });
+    const configHash = hash({
+      profile: { ...profile, enabled: undefined, enabledInFile: undefined },
+      library: options.library,
+      env: stableEnv,
+      cwd: options.workspace.dir,
+      model: options.model ?? null,
+      effort: options.effort ?? null,
+    });
 
     let entry = this.entries.get(key);
     if (entry && (!entry.session.alive || entry.configHash !== configHash)) {

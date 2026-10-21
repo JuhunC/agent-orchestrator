@@ -65,7 +65,8 @@ profiles/
 ---
 handle: aorch-coder            # the GitHub login people mention (pick one nobody owns)
 description: Implements issues end to end
-model: sonnet                  # optional; defaults to ANTHROPIC_MODEL
+model: sonnet                  # optional; defaults to ANTHROPIC_MODEL (also set in the UI)
+effort: high                   # low | medium | high | xhigh | max (also set in the UI)
 skills: [shipping-changes]     # from library/skills
 mcp: [linear]                  # from library/mcp.json
 subagents: [test-writer]       # from library/roles
@@ -76,6 +77,8 @@ github:
   pull_request: true           # open_pull_request
   comment: true                # post_comment
   clone: true                  # clone_repository (read-only extra repos)
+  update_issue: true           # update_issue (title, description, labels)
+  review: true                 # submit_review
   finalize: true               # push and open the PR if the agent forgot
 max_turns: 300
 max_budget_usd: 20
@@ -104,8 +107,34 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 | `open_pull_request` | open or update the PR (`Closes #n` added) |
 | `get_ci_status` | check runs and statuses for the pushed commit |
 | `clone_repository` | read-only clone of another repo into `.deps/` |
+| `update_issue` | edit the issue's title, description and labels |
+| `submit_review` | approve, comment on or request changes to the PR (never merges) |
+| `move_to_column` | board tasks: move the card on, with a handoff note for the next stage |
 
 Agents push only to `agent/<name>/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to the default branch.
+
+## Project boards
+
+Connect a GitHub Project so agents work it like a team: when a card lands in a column, that column's agent picks it up, does its stage, and moves the card on. A board is a file, `profiles/boards/<name>.yaml` (edit it in the admin UI under **Boards**); see [`profiles/boards/product.yaml.example`](profiles/boards/product.yaml.example).
+
+```yaml
+project: your-org/3            # org/project-number
+status_field: Status
+needs_human: Needs human
+limits: { moves_per_issue: 10, entries_per_column: 3, budget_usd_per_issue: 30 }
+columns:
+  Backlog:     { agent: analyst, role: requirements, effort: medium, moves_to: [Ready] }
+  Ready:       { agent: coder, role: implement, on_start: In progress, effort: high, moves_to: [In review] }
+  In progress: { agent: coder, role: address-feedback, moves_to: [In review] }
+  In review:   { agent: tester, role: verify, moves_to: [Done, In progress] }
+  Done: {}
+```
+
+- Each column maps a **harness** (`agent`: a profile with its tools, skills and MCP servers) and a **role** (a `library/roles` name, or inline text). `model` and `effort` override the agent's for that column. `moves_to: any` allows every column.
+- Agents finish with `move_to_column`; the move happens after the agent is done, and its **handoff note** goes to the next stage's agent along with all earlier notes.
+- All stages share one branch and PR per issue (`ao/issue-<n>`), so the tester tests the developer's work. The example tester only reports and sends cards back; agents never merge.
+- **Loop guards**: too many agent moves, too many visits to one column, or too much spend on a card sends it to `needs_human` with a comment. Moving a card away from a column stops the agent working on it.
+- GitHub sends project webhooks only for **organization** projects, and the app needs the organization **Projects** permission (read and write). Boards are also polled every `poll_seconds` in case a webhook is missed. The first poll only records where cards are; it doesn't start agents for cards already on the board.
 
 ## On GitHub
 
@@ -161,5 +190,5 @@ npm test            # unit tests + end-to-end runs of the real Agent SDK against
 npm run typecheck
 npm run build       # admin UI → web/dist
 npm run dev         # server on :3000
-npm run dev:web     # UI with hot reload on :5173
+npm run dev:web     # UI with hot reload on :5173 (the build also emits a polyfilled bundle for older browsers: Chrome 61+, Firefox 60+, Safari 11+, Edge 79+)
 ```
