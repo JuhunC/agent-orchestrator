@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ago, api, duration, useApi, useNow, type Agent, type Task } from "../api.ts";
+import { ago, api, duration, useApi, useNow, type AgentsResponse, type Task } from "../api.ts";
 import { Empty, Panel, StatusPill, ThreadCell, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
@@ -17,7 +17,7 @@ export function Tasks() {
   if (/^[^/\s]+\/[^/\s]+$/.test(repo)) query.set("repo", repo);
   const path = `/api/tasks?${query}`;
   const { data } = useApi<Task[]>(path, (message) => message.type === "task");
-  const agents = useApi<Agent[]>("/api/agents").data ?? [];
+  const agents = useApi<AgentsResponse>("/api/agents").data?.agents ?? [];
   const now = useNow(5000);
 
   const tasks = [...(data ?? []), ...older.filter((task) => !(data ?? []).some((current) => current.id === task.id))];

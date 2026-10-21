@@ -11,6 +11,7 @@ import { Login } from "./pages/Login.tsx";
 import { Settings as SettingsPage } from "./pages/Settings.tsx";
 import { TaskDetail } from "./pages/TaskDetail.tsx";
 import { Tasks } from "./pages/Tasks.tsx";
+import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
 import { href, useRoute } from "./router.ts";
 
 interface Me {
@@ -125,7 +126,7 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
             </>
           )}
         </div>
-        {page}
+        <ErrorBoundary resetKey={route.path}>{page}</ErrorBoundary>
       </main>
     </div>
   );
