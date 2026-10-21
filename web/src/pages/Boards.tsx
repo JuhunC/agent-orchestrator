@@ -98,7 +98,7 @@ function BoardSummary({ board }: { board: BoardInfo }) {
         </div>
       </td>
       <td>
-        <Chips items={board.columns.map((column) => `${column.name}${column.agent ? ` → ${column.agent}` : ""}${counts[column.name] ? ` (${counts[column.name]})` : ""}`)} />
+        <Chips items={board.columns.map((column) => `${column.name}${column.agents.length ? ` → ${column.agents.length > 1 ? `${column.agents.length} agents (${column.mode})` : column.agents[0]}` : ""}${counts[column.name] ? ` (${counts[column.name]})` : ""}`)} />
       </td>
     </tr>
   );
@@ -200,7 +200,7 @@ export function BoardDetail({ name }: { name: string }) {
             <thead>
               <tr>
                 <th>Column</th>
-                <th>Agent (harness)</th>
+                <th>Agents (harness)</th>
                 <th>Role</th>
                 <th>Model · effort</th>
                 <th>Moves to</th>
@@ -215,7 +215,31 @@ export function BoardDetail({ name }: { name: string }) {
                       <div className="error-text">not in the project</div>
                     )}
                   </td>
-                  <td>{column.agent ? <a href={href(`/agents/${column.agent}`)}>{column.agent}</a> : <span className="meta">none (people only)</span>}</td>
+                  <td>
+                    {column.agents.length === 0 ? (
+                      <span className="meta">none (people only)</span>
+                    ) : (
+                      <>
+                        {column.agents.length > 1 || column.mode !== "pool" ? <span className="badge accent">{column.mode === "pool" ? "pool" : column.mode === "all" ? "all work it" : "by label"}</span> : null}{" "}
+                        {column.mode === "label" ? (
+                          <div className="meta">
+                            {column.routes.map((route) => `${route.label} → ${route.agents.join(", ")}`).join(" · ")}
+                            {column.routeDefault.length > 0 && ` · otherwise ${column.routeDefault.join(", ")}`}
+                          </div>
+                        ) : (
+                          <div>
+                            {column.agentRefs.map((ref, index) => (
+                              <span key={ref}>
+                                {index > 0 && ", "}
+                                {ref.startsWith("group:") ? <a href={href(`/groups/${ref.slice(6)}`)}>{ref}</a> : <a href={href(`/agents/${ref}`)}>{ref}</a>}
+                              </span>
+                            ))}
+                            {column.agentRefs.some((ref) => ref.startsWith("group:")) && <div className="meta">{column.agents.join(", ")}</div>}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </td>
                   <td>{column.roleName ? <span className="badge accent">{column.roleName}</span> : column.roleText ? <span className="meta">{column.roleText.slice(0, 80)}</span> : "—"}</td>
                   <td className="meta">{[column.model ?? "agent's model", column.effort ?? "agent's effort"].join(" · ")}</td>
                   <td>

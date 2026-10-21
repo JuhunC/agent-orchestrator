@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { config } from "../config.ts";
 import { log } from "../log.ts";
@@ -15,6 +15,7 @@ const EDITABLE = [
   /^agents\/[a-z\d][a-z\d_-]*\/skills\/[a-z\d][a-z\d_-]*\/[\w.-]+(\/[\w.-]+)*$/i,
   /^library\/mcp\.json$/,
   /^boards\/[a-z\d][a-z\d_-]*\.ya?ml$/i,
+  /^groups\/[a-z\d][a-z\d_-]*\.ya?ml$/i,
   /^library\/roles\/[a-z\d][a-z\d_-]*\.md$/i,
   /^library\/skills\/[a-z\d][a-z\d_-]*\/[\w.-]+(\/[\w.-]+)*$/i,
 ];
@@ -33,6 +34,11 @@ function safePath(path: string): { absolute: string; relative: string } {
 
 /** Checks a file's content before it's saved, so a typo can't break an agent. */
 function validate(rel: string, content: string): void {
+  if (/^groups\/.+\.ya?ml$/.test(rel)) {
+    const data = parse(content) as Record<string, unknown> | null;
+    if (!data || typeof data !== "object" || !Array.isArray(data.members)) throw new ProfileFileError('A group needs a "members" list');
+    return;
+  }
   if (/^boards\/.+\.ya?ml$/.test(rel)) {
     const data = parse(content) as Record<string, unknown> | null;
     if (!data || typeof data !== "object" || !/^[\w.-]+\/\d+$/.test(String(data.project ?? ""))) throw new ProfileFileError('A board needs "project: owner/number"');
@@ -148,4 +154,75 @@ export function setAgentModel(name: string, model: string | null, effort: string
   if (effort && !EFFORTS.includes(effort as never)) throw new ProfileFileError(`effort must be one of ${EFFORTS.join(", ")}`);
   if (model && !/^[\w.:/@[\]-]{1,120}$/.test(model)) throw new ProfileFileError("That doesn't look like a model name");
   setFrontmatterFields(`agents/${name}/agent.md`, { model, effort }, author);
+}
+
+const AGENT_NAME = /^[a-z\d][a-z\d_-]{0,39}$/i;
+const LOGIN = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
+
+/** Next free "<base>-<n>" name among existing agents (and handles). */
+function nextFree(base: string, taken: Set<string>): string {
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`.toLowerCase())) return `${base}-${n}`;
+}
+
+/**
+ * Copies an agent (its agent.md, own skills and MCP servers) under new names. With `count`,
+ * makes that many copies named <name>-2, <name>-3, … with matching handles; optionally adds
+ * them to a group.
+ */
+export function duplicateAgent(source: string, options: { name?: string; handle?: string; count?: number; group?: string }, author: string): string[] {
+  const set = loadProfiles();
+  const original = set.agents.find((agent) => agent.name === source);
+  if (!original) throw new ProfileFileError(`No agent called ${source}`);
+  const count = Math.max(1, Math.min(20, Math.floor(options.count ?? 1)));
+  if (count > 1 && (options.name || options.handle)) throw new ProfileFileError("Give either a name and handle for one copy, or a count for several");
+  const names = new Set(set.agents.map((agent) => agent.name.toLowerCase()));
+  const handles = new Set(set.agents.map((agent) => agent.handle.toLowerCase()));
+  const base = source.replace(/-\d+$/, "");
+  const baseHandle = original.handle.replace(/-\d+$/, "");
+  const created: string[] = [];
+  for (let index = 0; index < count; index++) {
+    const name = options.name?.trim() || nextFree(base, names);
+    const handle = (options.handle?.trim().replace(/^@/, "") || nextFree(baseHandle, handles)).slice(0, 39);
+    if (!AGENT_NAME.test(name)) throw new ProfileFileError(`Invalid agent name "${name}"`);
+    if (!LOGIN.test(handle)) throw new ProfileFileError(`Invalid handle "${handle}"`);
+    if (names.has(name.toLowerCase())) throw new ProfileFileError(`An agent called ${name} already exists`);
+    if (handles.has(handle.toLowerCase())) throw new ProfileFileError(`@${handle} is already used`);
+    const target = join(config.profilesDir, "agents", name);
+    cpSync(original.dir, target, { recursive: true });
+    names.add(name.toLowerCase());
+    handles.add(handle.toLowerCase());
+    setFrontmatterFields(`agents/${name}/agent.md`, { handle }, author);
+    created.push(name);
+  }
+  if (options.group) addToGroup(options.group, created, author);
+  return created;
+}
+
+/** Adds agents to a group file, creating the group if needed. */
+export function addToGroup(group: string, agents: string[], author: string): void {
+  if (!AGENT_NAME.test(group)) throw new ProfileFileError(`Invalid group name "${group}"`);
+  const path = `groups/${group}.yaml`;
+  const file = join(config.profilesDir, path);
+  const doc = parseDocument(existsSync(file) ? readFileSync(file, "utf8") : `description: ""\nmembers: []\n`);
+  const members = ((doc.toJS() as { members?: string[] } | null)?.members ?? []).map(String);
+  doc.set("members", [...new Set([...members, ...agents])]);
+  writeProfileFile(path, doc.toString(), author);
+}
+
+/** Applies model, effort or on/off to every member of a group at once. */
+export function applyToGroup(group: string, changes: { model?: string | null; effort?: string | null }, author: string): string[] {
+  const set = loadProfiles();
+  const found = set.groups.find((candidate) => candidate.name === group);
+  if (!found) throw new ProfileFileError(`No group called ${group}`);
+  const members = found.members.filter((member) => set.agents.some((agent) => agent.name === member));
+  for (const member of members) {
+    const fields: Record<string, string | null> = {};
+    if (changes.model !== undefined) fields.model = changes.model || null;
+    if (changes.effort !== undefined) {
+      if (changes.effort && !EFFORTS.includes(changes.effort as never)) throw new ProfileFileError(`effort must be one of ${EFFORTS.join(", ")}`);
+      fields.effort = changes.effort || null;
+    }
+    if (Object.keys(fields).length) setFrontmatterFields(`agents/${member}/agent.md`, fields, author);
+  }
+  return members;
 }

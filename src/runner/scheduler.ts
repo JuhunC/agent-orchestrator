@@ -7,6 +7,7 @@ import { loadProfiles } from "../profiles/loader.ts";
 import { sessions } from "../runtime/manager.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { clearLimit, getLimit } from "./limit-store.ts";
+import { boardTaskSettled } from "../boards/engine.ts";
 import { executeTask, markInterrupted } from "./run-task.ts";
 
 /**
@@ -57,6 +58,12 @@ class Scheduler {
     const profiles = queued.length ? loadProfiles().agents : [];
     const limit = getLimit();
     const busy = new Set([...this.running.values()].map((entry) => entry.workspace));
+    // Agents with `replicas: N` work at most N cards at once.
+    const perAgent = new Map<string, number>();
+    for (const id of this.running.keys()) {
+      const running = getTask(id);
+      if (running) perAgent.set(running.agent, (perAgent.get(running.agent) ?? 0) + 1);
+    }
     for (const task of queued) {
       if (this.running.size >= this.maxConcurrent) break;
       const workspace = workspaceDir(task);
@@ -67,6 +74,7 @@ class Scheduler {
         continue;
       }
       if (!profile.enabled) continue;
+      if (profile.replicas && (perAgent.get(profile.name) ?? 0) >= profile.replicas) continue;
       // Waiting for a usage limit to reset: this task's own, or the model service's.
       const blockedUntil = Math.max(task.retryAt ? Date.parse(task.retryAt) : 0, limit ? Date.parse(limit.until) : 0);
       if (blockedUntil > now) {
@@ -74,6 +82,7 @@ class Scheduler {
         continue;
       }
       busy.add(workspace);
+      perAgent.set(profile.name, (perAgent.get(profile.name) ?? 0) + 1);
       this.launch(task, workspace);
     }
     if (this.wakeTimer) clearTimeout(this.wakeTimer);
@@ -100,6 +109,8 @@ class Scheduler {
     log.info("Starting task", { task: task.id, agent: task.agent, repo: `${task.owner}/${task.repo}`, thread: `${task.threadKind}#${task.threadNumber}` });
     const run = executeTask(task, controller.signal)
       .catch((error) => log.error("Task crashed", { task: task.id, error: errorMessage(error) }))
+      .then(() => boardTaskSettled(task.id))
+      .catch((error) => log.error("Board follow-up failed", { task: task.id, error: errorMessage(error) }))
       .finally(() => {
         this.running.delete(task.id);
         this.draining = this.draining.filter((promise) => promise !== run);
@@ -111,6 +122,7 @@ class Scheduler {
   private finishWithoutRunning(task: Task, status: "cancelled" | "failed", reason: string): void {
     const updated = updateTask(task.id, { status, finishedAt: new Date().toISOString(), error: reason });
     bus.publish({ type: "task", task: updated });
+    void boardTaskSettled(task.id).catch(() => undefined);
   }
 
   /** Stops a task. `reason` is shown on GitHub; without one it was cancelled from the admin UI. */

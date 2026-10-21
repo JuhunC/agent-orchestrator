@@ -2,14 +2,25 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { parse } from "yaml";
 import { config } from "../config.ts";
-import { loadProfiles, parseEffort } from "../profiles/loader.ts";
+import { expandAgents, loadProfiles, parseEffort } from "../profiles/loader.ts";
 import type { Effort, ProfileSet } from "../profiles/types.ts";
 
 /** What happens when a card lands in one column of a project board. */
+export type ColumnMode = "pool" | "all" | "label";
+
 export interface BoardColumn {
   name: string;
-  /** The agent profile that works cards here (its harness: tools, skills, MCP servers). */
+  /** The first agent, for simple single-agent columns. */
   agent: string | null;
+  /** Agents (harnesses: tools, skills, MCP servers) that work cards here, with groups expanded. */
+  agents: string[];
+  /** As written in the file: agent names and `group:<name>` references. */
+  agentRefs: string[];
+  /** pool: one agent per card, least busy first. all: every agent works the card. label: route by issue labels. */
+  mode: ColumnMode;
+  /** For `label` mode: first matching label wins; `default` when none match. */
+  routes: { label: string; agents: string[] }[];
+  routeDefault: string[];
   /** What the agent does in this column: a library role name, or inline text. */
   roleName: string | null;
   role: string;
@@ -55,14 +66,33 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
 
   for (const [columnName, raw] of Object.entries(rawColumns)) {
     const column = raw ?? {};
-    const agent = column.agent ? String(column.agent) : null;
-    if (agent && !profiles.agents.some((profile) => profile.name === agent)) errors.push(`${columnName}: unknown agent "${agent}"`);
+    const agentRefs = column.agents !== undefined ? list(column.agents) : column.agent ? [String(column.agent)] : [];
+    const expanded = expandAgents(profiles, agentRefs);
+    for (const error of expanded.errors) errors.push(`${columnName}: ${error}`);
+    const mode = String(column.mode ?? "pool") as ColumnMode;
+    if (!["pool", "all", "label"].includes(mode)) errors.push(`${columnName}: mode must be pool, all or label`);
+    const routes: { label: string; agents: string[] }[] = [];
+    let routeDefault: string[] = [];
+    for (const [label, target] of Object.entries((column.routes ?? {}) as Record<string, unknown>)) {
+      const resolved = expandAgents(profiles, list(target));
+      for (const error of resolved.errors) errors.push(`${columnName}.routes.${label}: ${error}`);
+      if (label === "default") routeDefault = resolved.agents;
+      else routes.push({ label, agents: resolved.agents });
+    }
+    if (mode === "label" && !routes.length) errors.push(`${columnName}: label mode needs "routes" (label: agent)`);
+    const allAgents = [...new Set([...expanded.agents, ...routes.flatMap((route) => route.agents), ...routeDefault])];
+    const agent = allAgents[0] ?? null;
     const roleValue = column.role ? String(column.role) : null;
     const libraryRole = roleValue ? profiles.library.roles[roleValue] : undefined;
     const movesTo = column.moves_to === "any" ? "any" : list(column.moves_to);
     columns[columnName] = {
       name: columnName,
       agent,
+      agents: mode === "label" ? allAgents : expanded.agents,
+      agentRefs,
+      mode,
+      routes,
+      routeDefault,
       roleName: libraryRole ? libraryRole.name : null,
       role: libraryRole ? libraryRole.prompt : (roleValue ?? ""),
       model: column.model ? String(column.model) : null,

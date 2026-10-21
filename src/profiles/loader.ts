@@ -4,7 +4,7 @@ import { parse } from "yaml";
 import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
 import { normaliseMcpServers } from "./mcp.ts";
-import { EFFORTS, type Effort, type Library, type Profile, type ProfileSet, type Role, type SkillInfo } from "./types.ts";
+import { EFFORTS, type Effort, type Group, type Library, type Profile, type ProfileSet, type Role, type SkillInfo } from "./types.ts";
 
 const HANDLE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 const NAME = /^[a-z\d][a-z\d_-]{0,39}$/i;
@@ -112,10 +112,51 @@ export function parseEffort(value: unknown, errors: string[], field = "effort"):
   return null;
 }
 
-function loadProfile(root: string, name: string, library: Library): Profile {
+function loadGroups(root: string, library: Library): Group[] {
+  const dir = join(root, "groups");
+  if (!existsSync(dir)) return [];
+  const groups: Group[] = [];
+  for (const entry of readdirSync(dir).filter((file) => /\.ya?ml$/.test(file)).sort()) {
+    const name = entry.replace(/\.ya?ml$/, "");
+    const errors: string[] = [];
+    let data: Record<string, any> = {};
+    try {
+      data = (parse(readFileSync(join(dir, entry), "utf8")) ?? {}) as Record<string, any>;
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+    const defaults = (data.defaults ?? {}) as Record<string, unknown>;
+    const group: Group = {
+      name,
+      description: String(data.description ?? ""),
+      members: list(data.members, "members"),
+      defaults: {
+        model: defaults.model ? String(defaults.model) : null,
+        effort: parseEffort(defaults.effort, errors, "defaults.effort"),
+        skills: list(defaults.skills, "defaults.skills"),
+        mcp: list(defaults.mcp, "defaults.mcp"),
+        subagents: list(defaults.subagents, "defaults.subagents"),
+      },
+      errors,
+    };
+    for (const skill of group.defaults.skills) if (!library.skills[skill]) errors.push(`Unknown skill "${skill}"`);
+    for (const server of group.defaults.mcp) if (!library.mcp[server]) errors.push(`Unknown MCP server "${server}"`);
+    for (const role of group.defaults.subagents) if (!library.roles[role]) errors.push(`Unknown subagent "${role}"`);
+    groups.push(group);
+  }
+  return groups;
+}
+
+const union = (...lists: string[][]) => [...new Set(lists.flat())];
+
+function loadProfile(root: string, name: string, library: Library, groups: Group[]): Profile {
   const dir = join(root, "agents", name);
   const errors: string[] = [];
   const { data, body } = parseFrontmatter(readFileSync(join(dir, "agent.md"), "utf8"));
+  // Groups this agent is in: their defaults apply, and the agent's own settings win.
+  const memberOf = groups.filter((group) => group.members.includes(name));
+  const groupModel = memberOf.map((group) => group.defaults.model).find(Boolean) ?? null;
+  const groupEffort = memberOf.map((group) => group.defaults.effort).find(Boolean) ?? null;
 
   if (!NAME.test(name)) errors.push(`Folder name "${name}" may only use letters, digits, - and _`);
   const handle = String(data.handle ?? "").replace(/^@/, "");
@@ -124,9 +165,9 @@ function loadProfile(root: string, name: string, library: Library): Profile {
 
   const tools = (data.tools ?? {}) as { allow?: unknown; deny?: unknown };
   const github = { ...GITHUB_DEFAULTS, ...((data.github ?? {}) as Record<string, unknown>) };
-  const skills = list(data.skills, "skills");
-  const mcp = list(data.mcp, "mcp");
-  const subagents = list(data.subagents, "subagents");
+  const skills = union(...memberOf.map((group) => group.defaults.skills), list(data.skills, "skills"));
+  const mcp = union(...memberOf.map((group) => group.defaults.mcp), list(data.mcp, "mcp"));
+  const subagents = union(...memberOf.map((group) => group.defaults.subagents), list(data.subagents, "subagents"));
   for (const skill of skills) if (!library.skills[skill]) errors.push(`Unknown skill "${skill}" (not in library/skills)`);
   for (const server of mcp) if (!library.mcp[server]) errors.push(`Unknown MCP server "${server}" (not in library/mcp.json)`);
   for (const role of subagents) if (!library.roles[role]) errors.push(`Unknown subagent "${role}" (not in library/roles)`);
@@ -155,8 +196,12 @@ function loadProfile(root: string, name: string, library: Library): Profile {
     name,
     handle,
     description: String(data.description ?? ""),
-    model: data.model ? String(data.model) : null,
-    effort: parseEffort(data.effort, errors),
+    model: data.model ? String(data.model) : groupModel,
+    effort: parseEffort(data.effort, errors) ?? groupEffort,
+    modelFrom: data.model ? "agent" : groupModel ? "group" : null,
+    effortFrom: data.effort ? "agent" : groupEffort ? "group" : null,
+    groups: memberOf.map((group) => group.name),
+    replicas: number("replicas"),
     prompt: body,
     toolsAllow: tools.allow === undefined ? null : list(tools.allow, "tools.allow"),
     toolsDeny: list(tools.deny, "tools.deny"),
@@ -188,12 +233,13 @@ function loadProfile(root: string, name: string, library: Library): Profile {
 
 /** Reads every agent profile and the shared library from PROFILES_DIR. Cheap; called per use. */
 export function loadProfiles(root = config.profilesDir): ProfileSet {
-  const set: ProfileSet = { root, agents: [], library: loadLibrary(root), errors: [] };
+  const library = loadLibrary(root);
+  const set: ProfileSet = { root, agents: [], groups: loadGroups(root, library), library, errors: [] };
   const handles = new Map<string, string>();
   for (const name of dirs(join(root, "agents"))) {
     if (!existsSync(join(root, "agents", name, "agent.md"))) continue;
     try {
-      const profile = loadProfile(root, name, set.library);
+      const profile = loadProfile(root, name, set.library, set.groups);
       const other = handles.get(profile.handle.toLowerCase());
       if (other) profile.errors.push(`Handle @${profile.handle} is also used by ${other}`);
       handles.set(profile.handle.toLowerCase(), name);
@@ -202,7 +248,28 @@ export function loadProfiles(root = config.profilesDir): ProfileSet {
       set.errors.push({ file: `agents/${name}/agent.md`, message: (error as Error).message });
     }
   }
+  for (const group of set.groups) {
+    for (const member of group.members) if (!set.agents.some((agent) => agent.name === member)) group.errors.push(`Unknown member "${member}"`);
+  }
   return set;
+}
+
+/** Agent names for a list of agents and `group:<name>` references. */
+export function expandAgents(set: ProfileSet, refs: string[]): { agents: string[]; errors: string[] } {
+  const agents: string[] = [];
+  const errors: string[] = [];
+  for (const ref of refs) {
+    if (ref.startsWith("group:")) {
+      const group = set.groups.find((candidate) => candidate.name === ref.slice(6));
+      if (!group) errors.push(`unknown group "${ref.slice(6)}"`);
+      else agents.push(...group.members);
+    } else if (set.agents.some((agent) => agent.name === ref)) {
+      agents.push(ref);
+    } else {
+      errors.push(`unknown agent "${ref}"`);
+    }
+  }
+  return { agents: [...new Set(agents)], errors };
 }
 
 export function getProfile(name: string): Profile | null {

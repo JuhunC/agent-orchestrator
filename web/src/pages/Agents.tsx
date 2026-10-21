@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type Agent, type AgentsResponse } from "../api.ts";
+import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
 import { RunAgentDialog } from "../components/RunAgentDialog.tsx";
 import { Dialog, Empty, Panel, Pill, Switch } from "../components/ui.tsx";
 import { href, navigate } from "../router.ts";
@@ -66,6 +67,7 @@ export function Agents() {
   const { data, reload } = useApi<AgentsResponse>("/api/agents", (message) => message.type === "agents" || message.type === "task");
   const [creating, setCreating] = useState(false);
   const [running, setRunning] = useState<string | null>(null);
+  const [duplicating, setDuplicating] = useState<Agent | null>(null);
 
   const toggle = async (agent: Agent, enabled: boolean) => {
     await api.post(`/api/agents/${encodeURIComponent(agent.name)}/enabled`, { enabled });
@@ -80,6 +82,9 @@ export function Agents() {
           to start it.
         </span>
         <span className="spacer" />
+        <a className="button" href={href("/groups")}>
+          Groups
+        </a>
         <a className="button" href={href("/library")}>
           Shared library
         </a>
@@ -108,6 +113,7 @@ export function Agents() {
                 <tr>
                   <th>On</th>
                   <th>Agent</th>
+                  <th>Groups</th>
                   <th>Skills</th>
                   <th>MCP</th>
                   <th>Subagents</th>
@@ -123,13 +129,16 @@ export function Agents() {
                     </td>
                     <td>
                       <div className="title">
-                        {agent.name} {agent.live && <span className="badge accent">live</span>} {agent.errors.length > 0 && <Pill tone="failed">{agent.errors.length} problem{agent.errors.length === 1 ? "" : "s"}</Pill>}
+                        {agent.name} {agent.live && <span className="badge accent">live</span>} {agent.replicas ? <span className="badge">×{agent.replicas}</span> : null} {agent.errors.length > 0 && <Pill tone="failed">{agent.errors.length} problem{agent.errors.length === 1 ? "" : "s"}</Pill>}
                       </div>
                       <div className="meta">
                         @{agent.handle}
                         {agent.model && ` · ${agent.model}`}
                         {agent.description && ` · ${agent.description}`}
                       </div>
+                    </td>
+                    <td>
+                      <Chips items={agent.groups} />
                     </td>
                     <td>
                       <Chips items={[...agent.skills, ...agent.ownSkills.map((skill) => skill.name)]} />
@@ -142,9 +151,14 @@ export function Agents() {
                     </td>
                     <td className="num meta">{agent.stats ? `${agent.stats.succeeded} done · ${agent.stats.failed} failed` : "—"}</td>
                     <td onClick={(event) => event.stopPropagation()}>
-                      <button className="small" disabled={!agent.enabled || agent.errors.length > 0} onClick={() => setRunning(agent.name)}>
-                        Run…
-                      </button>
+                      <div className="row" style={{ flexWrap: "nowrap" }}>
+                        <button className="small" disabled={!agent.enabled || agent.errors.length > 0} onClick={() => setRunning(agent.name)}>
+                          Run…
+                        </button>
+                        <button className="small" onClick={() => setDuplicating(agent)}>
+                          Duplicate
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -155,6 +169,14 @@ export function Agents() {
       </Panel>
       {creating && <NewAgentDialog onClose={() => setCreating(false)} />}
       {running && data && <RunAgentDialog agents={data.agents} initialAgent={running} onClose={() => setRunning(null)} />}
+      {duplicating && data && (
+        <DuplicateDialog
+          agent={duplicating}
+          groups={data.groups}
+          onClose={() => setDuplicating(null)}
+          onDone={(created) => (created.length === 1 ? navigate(`/agents/${created[0]}`) : void reload())}
+        />
+      )}
     </div>
   );
 }

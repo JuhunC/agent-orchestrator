@@ -84,6 +84,7 @@ max_turns: 300
 max_budget_usd: 20
 timeout_minutes: 90
 live: true                     # keep the session open between tasks on a thread
+replicas: 3                    # optional: identical copies; works up to 3 cards at once
 env:
   SOME_TOOL_TOKEN: ${SOME_TOOL_TOKEN}
 ---
@@ -94,6 +95,24 @@ You are a careful senior engineer on this repository. …
 - **Skills** are standard `SKILL.md` folders. For each run the agent's skills are packaged as a plugin outside the repo, so they're never committed.
 - **MCP servers** use Claude Code's `.mcp.json` format (`command`/`args`/`env`, or `url`/`headers`). `${NAME}` is filled from the server's environment, so secrets stay out of the files. Add `"alwaysLoad": true` to always show a server's tools instead of behind tool search.
 - **Subagents** (`library/roles/<name>.md`) have a `description` (when to use them), optional `tools`, `model`, `skills` and `mcp`, and their prompt.
+- **Duplicate** an agent from the admin UI: one copy under a new name and handle to customise, or several identical copies (`coder-2`, `coder-3`, … with handles to match), optionally added to a group. For identical workers without separate folders, set `replicas: N`.
+
+### Groups
+
+`profiles/groups/<name>.yaml` (or **Groups** in the admin UI) bundles agents:
+
+```yaml
+description: Developers
+members: [coder, coder-2, coder-3]
+defaults:                      # members inherit these; an agent's own settings win
+  model: sonnet
+  effort: high
+  skills: [shipping-changes]
+  mcp: [linear]
+  subagents: [test-writer]
+```
+
+Use a whole group in a board column (`agents: [group:developers]`), and change every member at once from its page: model, effort, or on/off.
 
 ### GitHub tools
 
@@ -130,7 +149,8 @@ columns:
   Done: {}
 ```
 
-- Each column maps a **harness** (`agent`: a profile with its tools, skills and MCP servers) and a **role** (a `library/roles` name, or inline text). `model` and `effort` override the agent's for that column. `moves_to: any` allows every column.
+- Each column maps a **harness** (`agents`: profiles with their tools, skills and MCP servers, or `group:<name>`) and a **role** (a `library/roles` name, or inline text). `model` and `effort` override the agents' for that column. `moves_to: any` allows every column.
+- With several agents, `mode` decides who gets a card: **pool** (default) gives it to the least busy agent; **all** has every agent work it at once and moves the card when they've all finished (needs-human wins, then sending it back, then the most common choice); **label** routes by the issue's labels (`routes: { frontend: web-dev, default: group:developers }`).
 - Agents finish with `move_to_column`; the move happens after the agent is done, and its **handoff note** goes to the next stage's agent along with all earlier notes.
 - All stages share one branch and PR per issue (`ao/issue-<n>`), so the tester tests the developer's work. The example tester only reports and sends cards back; agents never merge.
 - **Loop guards**: too many agent moves, too many visits to one column, or too much spend on a card sends it to `needs_human` with a comment. Moving a card away from a column stops the agent working on it.

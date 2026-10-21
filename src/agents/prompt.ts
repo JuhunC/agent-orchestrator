@@ -81,6 +81,8 @@ export interface BoardStage {
   role: string;
   moves: string[];
   needsHuman: string | null;
+  /** Other agents working this card in the same column at the same time ("all" columns). */
+  peers?: string[];
   handoffs: { agent: string; fromColumn: string; toColumn: string; note: string; ts: string }[];
 }
 
@@ -94,7 +96,10 @@ function boardSection(stage: BoardStage): string {
     "",
     `When your part is done, call the github tool move_to_column with one of: ${stage.moves.map((move) => `"${move}"`).join(", ")}, and a handoff note for whoever works the card next.`,
     stage.needsHuman ? `If you're blocked or unsure, move it to "${stage.needsHuman}" and explain why.` : "",
-    "If you don't move the card, it stays in this column. Never merge pull requests.",
+    stage.peers?.length
+      ? `Other agents are working this card in this column at the same time: ${stage.peers.join(", ")}. Your move_to_column is a vote: the card moves when all of you finish, and if any of you sends it back, it goes back. Don't push changes another agent might also be making.`
+      : "If you don't move the card, it stays in this column.",
+    "Never merge pull requests.",
     ...(notes.length ? ["", "### Handoff notes from earlier stages (oldest first)", notes.join("\n\n")] : []),
   ]
     .filter((line, index, all) => line !== "" || all[index - 1] !== "")

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, useApi, type AgentsResponse, type ModelInfo } from "../api.ts";
+import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
 import { Empty, Panel, Pill } from "../components/ui.tsx";
@@ -30,6 +31,7 @@ export function AgentDetail({ name }: { name: string }) {
   const { data, reload } = useApi<AgentsResponse>("/api/agents", (message) => message.type === "agents");
   const modelInfo = useApi<ModelInfo>("/api/model").data;
   const [skill, setSkill] = useState<string | null>(null);
+  const [duplicating, setDuplicating] = useState(false);
   const [newSkill, setNewSkill] = useState("");
   if (!data) return <Empty>Loading…</Empty>;
   const agent = data.agents.find((candidate) => candidate.name === name);
@@ -45,6 +47,7 @@ export function AgentDetail({ name }: { name: string }) {
         <h1 className="grow">
           {agent.name} <span className="meta">@{agent.handle}</span>
         </h1>
+        <button onClick={() => setDuplicating(true)}>Duplicate</button>
         <a className="button" href={href("/agents")}>
           All agents
         </a>
@@ -67,7 +70,19 @@ export function AgentDetail({ name }: { name: string }) {
             <dt>Model</dt>
             <dd>
               {agent.model ?? <span className="meta">default ({modelInfo?.model ?? "ANTHROPIC_MODEL"})</span>}
-              {agent.effort && <span className="meta"> · effort {agent.effort}</span>}
+              {agent.modelFrom === "group" && <span className="meta"> (from group)</span>}
+              {agent.effort && <span className="meta"> · effort {agent.effort}{agent.effortFrom === "group" ? " (from group)" : ""}</span>}
+            </dd>
+            <dt>Groups</dt>
+            <dd>
+              {agent.groups.length ? agent.groups.map((group) => (
+                <a key={group} className="badge accent" href={href(`/groups/${group}`)} style={{ marginRight: 4 }}>
+                  {group}
+                </a>
+              )) : <span className="meta">none</span>}
+            </dd>
+            <dt>Replicas</dt>
+            <dd>{agent.replicas ? `${agent.replicas} (works up to ${agent.replicas} cards at once)` : <span className="meta">no limit</span>}
             </dd>
             <dt>Skills</dt>
             <dd>
@@ -127,6 +142,8 @@ export function AgentDetail({ name }: { name: string }) {
       <Panel title="Model and effort">
         <ModelPicker agent={agent.name} model={agent.model} effort={agent.effort} defaultModel={modelInfo?.model ?? null} onSaved={() => void reload()} />
       </Panel>
+
+      {duplicating && <DuplicateDialog agent={agent} groups={data.groups} onClose={() => setDuplicating(false)} onDone={(created) => (created.length === 1 ? navigate(`/agents/${created[0]}`) : void reload())} />}
 
       <Panel title="agent.md" hint="frontmatter settings, then the role prompt">
         <FileEditor path={`${base}/agent.md`} rows={22} onSaved={() => void reload()} onDeleted={() => navigate("/agents")} deleteLabel="Delete agent" />

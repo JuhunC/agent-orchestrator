@@ -47,7 +47,19 @@ export interface Agent {
   ownSkills: { name: string; description: string }[];
   ownMcp: string[];
   errors: string[];
+  groups: string[];
+  replicas: number | null;
+  modelFrom: "agent" | "group" | null;
+  effortFrom: "agent" | "group" | null;
   stats?: AgentStats | null;
+}
+
+export interface Group {
+  name: string;
+  description: string;
+  members: string[];
+  defaults: { model: string | null; effort: Effort | null; skills: string[]; mcp: string[]; subagents: string[] };
+  errors: string[];
 }
 
 export interface Library {
@@ -58,6 +70,7 @@ export interface Library {
 
 export interface AgentsResponse {
   agents: Agent[];
+  groups: Group[];
   library: Library;
   errors: string[];
   profilesDir: string;
@@ -127,6 +140,11 @@ export interface Task {
 export interface BoardColumnInfo {
   name: string;
   agent: string | null;
+  agents: string[];
+  agentRefs: string[];
+  mode: "pool" | "all" | "label";
+  routes: { label: string; agents: string[] }[];
+  routeDefault: string[];
   roleName: string | null;
   roleText: string | null;
   model: string | null;

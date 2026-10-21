@@ -26,7 +26,18 @@ import { scheduler } from "../runner/scheduler.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import type { Profile } from "../profiles/types.ts";
-import { createAgent, deleteProfileFile, listProfileFiles, ProfileFileError, readProfileFile, setAgentModel, writeProfileFile } from "../profiles/store.ts";
+import {
+  addToGroup,
+  applyToGroup,
+  createAgent,
+  deleteProfileFile,
+  duplicateAgent,
+  listProfileFiles,
+  ProfileFileError,
+  readProfileFile,
+  setAgentModel,
+  writeProfileFile,
+} from "../profiles/store.ts";
 import { sessions } from "../runtime/manager.ts";
 import { boardStatus, forgetProjectCache, syncBoard } from "../boards/engine.ts";
 import { loadBoards } from "../boards/loader.ts";
@@ -254,6 +265,7 @@ export function registerApi(app: FastifyInstance): void {
         roles: Object.values(profiles.library.roles).map((role) => ({ name: role.name, description: role.description, tools: role.tools, model: role.model })),
         mcp: Object.entries(profiles.library.mcp).map(([name, server]) => ({ name, type: server.type, target: server.url ?? server.command })),
       },
+      groups: profiles.groups,
       errors: [...profiles.errors.map((error) => `${error.file}: ${error.message}`), ...profiles.library.errors],
       profilesDir: config.profilesDir,
     };
@@ -280,6 +292,39 @@ export function registerApi(app: FastifyInstance): void {
   app.patch<{ Params: { name: string }; Body: { model?: string | null; effort?: string | null } }>("/api/agents/:name", async (request, reply) => {
     try {
       setAgentModel(request.params.name, request.body?.model?.trim() || null, request.body?.effort || null, request.adminLogin ?? "admin");
+      bus.publish({ type: "agents" });
+      return { ok: true };
+    } catch (error) {
+      return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { name: string }; Body: { name?: string; handle?: string; count?: number; group?: string } }>("/api/agents/:name/duplicate", async (request, reply) => {
+    try {
+      const created = duplicateAgent(request.params.name, request.body ?? {}, request.adminLogin ?? "admin");
+      bus.publish({ type: "agents" });
+      return { created };
+    } catch (error) {
+      return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { name: string }; Body: { model?: string | null; effort?: string | null; enabled?: boolean } }>("/api/groups/:name/apply", async (request, reply) => {
+    try {
+      const body = request.body ?? {};
+      const members = applyToGroup(request.params.name, { model: body.model, effort: body.effort }, request.adminLogin ?? "admin");
+      if (typeof body.enabled === "boolean") for (const member of members) setProfileEnabled(member, body.enabled);
+      bus.publish({ type: "agents" });
+      scheduler.kick();
+      return { members };
+    } catch (error) {
+      return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.post<{ Params: { name: string }; Body: { agents: string[] } }>("/api/groups/:name/members", async (request, reply) => {
+    try {
+      addToGroup(request.params.name, (request.body?.agents ?? []).map(String), request.adminLogin ?? "admin");
       bus.publish({ type: "agents" });
       return { ok: true };
     } catch (error) {

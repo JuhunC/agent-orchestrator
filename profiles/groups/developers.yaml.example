@@ -1,0 +1,10 @@
+# A group of agents. Copy to developers.yaml (any name.yaml).
+# Members inherit these defaults; an agent's own agent.md settings win.
+# Use the whole group in a board column with:  agents: [group:developers]
+description: Developers who implement issues
+members: [coder]                 # add duplicates here, e.g. coder-2, coder-3
+defaults:
+  # model: sonnet
+  effort: high
+  skills: [shipping-changes]
+  subagents: [test-writer, code-reviewer]

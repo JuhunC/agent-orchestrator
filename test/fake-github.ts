@@ -16,6 +16,7 @@ export interface FakeIssue {
   user: { login: string };
   comments: FakeComment[];
   pull?: { head: string; base: string };
+  labels?: string[];
 }
 
 /**
@@ -86,7 +87,7 @@ export class FakeGitHub {
     return new Promise((resolve) => this.server.close(() => resolve()));
   }
 
-  addIssue(issue: Omit<FakeIssue, "comments">): FakeIssue {
+  addIssue(issue: Omit<FakeIssue, "comments"> & { labels?: string[] }): FakeIssue {
     const full = { ...issue, comments: [] };
     this.issues.set(issue.number, full);
     return full;
@@ -114,6 +115,7 @@ export class FakeGitHub {
       user: issue.user,
       comments: issue.comments.length,
       pull_request: issue.pull ? { url: "x" } : undefined,
+      labels: (issue.labels ?? []).map((name) => ({ name })),
     };
   }
 

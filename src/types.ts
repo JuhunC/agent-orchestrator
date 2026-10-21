@@ -47,6 +47,8 @@ export interface Task {
   board: string | null;
   boardColumn: string | null;
   boardItemId: string | null;
+  /** Set when several agents work the same card at once ("all" columns). */
+  boardRound: string | null;
 }
 
 export interface TaskEvent {

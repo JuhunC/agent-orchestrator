@@ -3,7 +3,7 @@ import { moveCard } from "../boards/engine.ts";
 import { allowedMoves, getBoard } from "../boards/loader.ts";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { addEvent, addHandoff, getBoardItem, lastSessionId, listHandoffs, threadHistory, updateTask } from "../db.ts";
+import { addEvent, addHandoff, addVote, getBoardItem, lastSessionId, listHandoffs, tasksInRound, threadHistory, updateTask } from "../db.ts";
 import { installationClient, type GitHubClient } from "../github/app.ts";
 import { editComment, fetchThread, postComment, type ThreadContext } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
@@ -134,6 +134,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
             moves: allowedMoves(boardContext.board, column.name),
             needsHuman: boardContext.board.needsHuman,
             handoffs: listHandoffs(boardContext.board.name, boardContext.itemId),
+            peers: task.boardRound ? tasksInRound(task.boardRound).map((peer) => peer.agent).filter((name) => name !== profile.name) : [],
           }
         : null;
     const prompts = {
@@ -231,13 +232,16 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
     task = patch(task.id, { commits });
     const move = boardContext?.pendingMove;
-    if (boardContext && move) {
+    if (boardContext && move && task.boardRound) {
+      details = [`**Voted to move the card to ${move.to}** (it moves when every agent in this column has finished). Handoff:\n\n${move.note.split("\n").map((line) => `> ${line}`).join("\n")}`, details].filter(Boolean).join("\n\n");
+    } else if (boardContext && move) {
       details = [`**Moved the card to ${move.to}.** Handoff:\n\n${move.note.split("\n").map((line) => `> ${line}`).join("\n")}`, details].filter(Boolean).join("\n\n");
     } else if (boardContext) {
       details = [`The card stays in **${boardContext.column}** (the agent didn't move it).`, details].filter(Boolean).join("\n\n");
     }
+    if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
     await finish("succeeded", outcome.result, "", details, commits);
-    if (boardContext && move) {
+    if (boardContext && move && !task.boardRound) {
       // After the reply is posted: hand the card to the next column (and its agent).
       addHandoff(boardContext.board.name, boardContext.itemId, { taskId: task.id, agent: profile.name, fromColumn: boardContext.column, toColumn: move.to, note: move.note });
       const landed = await moveCard(boardContext.board, boardContext.itemId, move.to, { agentMove: true, excludeTaskId: task.id }).catch((error) => {

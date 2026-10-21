@@ -1,12 +1,28 @@
 import { bus } from "../bus.ts";
-import { activeBoardTasks, boardItemCost, createTask, getBoardItem, saveBoardItem, type BoardItemRow } from "../db.ts";
+import { randomUUID } from "node:crypto";
+import {
+  activeBoardTasks,
+  activeTaskCounts,
+  addHandoff,
+  boardItemCost,
+  claimRound,
+  createTask,
+  getBoardItem,
+  getTask,
+  lastTaskIds,
+  listVotes,
+  saveBoardItem,
+  tasksInRound,
+  type BoardItemRow,
+} from "../db.ts";
 import { findInstallation, findOwnerInstallation, GitHubOctokit, installationClient, type GitHubClient } from "../github/app.ts";
 import { getProjectItem, listProjectItems, resolveProject, setItemStatus, type ProjectInfo, type ProjectItem } from "../github/projects.ts";
 import { postComment } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import { scheduler } from "../runner/scheduler.ts";
-import { loadBoards, type Board } from "./loader.ts";
+import type { Profile } from "../profiles/types.ts";
+import { loadBoards, type Board, type BoardColumn } from "./loader.ts";
 
 /** Live state of each board, for the admin UI. */
 export interface BoardStatus {
@@ -85,13 +101,40 @@ export async function observe(board: Board, item: ProjectItem, options: { exclud
 }
 
 /** Starts the agent mapped to the card's current column, unless a guard says to escalate instead. */
+/** Which agents may take a card in this column: enabled, valid, and routed by label in `label` mode. */
+async function candidatesFor(board: Board, column: BoardColumn, row: BoardItemRow): Promise<Profile[]> {
+  const profiles = loadProfiles().agents.filter((profile) => profile.enabled && !profile.errors.length);
+  let names = column.agents;
+  if (column.mode === "label") {
+    const gh = await installationClient(await findInstallation(row.owner, row.repo));
+    const { data } = await gh.rest.issues.get({ owner: row.owner, repo: row.repo, issue_number: row.number });
+    const labels = data.labels.map((label) => (typeof label === "string" ? label : (label.name ?? "")).toLowerCase());
+    names = column.routes.find((route) => labels.includes(route.label.toLowerCase()))?.agents ?? column.routeDefault;
+  }
+  return names.map((name) => profiles.find((profile) => profile.name === name)).filter((profile): profile is Profile => Boolean(profile));
+}
+
+/** The least busy agent (relative to its replicas), rotating on ties. */
+function leastBusy(candidates: Profile[]): Profile {
+  const active = activeTaskCounts();
+  const last = lastTaskIds();
+  return [...candidates].sort((a, b) => {
+    const load = (profile: Profile) => (active[profile.name] ?? 0) / (profile.replicas ?? 1);
+    return load(a) - load(b) || (last[a.name] ?? 0) - (last[b.name] ?? 0) || a.name.localeCompare(b.name);
+  })[0]!;
+}
+
+/** Starts the column's agent(s) for the card, unless a guard says to escalate instead. */
 async function startColumnAgent(board: Board, itemId: string): Promise<void> {
   const row = getBoardItem(board.name, itemId);
   const column = row?.status ? board.columns[row.status] : undefined;
-  if (!row || !column?.agent || board.errors.length) return;
-  const profile = loadProfiles().agents.find((candidate) => candidate.name === column.agent);
-  if (!profile || !profile.enabled || profile.errors.length) return;
+  if (!row || !column?.agents.length || board.errors.length) return;
   if (activeBoardTasks(board.name, itemId).some((task) => task.boardColumn === column.name)) return;
+  const candidates = await candidatesFor(board, column, row);
+  if (!candidates.length) {
+    log.info("No available agent for the card's column", { board: board.name, column: column.name });
+    return;
+  }
 
   const entries = (row.entries[column.name] ?? 0) + 1;
   const cost = boardItemCost(board.name, itemId);
@@ -107,27 +150,73 @@ async function startColumnAgent(board: Board, itemId: string): Promise<void> {
   }
   saveBoardItem({ ...row, entries: { ...row.entries, [column.name]: entries } });
 
+  // "all": every agent works the card at once, then they vote where it goes. Otherwise one agent.
+  const chosen = column.mode === "all" ? candidates : [leastBusy(candidates)];
+  const round = column.mode === "all" ? `${board.name}:${itemId}:${column.name}:${randomUUID()}` : null;
   const installationId = await findInstallation(row.owner, row.repo);
-  const task = createTask({
-    agent: profile.name,
-    installationId,
-    owner: row.owner,
-    repo: row.repo,
-    threadKind: row.kind,
-    threadNumber: row.number,
-    threadTitle: row.title,
-    threadUrl: "",
-    triggerKind: "board",
-    requestedBy: "project board",
-    requestText: `The card is in the "${column.name}" column of the ${board.name} board. Do this column's work (see your role below), then move the card on.`,
-    requestUrl: "",
-    board: board.name,
-    boardColumn: column.name,
-    boardItemId: itemId,
-  });
-  bus.publish({ type: "task", task });
-  log.info("Board started an agent", { board: board.name, column: column.name, agent: profile.name, task: task.id });
+  for (const profile of chosen) {
+    const task = createTask({
+      agent: profile.name,
+      installationId,
+      owner: row.owner,
+      repo: row.repo,
+      threadKind: row.kind,
+      threadNumber: row.number,
+      threadTitle: row.title,
+      threadUrl: "",
+      triggerKind: "board",
+      requestedBy: "project board",
+      requestText: `The card is in the "${column.name}" column of the ${board.name} board. Do this column's work (see your role below), then move the card on.`,
+      requestUrl: "",
+      board: board.name,
+      boardColumn: column.name,
+      boardItemId: itemId,
+      boardRound: round,
+    });
+    bus.publish({ type: "task", task });
+    log.info("Board started an agent", { board: board.name, column: column.name, agent: profile.name, task: task.id, mode: column.mode });
+  }
   scheduler.kick();
+}
+
+/**
+ * Called when any board task ends. For "all" columns, once every agent in the round is done,
+ * the votes decide where the card goes: needs-human wins, then sending it back (the earliest
+ * column), then the most common choice. If an agent failed or didn't vote, the card stays.
+ */
+export async function boardTaskSettled(taskId: number): Promise<void> {
+  const task = getTask(taskId);
+  if (!task?.board || !task.boardRound || !task.boardItemId) return;
+  const tasks = tasksInRound(task.boardRound);
+  if (tasks.some((member) => member.status === "queued" || member.status === "running")) return;
+  if (!claimRound(task.boardRound)) return;
+  const board = loadBoards().boards.find((candidate) => candidate.name === task.board);
+  const row = getBoardItem(task.board, task.boardItemId);
+  if (!board || !row || row.status !== task.boardColumn) return;
+  const votes = listVotes(task.boardRound);
+  const missing = tasks.filter((member) => member.status !== "succeeded" || !votes.some((vote) => vote.taskId === member.id));
+  const gh = await installationClient(task.installationId);
+  const target = { owner: row.owner, repo: row.repo, kind: row.kind, number: row.number };
+  if (missing.length || !votes.length) {
+    const who = missing.map((member) => `${member.agent} (${member.status === "succeeded" ? "didn't move the card" : member.status})`).join(", ");
+    await postComment(gh, target, `The agents in **${task.boardColumn}** didn't all finish: ${who}. The card stays here for a person to decide.`).catch(() => undefined);
+    return;
+  }
+  const order = Object.keys(board.columns);
+  const position = (name: string) => (order.indexOf(name) === -1 ? Number.MAX_SAFE_INTEGER : order.indexOf(name));
+  const current = position(task.boardColumn!);
+  let to: string;
+  if (board.needsHuman && votes.some((vote) => vote.to === board.needsHuman)) to = board.needsHuman;
+  else if (votes.some((vote) => position(vote.to) < current)) to = votes.filter((vote) => position(vote.to) < current).sort((a, b) => position(a.to) - position(b.to))[0]!.to;
+  else {
+    const counts = new Map<string, number>();
+    for (const vote of votes) counts.set(vote.to, (counts.get(vote.to) ?? 0) + 1);
+    to = [...counts.entries()].sort((a, b) => b[1] - a[1] || position(a[0]) - position(b[0]))[0]![0];
+  }
+  for (const vote of votes) addHandoff(board.name, row.itemId, { taskId: vote.taskId, agent: vote.agent, fromColumn: task.boardColumn!, toColumn: vote.to, note: vote.note });
+  const summary = votes.map((vote) => `- **${vote.agent}** → ${vote.to}`).join("\n");
+  await postComment(gh, target, `All agents in **${task.boardColumn}** finished. Moving the card to **${to}**.\n\n${summary}`).catch(() => undefined);
+  await moveCard(board, row.itemId, to, { agentMove: true }).catch((error) => log.warn("Could not move the card", { error: errorMessage(error) }));
 }
 
 /** Moves a card for an agent (or a guard), then reacts to the new column like any other move. */

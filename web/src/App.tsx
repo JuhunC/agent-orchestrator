@@ -4,6 +4,7 @@ import { AgentDetail } from "./pages/AgentDetail.tsx";
 import { Agents } from "./pages/Agents.tsx";
 import { Library } from "./pages/Library.tsx";
 import { BoardDetail, Boards } from "./pages/Boards.tsx";
+import { GroupDetail, Groups } from "./pages/Groups.tsx";
 import { Dashboard } from "./pages/Dashboard.tsx";
 import { Deliveries } from "./pages/Deliveries.tsx";
 import { History, ThreadDetail } from "./pages/History.tsx";
@@ -52,6 +53,12 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
   } else if (section === "boards") {
     title = "Boards";
     page = <Boards />;
+  } else if (section === "groups" && rest[0]) {
+    title = "Group";
+    page = <GroupDetail key={rest[0]} name={rest[0]} />;
+  } else if (section === "groups") {
+    title = "Groups";
+    page = <Groups />;
   } else if (section === "library") {
     title = "Library";
     page = <Library />;
@@ -73,6 +80,7 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
     { path: "/", key: "", label: "Dashboard", count: overview?.running.length || null },
     { path: "/tasks", key: "tasks", label: "Tasks", count: overview?.queued.length || null },
     { path: "/agents", key: "agents", label: "Agents", count: null },
+    { path: "/groups", key: "groups", label: "Groups", count: null },
     { path: "/library", key: "library", label: "Library", count: null },
     { path: "/boards", key: "boards", label: "Boards", count: null },
     { path: "/history", key: "history", label: "History", count: null },

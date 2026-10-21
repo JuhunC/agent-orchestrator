@@ -71,6 +71,13 @@ export interface Profile {
   /** As set in the file; the admin UI can switch an agent off on top of this. */
   enabledInFile: boolean;
   enabled: boolean;
+  /** Groups this agent belongs to (their defaults are already merged in). */
+  groups: string[];
+  /** Where model and effort came from, for the UI. */
+  modelFrom: "agent" | "group" | null;
+  effortFrom: "agent" | "group" | null;
+  /** Identical copies of this agent: how many cards it may work at once. Null means no limit. */
+  replicas: number | null;
   ownSkills: SkillInfo[];
   ownMcp: McpServers;
   dir: string;
@@ -84,9 +91,19 @@ export interface Library {
   errors: string[];
 }
 
+/** A named set of agents (profiles/groups/<name>.yaml) with shared defaults. */
+export interface Group {
+  name: string;
+  description: string;
+  members: string[];
+  defaults: { model: string | null; effort: Effort | null; skills: string[]; mcp: string[]; subagents: string[] };
+  errors: string[];
+}
+
 export interface ProfileSet {
   root: string;
   agents: Profile[];
+  groups: Group[];
   library: Library;
   /** Problems that stop a file from loading at all. */
   errors: { file: string; message: string }[];

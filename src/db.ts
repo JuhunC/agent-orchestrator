@@ -111,6 +111,7 @@ addColumn("tasks", "live", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "board", "TEXT");
 addColumn("tasks", "board_column", "TEXT");
 addColumn("tasks", "board_item_id", "TEXT");
+addColumn("tasks", "board_round", "TEXT");
 db.exec(`
 CREATE TABLE IF NOT EXISTS board_items (
   board TEXT NOT NULL,
@@ -125,6 +126,18 @@ CREATE TABLE IF NOT EXISTS board_items (
   entries TEXT NOT NULL DEFAULT '{}',
   updated_at TEXT NOT NULL,
   PRIMARY KEY (board, item_id)
+);
+CREATE TABLE IF NOT EXISTS board_votes (
+  round TEXT NOT NULL,
+  task_id INTEGER NOT NULL,
+  agent TEXT NOT NULL,
+  to_column TEXT NOT NULL,
+  note TEXT NOT NULL,
+  PRIMARY KEY (round, task_id)
+);
+CREATE TABLE IF NOT EXISTS board_rounds (
+  round TEXT PRIMARY KEY,
+  resolved_at TEXT
 );
 CREATE TABLE IF NOT EXISTS board_handoffs (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -195,6 +208,7 @@ function toTask(row: Row): Task {
     board: (row.board as string | null) ?? null,
     boardColumn: (row.board_column as string | null) ?? null,
     boardItemId: (row.board_item_id as string | null) ?? null,
+    boardRound: (row.board_round as string | null) ?? null,
   };
 }
 
@@ -215,14 +229,15 @@ export interface NewTask {
   board?: string | null;
   boardColumn?: string | null;
   boardItemId?: string | null;
+  boardRound?: string | null;
 }
 
 export function createTask(input: NewTask): Task {
   const result = db
     .prepare(
       `INSERT INTO tasks (agent, installation_id, owner, repo, thread_kind, thread_number, thread_title, thread_url,
-         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)`,
+         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.agent,
@@ -242,6 +257,7 @@ export function createTask(input: NewTask): Task {
       input.board ?? null,
       input.boardColumn ?? null,
       input.boardItemId ?? null,
+      input.boardRound ?? null,
     );
   return getTask(Number(result.lastInsertRowid))!;
 }
@@ -278,6 +294,7 @@ const TASK_COLUMNS: Record<string, string> = {
   board: "board",
   boardColumn: "board_column",
   boardItemId: "board_item_id",
+  boardRound: "board_round",
 };
 
 export function updateTask(id: number, patch: Partial<Task>): Task {
@@ -636,4 +653,41 @@ export function boardItemCost(board: string, itemId: string): number {
 
 export function activeBoardTasks(board: string, itemId: string): Task[] {
   return (db.prepare("SELECT * FROM tasks WHERE board = ? AND board_item_id = ? AND status IN ('queued', 'running') ORDER BY id").all(board, itemId) as Row[]).map(toTask);
+}
+
+// ---------- "all" columns: several agents work one card, then vote where it goes ----------
+
+export function tasksInRound(round: string): Task[] {
+  return (db.prepare("SELECT * FROM tasks WHERE board_round = ? ORDER BY id").all(round) as Row[]).map(toTask);
+}
+
+export function addVote(round: string, vote: { taskId: number; agent: string; to: string; note: string }): void {
+  db.prepare("INSERT OR REPLACE INTO board_votes (round, task_id, agent, to_column, note) VALUES (?, ?, ?, ?, ?)").run(round, vote.taskId, vote.agent, vote.to, vote.note.slice(0, 8000));
+}
+
+export function listVotes(round: string): { taskId: number; agent: string; to: string; note: string }[] {
+  return (db.prepare("SELECT * FROM board_votes WHERE round = ? ORDER BY task_id").all(round) as Row[]).map((row) => ({
+    taskId: Number(row.task_id),
+    agent: String(row.agent),
+    to: String(row.to_column),
+    note: String(row.note),
+  }));
+}
+
+/** Marks a round resolved; true only for the first caller, so a card moves once. */
+export function claimRound(round: string): boolean {
+  const result = db.prepare("INSERT OR IGNORE INTO board_rounds (round, resolved_at) VALUES (?, ?)").run(round, now());
+  return Number(result.changes) > 0;
+}
+
+/** Active tasks per agent, to pick the least busy agent in a pool. */
+export function activeTaskCounts(): Record<string, number> {
+  const rows = db.prepare("SELECT agent, COUNT(*) AS n FROM tasks WHERE status IN ('queued', 'running') GROUP BY agent").all() as Row[];
+  return Object.fromEntries(rows.map((row) => [String(row.agent), Number(row.n)]));
+}
+
+/** Most recent task id per agent, to rotate ties fairly. */
+export function lastTaskIds(): Record<string, number> {
+  const rows = db.prepare("SELECT agent, MAX(id) AS id FROM tasks GROUP BY agent").all() as Row[];
+  return Object.fromEntries(rows.map((row) => [String(row.agent), Number(row.id)]));
 }

@@ -1,6 +1,13 @@
 # A project board pipeline. Copy to product.yaml (any name.yaml) and set `project`.
-# Each column maps a harness (agent: a profile with its tools, skills, MCP servers)
+# Each column maps a harness (agents: profiles with their tools, skills, MCP servers)
 # and a role (what to do in this column: a library/roles name, or inline text).
+#
+# A column can have several agents, and group:<name> adds a whole group. `mode` says
+# how a card is handed out:
+#   pool  (default) one agent per card, the least busy one
+#   all   every agent works the card at once; it moves when they've all finished
+#         (needs-human wins, then sending it back, then the most common choice)
+#   label route by the issue's labels:  routes: { frontend: web-dev, default: group:developers }
 project: your-org/1            # org/project-number (organization projects get webhooks)
 status_field: Status           # the single-select field the board is grouped by
 needs_human: Needs human       # where loop guards send cards (add this column to the project)
@@ -20,7 +27,8 @@ columns:
     effort: medium
     moves_to: [Ready]
   Ready:
-    agent: coder
+    agents: [coder]             # e.g. [group:developers] to spread cards over a team
+    mode: pool
     role: implement
     on_start: In progress      # moved here when the agent starts
     effort: high
@@ -30,7 +38,7 @@ columns:
     role: address-feedback     # cards sent back from review land here
     moves_to: [In review]
   In review:
-    agent: tester
+    agents: [tester]            # e.g. [tester, security-reviewer] with mode: all
     role: verify
     moves_to: [Done, In progress]
   Done: {}                     # no agent; agents never merge
