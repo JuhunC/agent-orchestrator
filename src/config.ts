@@ -109,6 +109,11 @@ export const config = {
   liveIdleMinutes: int("LIVE_SESSION_IDLE_MINUTES", 30),
   maxLiveSessions: int("MAX_LIVE_SESSIONS", 4),
   usageLimitRetries: int("USAGE_LIMIT_RETRIES", 5),
+  // Retries when the model API fails to answer (5xx, overloaded, dropped connection): each request
+  // is retried this many times by Claude Code, and a task that still fails is retried this many
+  // times by the orchestrator, waiting MODEL_ERROR_RETRY_DELAY_SECONDS (doubling) in between.
+  modelErrorRetries: Math.max(0, int("MODEL_ERROR_RETRIES", 3)),
+  modelErrorRetryDelaySeconds: Math.max(1, int("MODEL_ERROR_RETRY_DELAY_SECONDS", 20)),
 
   webhookProxyUrl: env("WEBHOOK_PROXY_URL"),
   // Testing hook: clone from `file:///…/{owner}/{repo}.git` instead of GITHUB_URL.

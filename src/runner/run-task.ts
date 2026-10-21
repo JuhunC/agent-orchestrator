@@ -28,6 +28,25 @@ function emit(taskId: number, kind: EventKind, message: string): void {
   bus.publish({ type: "event", event: addEvent(taskId, kind, message) });
 }
 
+const RETRY_PROMPT =
+  "The model service failed while you were working, so your last turn was cut off. Continue the task from where you left off: your earlier work in this session and the working copy are intact. Finish as instructed before.";
+
+/** Waits, unless the task is cancelled first. Resolves false when cancelled. */
+function wait(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) return resolve(false);
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      resolve(false);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 /** What the agent left unpublished: uncommitted files or commits not on GitHub. */
 async function unpublishedWork(workspace: Workspace): Promise<{ dirty: boolean; unpushed: number }> {
   const dirty = Boolean((await git(workspace.dir, ["status", "--porcelain"])).trim());
@@ -125,7 +144,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0, board: boardContext };
     state.phase = "working";
     throttle.markDirty();
-    const outcome = await sessions.run({
+    const runOptions = {
       task,
       profile,
       library: profiles.library,
@@ -139,11 +158,31 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       onEvent,
       signal,
       timeoutMs: (profile.timeoutMinutes ?? config.defaultTimeoutMinutes) * 60_000,
-    });
+    };
+    let outcome = await sessions.run(runOptions);
+    let costUsd = outcome.costUsd ?? 0;
+    // The model service failed to answer even after Claude Code's own retries: wait and continue
+    // the same session (the working copy is untouched), up to MODEL_ERROR_RETRIES times.
+    let retries = 0;
+    while (outcome.serverError && !outcome.cancelled && retries < config.modelErrorRetries) {
+      retries++;
+      const delay = config.modelErrorRetryDelaySeconds * 2 ** (retries - 1);
+      onEvent("system", `The model service failed (${outcome.serverError}). Retrying in ${delay}s (${retries}/${config.modelErrorRetries})`);
+      if (!(await wait(delay * 1000, signal))) {
+        outcome = { ...outcome, cancelled: true };
+        break;
+      }
+      outcome = await sessions.run({
+        ...runOptions,
+        resumeSessionId: outcome.sessionId ?? runOptions.resumeSessionId,
+        prompts: { full: prompts.full, followUp: RETRY_PROMPT },
+      });
+      costUsd += outcome.costUsd ?? 0;
+    }
     task = patch(task.id, {
       prompt: outcome.prompt,
       sessionId: outcome.sessionId,
-      costUsd: outcome.costUsd,
+      costUsd: costUsd || outcome.costUsd,
       resultText: outcome.result,
       live: outcome.live,
       exitCode: outcome.isError ? 1 : 0,
@@ -159,7 +198,11 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       return;
     }
     if (outcome.timedOut || outcome.isError) {
-      const reason = outcome.timedOut ? `Timed out after ${profile.timeoutMinutes ?? config.defaultTimeoutMinutes} minutes.` : (outcome.error ?? "The agent stopped with an error.");
+      const reason = outcome.timedOut
+        ? `Timed out after ${profile.timeoutMinutes ?? config.defaultTimeoutMinutes} minutes.`
+        : outcome.serverError
+          ? `The model service kept failing (${outcome.serverError})${retries ? ` after ${retries} ${retries === 1 ? "retry" : "retries"}` : ""}.`
+          : (outcome.error ?? "The agent stopped with an error.");
       await finish("failed", outcome.result, reason);
       return;
     }

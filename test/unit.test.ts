@@ -11,6 +11,7 @@ const { describeTool } = await import("../src/runtime/describe.ts");
 const { parseFrontmatter } = await import("../src/profiles/loader.ts");
 const { normaliseMcpServers, expandMcpServers } = await import("../src/profiles/mcp.ts");
 const { detectUsageLimit } = await import("../src/runner/limits.ts");
+const { serverErrorOf } = await import("../src/runtime/session.ts");
 const { mention, renderProgress, formatDuration } = await import("../src/runner/progress.ts");
 const { verifySignature } = await import("../src/server/http.ts");
 const { createHmac } = await import("node:crypto");
@@ -81,4 +82,12 @@ test("usage-limit messages are recognised with their reset time", () => {
   assert.equal(detectUsageLimit("You've hit your limit · resets 3pm (America/Los_Angeles)", now)?.resetAt?.toISOString(), "2026-10-20T22:00:00.000Z");
   assert.equal(detectUsageLimit("API Error: 429 try again in 2 hours 13 minutes. rate_limit_error", now)?.resetAt?.toISOString(), "2026-10-20T14:13:00.000Z");
   assert.equal(detectUsageLimit("Failed to authenticate. API Error: 401", now), null);
+});
+
+test("server-side model errors are told apart from client errors", () => {
+  assert.match(serverErrorOf("API Error: 503 upstream unavailable", []) ?? "", /503/);
+  assert.match(serverErrorOf("API Error: Connection error.", []) ?? "", /Connection error/);
+  assert.ok(serverErrorOf("something failed", ["overloaded"]));
+  assert.equal(serverErrorOf("API Error: 400 prompt is not allowed here", []), null);
+  assert.equal(serverErrorOf("API Error: 401 invalid x-api-key", ["authentication_failed"]), null);
 });

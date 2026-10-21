@@ -6,6 +6,7 @@ import type { ModelRequest } from "./fake-model.ts";
 import { startHarness } from "./harness.ts";
 
 const docsServer = resolve("test/fixtures/docs-mcp.mjs");
+const agentFile = (handle: string, extra: string) => `---\nhandle: ${handle}\ndescription: ${handle}\n${extra}---\nYou are ${handle}.\n`;
 chmodSync(docsServer, 0o755);
 
 const h = await startHarness(
@@ -46,6 +47,8 @@ env:
 ---
 You are limited.
 `,
+    "agents/flaky/agent.md": agentFile("aorch-flaky", ""),
+    "agents/flaky2/agent.md": agentFile("aorch-flaky2", 'env:\n  CLAUDE_CODE_MAX_RETRIES: "0"\n'),
     "library/skills/shipping-changes/SKILL.md": `---
 name: shipping-changes
 description: How to ship changes with the github tools
@@ -60,7 +63,7 @@ You write tests.
 `,
     "library/mcp.json": JSON.stringify({ mcpServers: { docs: { command: process.execPath, args: [docsServer], env: { DOCS_TOKEN: "${DOCS_TOKEN}" }, alwaysLoad: true } } }),
   },
-  { DOCS_TOKEN: "docs-secret-value" },
+  { DOCS_TOKEN: "docs-secret-value", MODEL_ERROR_RETRY_DELAY_SECONDS: "1" },
 );
 after(() => h.stop());
 const { db, app, fake, model, waitForTask } = h;
@@ -184,6 +187,48 @@ test("a usage limit from the model service pauses the task until it resets", asy
   assert.equal(fake.issues.get(12)!.comments.length, 2, "same progress comment, then the result");
 });
 
+/** Fails the first `failures` model requests matching `match` with a server error. */
+function failFirst(failures: number, match: (request: ModelRequest) => boolean, status = 503) {
+  let seen = 0;
+  const previous = model.script;
+  model.script = (request) => {
+    if (!match(request)) return previous(request);
+    seen++;
+    if (seen <= failures) return { status, error: { type: status === 529 ? "overloaded_error" : "api_error", message: "upstream unavailable" } };
+    return [{ type: "text", text: `Recovered after ${seen - 1} failed requests.` }];
+  };
+  return () => seen;
+}
+
+test("model API errors are retried per request (MODEL_ERROR_RETRIES, default 3)", async () => {
+  const requests = failFirst(2, (request) => request.prompt.includes("FLAKY_REQUEST"));
+  const task = await waitForTask((await h.mentionOnNewIssue(20, "aorch-flaky", "FLAKY_REQUEST")).id);
+  assert.equal(task.status, "succeeded", task.error ?? "");
+  assert.equal(task.resultText, "Recovered after 2 failed requests.");
+  assert.equal(requests(), 3, "Claude Code retried the request");
+  assert.ok(!db.listEvents(task.id).some((event) => /Retrying in/.test(event.message)), "no task-level retry was needed");
+});
+
+test("a task that still fails on server errors is retried by the orchestrator", async () => {
+  const retryPrompt = (request: ModelRequest) => request.prompt.includes("FLAKY_TASK") || request.prompt.includes("model service failed while you were working");
+  const requests = failFirst(2, retryPrompt, 500);
+  const task = await waitForTask((await h.mentionOnNewIssue(21, "aorch-flaky2", "FLAKY_TASK")).id);
+  assert.equal(task.status, "succeeded", task.error ?? "");
+  assert.equal(requests(), 3);
+  const events = db.listEvents(task.id).map((event) => event.message);
+  assert.ok(events.some((message) => /Retrying in 1s \(1\/3\)/.test(message)), events.join("\n"));
+  assert.ok(events.some((message) => /Retrying in 2s \(2\/3\)/.test(message)));
+  assert.equal(model.agentRequests().filter((request) => request.prompt.includes("model service failed while you were working")).length, 2, "retries continue the session");
+});
+
+test("a task gives up after MODEL_ERROR_RETRIES server failures", async () => {
+  failFirst(1000, (request) => request.prompt.includes("FLAKY_FOREVER") || request.prompt.includes("model service failed while you were working"), 529);
+  const task = await waitForTask((await h.mentionOnNewIssue(22, "aorch-flaky2", "FLAKY_FOREVER")).id);
+  assert.equal(task.status, "failed");
+  assert.match(task.error ?? "", /The model service kept failing \(.+\) after 3 retries\./);
+  assert.match(fake.issues.get(22)!.comments.at(-1)!.body, /kept failing/);
+});
+
 test("a model error fails the task and is reported on GitHub", async () => {
   model.script = ((previous) => (request: ModelRequest) =>
     request.prompt.includes("PLEASE_FAIL") ? { status: 400, error: { type: "invalid_request_error", message: "prompt is not allowed here" } } : previous(request))(model.script);
@@ -224,7 +269,7 @@ test("the admin API lists profiles and edits profile files with validation", asy
   const agents = (await app.inject({ method: "GET", url: "/api/agents" })).json();
   assert.deepEqual(
     agents.agents.map((agent: { name: string }) => agent.name),
-    ["coder", "limited", "reviewer"],
+    ["coder", "flaky", "flaky2", "limited", "reviewer"],
   );
   assert.deepEqual(agents.library.skills.map((skill: { name: string }) => skill.name), ["shipping-changes"]);
 

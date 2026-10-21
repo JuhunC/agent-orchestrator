@@ -18,6 +18,8 @@ export function agentEnv(profile: Profile, extra: Record<string, string> = {}): 
     LANG: process.env.LANG ?? "C.UTF-8",
     CI: "true",
     DISABLE_AUTOUPDATER: "1",
+    // Per-request retries for model API errors; CLAUDE_CODE_MAX_RETRIES or a profile's env overrides it.
+    CLAUDE_CODE_MAX_RETRIES: String(config.modelErrorRetries),
   };
   if (!config.allowNonessentialTraffic) env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = "1";
   for (const name of config.agentEnvPassthrough) {

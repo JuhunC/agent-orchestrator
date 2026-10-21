@@ -238,6 +238,7 @@ class Sessions {
         exited: false,
         toolEvents: 0,
         limit: null,
+        serverError: null,
         prompt: prompts.full,
         live: profile.live,
       };

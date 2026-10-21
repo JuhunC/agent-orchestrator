@@ -40,7 +40,7 @@ Agents run Claude Code through the Agent SDK, so they use whatever the `ANTHROPI
 | A Claude subscription | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` |
 | Bedrock / Vertex / Foundry | `CLAUDE_CODE_USE_BEDROCK=1` etc. and the cloud's credentials |
 
-When the service reports a usage limit, tasks pause and continue automatically when it resets (Settings shows the limit and can clear it).
+When the service reports a usage limit, tasks pause and continue automatically when it resets (Settings shows the limit and can clear it). When it fails to answer (server errors, overloads, dropped connections), requests are retried, and a task that still fails is retried with the same session (`MODEL_ERROR_RETRIES`, default 3). Client errors such as a bad key or invalid request aren't retried.
 
 ## Agent profiles
 
@@ -162,6 +162,8 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `ADMIN_USERS` / `ADMIN_TOKEN` | | Who can sign in to the admin UI |
 | `PROFILES_DIR` | `/profiles` | Agent profiles |
 | `MAX_CONCURRENT_TASKS` | `2` | Agents working at once |
+| `MODEL_ERROR_RETRIES` | `3` | When the model API fails to answer (5xx, overloaded, dropped connection): each request is retried this many times, then a task that still fails is retried this many times, continuing its session |
+| `MODEL_ERROR_RETRY_DELAY_SECONDS` | `20` | First wait before a task retry; doubles each time |
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |
 

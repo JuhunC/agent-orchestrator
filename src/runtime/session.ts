@@ -19,6 +19,19 @@ export interface TurnOutcome {
   exited: boolean;
   toolEvents: number;
   limit: DetectedLimit | null;
+  /** The model service failed to answer (server error, overload, dropped connection); worth retrying. */
+  serverError: string | null;
+}
+
+const SERVER_ERROR = /API Error: (5\d\d|529)|overloaded_error|api_error|Internal server error|Service Unavailable|Bad Gateway|Gateway Time-?out|Connection error|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|socket hang up|fetch failed|Request timed out|network error|premature close/i;
+
+/** Why a failed turn looks like the model service's fault (and so worth retrying), or null. */
+export function serverErrorOf(text: string, apiErrors: string[]): string | null {
+  if (apiErrors.includes("server_error") || apiErrors.includes("overloaded")) {
+    return text.split("\n").find((line) => SERVER_ERROR.test(line))?.trim().slice(0, 200) || `The model service returned ${apiErrors.find((error) => error === "server_error" || error === "overloaded")}`;
+  }
+  const line = text.split("\n").find((candidate) => SERVER_ERROR.test(candidate));
+  return line ? line.trim().slice(0, 200) : null;
 }
 
 /** Messages for the agent, delivered one per task; the SDK reads it as an async iterable. */
@@ -219,11 +232,13 @@ export class AgentSession {
   private outcome(partial: Partial<TurnOutcome>, toolEvents: number, apiErrors: string[]): TurnOutcome {
     const isError = partial.isError ?? false;
     let limit: DetectedLimit | null = null;
+    let serverError: string | null = null;
     if (isError && !partial.cancelled && !partial.timedOut) {
       const text = [partial.error ?? "", partial.result ?? "", ...this.stderrTail].join("\n");
       limit = detectUsageLimit(text);
       if (this.rejectedUntil) limit = { resetAt: new Date(this.rejectedUntil), message: limit?.message ?? "Usage limit reached" };
       else if (!limit && apiErrors.includes("rate_limit")) limit = { resetAt: new Date(Date.now() + 5 * 60_000), message: "The model service is rate limiting requests" };
+      if (!limit) serverError = serverErrorOf(text, apiErrors);
     }
     return {
       result: partial.result ?? "",
@@ -236,6 +251,7 @@ export class AgentSession {
       exited: partial.exited ?? false,
       toolEvents,
       limit,
+      serverError,
     };
   }
 
