@@ -148,14 +148,22 @@ export function repoRemoteUrl(owner: string, repo: string): string {
   return `${config.github.url}/${owner}/${repo}.git`;
 }
 
-/** The installation for an account (an org or user that owns a project board). */
+/**
+ * The installation on an account (the org or user that owns a project board). Looks through the
+ * app's installations by account name, which behaves the same on github.com and GitHub
+ * Enterprise Server, and says where the app is installed when it isn't on `owner`.
+ */
 export async function findOwnerInstallation(owner: string): Promise<number> {
-  const octokit = getApp().octokit;
-  try {
-    const { data } = await octokit.request("GET /orgs/{org}/installation", { org: owner });
-    return data.id;
-  } catch {
-    const { data } = await octokit.request("GET /users/{username}/installation", { username: owner });
-    return data.id;
-  }
+  const installations = await getApp().octokit.paginate("GET /app/installations", { per_page: 100 });
+  const accountName = (installation: (typeof installations)[number]) => {
+    const account = installation.account as { login?: string; slug?: string } | null;
+    return account?.login ?? account?.slug ?? "";
+  };
+  const match = installations.find((installation) => accountName(installation).toLowerCase() === owner.toLowerCase());
+  if (match) return match.id;
+  const where = installations.map(accountName).filter(Boolean);
+  throw new Error(
+    `The GitHub App isn't installed on "${owner}", which owns this project${where.length ? ` (it's installed on: ${where.join(", ")})` : " (it isn't installed anywhere yet)"}. ` +
+      `Install it on ${owner}, or set token_env in the board file to use a token that can see the project.`,
+  );
 }

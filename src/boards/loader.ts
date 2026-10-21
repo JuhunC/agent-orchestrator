@@ -30,6 +30,8 @@ export interface Board {
   /** Where cards go when a loop guard trips. */
   needsHuman: string | null;
   pollSeconds: number;
+  /** Name of an environment variable holding a token for the project, when the App can't reach it. */
+  tokenEnv: string | null;
   limits: { movesPerIssue: number; entriesPerColumn: number; budgetUsdPerIssue: number | null };
   columns: Record<string, BoardColumn>;
   errors: string[];
@@ -70,6 +72,8 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
     };
     if (agent && !roleValue) errors.push(`${columnName}: give the agent a "role" (a library role name or text)`);
   }
+  if (data.token_env && !/^[A-Z_][A-Z0-9_]*$/i.test(String(data.token_env))) errors.push('"token_env" must be an environment variable name');
+  else if (data.token_env && !process.env[String(data.token_env)]) errors.push(`token_env: the environment variable ${data.token_env} is not set`);
   const needsHuman = data.needs_human === undefined ? "Needs human" : data.needs_human ? String(data.needs_human) : null;
   for (const column of Object.values(columns)) {
     const targets = [...(column.movesTo === "any" ? [] : column.movesTo), ...(column.onStart ? [column.onStart] : [])];
@@ -86,6 +90,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
     statusField: String(data.status_field ?? "Status"),
     needsHuman,
     pollSeconds: data.poll_seconds === undefined ? 60 : Number(data.poll_seconds),
+    tokenEnv: data.token_env ? String(data.token_env) : null,
     limits: {
       movesPerIssue: Number(limits.moves_per_issue ?? 10),
       entriesPerColumn: Number(limits.entries_per_column ?? 3),

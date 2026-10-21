@@ -14,6 +14,11 @@ const h = await startHarness({
   "library/roles/implement.md": role("ROLE_IMPLEMENT"),
   "library/roles/fix.md": role("ROLE_FIX"),
   "library/roles/verify.md": role("ROLE_VERIFY"),
+  "boards/elsewhere.yaml": `project: other-org/4
+poll_seconds: 0
+columns:
+  Todo: {}
+`,
   "boards/product.yaml": `project: acme/1
 needs_human: Needs human
 poll_seconds: 0
@@ -152,9 +157,15 @@ test("moving a card away from an agent's column stops that agent", async () => {
   assert.match(task()!.error ?? "", /moved to "Done"/);
 });
 
+test("a board on an account without the app says where the app is installed", async () => {
+  const status = (await app.inject({ method: "POST", url: "/api/boards/elsewhere/sync" })).json();
+  assert.match(status.error, /The GitHub App isn't installed on "other-org", which owns this project \(it's installed on: ACME\)/);
+  assert.ok(!fake.requests.some((request) => /\/(orgs|users)\/[^/]+\/installation/.test(request.path)), "finds installations by listing them");
+});
+
 test("the boards API shows columns, mapping and cards", async () => {
   const data = (await app.inject({ method: "GET", url: "/api/boards" })).json();
-  const board = data.boards[0];
+  const board = data.boards.find((candidate: { name: string }) => candidate.name === "product");
   assert.equal(board.name, "product");
   assert.deepEqual(board.errors, []);
   assert.equal(board.columns.find((column: { name: string }) => column.name === "Ready").model, "claude-sonnet-5-5");

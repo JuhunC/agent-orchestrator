@@ -61,7 +61,11 @@ export async function resolveProject(gh: GitHubClient, owner: string, number: nu
     const user = await gh.graphql<any>(`query ResolveUserProject($owner: String!, $number: Int!, $field: String!) { user(login: $owner) { ${fragment} } }`, { owner, number, field });
     project = user?.user?.projectV2;
   }
-  if (!project) throw new Error(`Project ${owner}/${number} not found, or the GitHub App can't see it (it needs the Projects permission)`);
+  if (!project) {
+    throw new Error(
+      `Project ${owner}/${number} not found, or it can't be read with these credentials. For an organization project, give the GitHub App the organization "Projects" permission (read and write) and accept the new permission on the installation. For a user-owned project, set token_env in the board file.`,
+    );
+  }
   if (!project.field?.id) throw new Error(`Project ${owner}/${number} has no single-select field called "${field}"`);
   return { id: project.id, title: project.title, url: project.url, fieldId: project.field.id, options: project.field.options };
 }

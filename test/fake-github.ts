@@ -182,7 +182,8 @@ export class FakeGitHub {
       this.prOpened?.(number);
       return { status: 201, body: { number, html_url: `${this.url}/acme/widgets/pull/${number}` } };
     }
-    if (method === "GET" && (path === "/orgs/acme/installation" || path === "/repos/acme/widgets/installation")) return { status: 200, body: { id: 77 } };
+    if (method === "GET" && path === "/repos/acme/widgets/installation") return { status: 200, body: { id: 77 } };
+    if (method === "GET" && path === "/app/installations") return { status: 200, body: [{ id: 77, account: { login: "ACME", type: "Organization" } }] };
     if (method === "PATCH" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/))) {
       const issue = this.issues.get(Number(match[1]))!;
       if (body.title) issue.title = body.title;

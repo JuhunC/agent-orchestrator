@@ -5,6 +5,9 @@ project: your-org/1            # org/project-number (organization projects get w
 status_field: Status           # the single-select field the board is grouped by
 needs_human: Needs human       # where loop guards send cards (add this column to the project)
 poll_seconds: 60               # also poll, in case a webhook is missed (0 to disable)
+# token_env: PROJECT_TOKEN     # only if the GitHub App can't reach the project (e.g. a
+#                              # user-owned project): name of an env var holding a token
+#                              # with project read/write access
 limits:
   moves_per_issue: 10          # agent moves per card before it goes to needs_human
   entries_per_column: 3        # times a card may come back to the same column

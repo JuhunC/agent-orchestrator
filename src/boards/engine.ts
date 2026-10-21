@@ -1,6 +1,6 @@
 import { bus } from "../bus.ts";
 import { activeBoardTasks, boardItemCost, createTask, getBoardItem, saveBoardItem, type BoardItemRow } from "../db.ts";
-import { findInstallation, findOwnerInstallation, installationClient, type GitHubClient } from "../github/app.ts";
+import { findInstallation, findOwnerInstallation, GitHubOctokit, installationClient, type GitHubClient } from "../github/app.ts";
 import { getProjectItem, listProjectItems, resolveProject, setItemStatus, type ProjectInfo, type ProjectItem } from "../github/projects.ts";
 import { postComment } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
@@ -16,7 +16,7 @@ export interface BoardStatus {
 }
 
 const statuses = new Map<string, BoardStatus>();
-const projects = new Map<string, { info: ProjectInfo; gh: GitHubClient; installationId: number; at: number }>();
+const projects = new Map<string, { info: ProjectInfo; gh: GitHubClient; at: number }>();
 const baselined = new Set<string>();
 
 export function boardStatus(name: string): BoardStatus {
@@ -33,10 +33,11 @@ async function project(board: Board): Promise<{ info: ProjectInfo; gh: GitHubCli
   const key = `${board.owner}/${board.projectNumber}/${board.statusField}`;
   const cached = projects.get(key);
   if (cached && Date.now() - cached.at < 10 * 60_000) return cached;
-  const installationId = await findOwnerInstallation(board.owner);
-  const gh = await installationClient(installationId);
+  // A board can use its own token (e.g. a user-owned project, which GitHub Apps can't reach).
+  const token = board.tokenEnv ? process.env[board.tokenEnv] : undefined;
+  const gh = token ? (new GitHubOctokit({ auth: token }) as GitHubClient) : await installationClient(await findOwnerInstallation(board.owner));
   const info = await resolveProject(gh, board.owner, board.projectNumber, board.statusField);
-  const entry = { info, gh, installationId, at: Date.now() };
+  const entry = { info, gh, at: Date.now() };
   projects.set(key, entry);
   setStatus(board.name, { project: { title: info.title, url: info.url, columns: info.options.map((option) => option.name) }, error: null });
   for (const column of Object.keys(board.columns)) {
