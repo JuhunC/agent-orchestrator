@@ -103,7 +103,16 @@ function loadLibrary(root: string): Library {
   return library;
 }
 
-const GITHUB_DEFAULTS = { comment: true, update_issue: true, review: true, push: true, pull_request: true, clone: true, finalize: true };
+const GITHUB_DEFAULTS = { comment: true, update_issue: true, review: true, push: true, pull_request: true, clone: true, finalize: true, wiki: "write" };
+
+/** wiki: true | false | read | write | none */
+function parseWiki(value: unknown, errors: string[]): "none" | "read" | "write" {
+  if (value === true || value === "write") return "write";
+  if (value === false || value === "none" || value === null) return "none";
+  if (value === "read") return "read";
+  errors.push(`github.wiki must be write, read or none (got ${JSON.stringify(value)})`);
+  return "none";
+}
 
 export function parseEffort(value: unknown, errors: string[], field = "effort"): Effort | null {
   if (value === undefined || value === null || value === "") return null;
@@ -216,6 +225,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
       pullRequest: github.pull_request !== false,
       clone: github.clone !== false,
       finalize: github.finalize !== false,
+      wiki: parseWiki(github.wiki, errors),
     },
     maxTurns: number("max_turns"),
     maxBudgetUsd: number("max_budget_usd"),

@@ -80,6 +80,7 @@ github:
   update_issue: true           # update_issue (title, description, labels)
   review: true                 # submit_review
   finalize: true               # push and open the PR if the agent forgot
+  wiki: write                  # wiki pages: write, read or none (true/false work too)
 max_turns: 300
 max_budget_usd: 20
 timeout_minutes: 90
@@ -129,6 +130,10 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 | `update_issue` | edit the issue's title, description and labels |
 | `submit_review` | approve, comment on or request changes to the PR (never merges) |
 | `move_to_column` | board tasks: move the card on, with a handoff note for the next stage |
+| `list_wiki_pages`, `read_wiki_page` | the GitHub wiki of this repo, or of another repo the App can access |
+| `write_wiki_page`, `delete_wiki_page` | create, replace or delete a page in this repo's wiki, committed as the App |
+
+**Wikis** have no REST API: each is a git repository (`<repo>.wiki.git`), so the orchestrator keeps a checkout under `DATA_DIR/wikis` and pushes page changes with the installation token (the App's `contents: write` permission covers it). GitHub creates a wiki's repository only when its first page is saved, so turn on Wikis in the repository settings and create the first page in the web UI once. If someone edits the wiki at the same moment, the write is redone on top of their version.
 
 Agents push only to `agent/<name>/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to the default branch.
 

@@ -45,6 +45,8 @@ export interface GithubPermissions {
   clone: boolean;
   /** Push and open the PR for the agent if it finished with work it didn't publish. */
   finalize: boolean;
+  /** GitHub wiki pages: read any wiki the app can see; write only the task repository's. */
+  wiki: "none" | "read" | "write";
 }
 
 /** One agent: profiles/agents/<name>/agent.md plus its own skills/ and mcp.json. */

@@ -7,6 +7,7 @@ import { installationToken, repoRemoteUrl, type GitHubClient } from "../github/a
 import { ciStatus, fetchThread, findOpenPull, openPull, postComment, updatePull, type ThreadContext } from "../github/threads.ts";
 import { errorMessage } from "../log.ts";
 import type { Profile } from "../profiles/types.ts";
+import { listWikiPages, readWikiPage, writeWikiPage } from "../github/wiki.ts";
 import { git, GitError } from "../runner/git.ts";
 import { mention } from "../runner/progress.ts";
 import type { EventKind, Task } from "../types.ts";
@@ -297,6 +298,85 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             excludeFromGit(ctx.workspace.dir, "/.deps/");
             ctx.onEvent("tool", `Cloned ${args.repository}`);
             return ok(`Cloned ${args.repository} into .deps/${owner}/${name} (read-only reference; changes there are not pushed).`);
+          })(),
+      ),
+    );
+  }
+
+  if (profile.github.wiki !== "none") {
+    const repository = z
+      .string()
+      .regex(/^[\w.-]+\/[\w.-]+$/)
+      .optional()
+      .describe("owner/name of another repository whose wiki to read; defaults to this task's repository");
+    const where = (ctx: ToolContext, value?: string) => {
+      const [owner, repo] = (value ?? `${ctx.task.owner}/${ctx.task.repo}`).split("/") as [string, string];
+      return { owner, repo };
+    };
+    tools.push(
+      tool("list_wiki_pages", "List the pages of the repository's GitHub wiki (title, file, size, link).", { repository }, (args) =>
+        withContext(async (ctx) => {
+          const { owner, repo } = where(ctx, args.repository);
+          const pages = await listWikiPages(ctx.task.installationId, owner, repo);
+          if (!pages.length) return ok(`The ${owner}/${repo} wiki has no pages.`);
+          return ok(pages.map((page) => `- ${page.title} (${page.file}, ${page.bytes} bytes) ${page.url}`).join("\n"));
+        })(),
+      ),
+      tool(
+        "read_wiki_page",
+        "Read a page of the repository's GitHub wiki, by title or file name (e.g. \"Home\", \"Release notes\", \"Release-notes.md\").",
+        { page: z.string().min(1).describe("Page title or file name"), repository },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo } = where(ctx, args.repository);
+            const { page, content, truncated } = await readWikiPage(ctx.task.installationId, owner, repo, args.page);
+            return ok(`# ${page.title}\n${page.url} (${page.file})\n\n${content}${truncated ? "\n\n…(cut off: the page is longer)" : ""}`);
+          })(),
+      ),
+    );
+  }
+  if (profile.github.wiki === "write") {
+    const wikiTarget = (ctx: ToolContext) => `${ctx.task.owner}/${ctx.task.repo}`;
+    tools.push(
+      tool(
+        "write_wiki_page",
+        "Create or replace a page in this repository's GitHub wiki and publish it. Write the whole page (Markdown); it replaces what's there, so read it first when editing.",
+        {
+          page: z.string().min(1).describe("Page title, e.g. \"Getting started\" (saved as Getting-started.md); an existing page keeps its file"),
+          content: z.string().describe("The full page content"),
+          message: z.string().optional().describe("Commit message for the wiki's history"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const result = await writeWikiPage(
+              ctx.task.installationId,
+              ctx.task.owner,
+              ctx.task.repo,
+              args.page,
+              args.content,
+              args.message?.trim() || `${ctx.profile.name}: ${args.page} (#${ctx.task.threadNumber})`,
+            );
+            if (!result.changed) return ok(`"${result.page.title}" already had that content; nothing changed. ${result.page.url}`);
+            ctx.onEvent("tool", `${result.created ? "Created" : "Updated"} wiki page ${result.page.title}`);
+            return ok(`${result.created ? "Created" : "Updated"} "${result.page.title}" in the ${wikiTarget(ctx)} wiki: ${result.page.url}`);
+          })(),
+      ),
+      tool(
+        "delete_wiki_page",
+        "Delete a page from this repository's GitHub wiki.",
+        { page: z.string().min(1).describe("Page title or file name"), message: z.string().optional() },
+        (args) =>
+          withContext(async (ctx) => {
+            const result = await writeWikiPage(
+              ctx.task.installationId,
+              ctx.task.owner,
+              ctx.task.repo,
+              args.page,
+              null,
+              args.message?.trim() || `${ctx.profile.name}: delete ${args.page} (#${ctx.task.threadNumber})`,
+            );
+            ctx.onEvent("tool", `Deleted wiki page ${result.page.title}`);
+            return ok(`Deleted "${result.page.title}" from the ${wikiTarget(ctx)} wiki.`);
           })(),
       ),
     );

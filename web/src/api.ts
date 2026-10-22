@@ -22,6 +22,7 @@ export interface GithubPermissions {
   pullRequest: boolean;
   clone: boolean;
   finalize: boolean;
+  wiki: "none" | "read" | "write";
 }
 
 /** An agent profile (profiles/agents/<name>/agent.md). */

@@ -31,6 +31,10 @@ const GITHUB_TOOL_LABELS: Record<string, string> = {
   move_to_column: "Moving the card",
   update_issue: "Updating the issue",
   submit_review: "Reviewing the pull request",
+  list_wiki_pages: "Listing wiki pages",
+  read_wiki_page: "Reading a wiki page",
+  write_wiki_page: "Writing a wiki page",
+  delete_wiki_page: "Deleting a wiki page",
 };
 
 /** A one-line, human description of a Claude Code tool call, for progress comments and the UI. */
