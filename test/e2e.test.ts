@@ -49,6 +49,7 @@ You are limited.
 `,
     "agents/flaky/agent.md": agentFile("aorch-flaky", ""),
     "agents/flaky2/agent.md": agentFile("aorch-flaky2", 'env:\n  CLAUDE_CODE_MAX_RETRIES: "0"\n'),
+    "agents/second/agent.md": agentFile("aorch-second", ""),
     "library/skills/shipping-changes/SKILL.md": `---
 name: shipping-changes
 description: How to ship changes with the github tools
@@ -63,7 +64,7 @@ You write tests.
 `,
     "library/mcp.json": JSON.stringify({ mcpServers: { docs: { command: process.execPath, args: [docsServer], env: { DOCS_TOKEN: "${DOCS_TOKEN}" }, alwaysLoad: true } } }),
   },
-  { DOCS_TOKEN: "docs-secret-value", MODEL_ERROR_RETRY_DELAY_SECONDS: "1" },
+  { DOCS_TOKEN: "docs-secret-value", MODEL_ERROR_RETRY_DELAY_SECONDS: "1", MAX_PULL_REQUESTS_PER_ISSUE: "1" },
 );
 after(() => h.stop());
 const { db, app, fake, model, waitForTask } = h;
@@ -151,6 +152,39 @@ test("work an agent forgot to publish is pushed and opened as a PR for it", asyn
   assert.equal(h.showRemote("agent/coder/issue-10:NOTES.md"), "forgotten");
   assert.ok(task.prNumber, "PR opened by the safety net");
   assert.ok(db.listEvents(task.id).some((event) => event.message === "Publishing changes the agent left unpushed"));
+});
+
+const pullCount = () => [...fake.issues.values()].filter((issue) => issue.pull).length;
+
+test("a second agent can't open another PR once the issue is at MAX_PULL_REQUESTS_PER_ISSUE", async () => {
+  play(
+    [
+      bash("echo extra > EXTRA.md"),
+      { tool: "mcp__github__commit_and_push", input: { message: "Add EXTRA.md" } },
+      { tool: "mcp__github__open_pull_request", input: { title: "Extra", body: "Adds EXTRA.md." } },
+      { text: "Pushed EXTRA.md; no PR because of the limit." },
+    ],
+    (request) => request.prompt.includes("add an extra file"),
+  );
+  const before = pullCount();
+  const task = await waitForTask((await h.commentMention(1, "@aorch-second add an extra file")).id);
+  assert.equal(task.status, "succeeded", task.error ?? "");
+  assert.equal(h.showRemote("agent/second/issue-1:EXTRA.md"), "extra", "the branch is still pushed");
+  assert.equal(pullCount(), before, "no new PR");
+  assert.ok(!task.prNumber);
+  const toolResults = JSON.stringify(requestsFor("add an extra file").at(-1)!.body.messages);
+  assert.match(toolResults, /Didn't open a pull request: issue #1 already has 1 from agents \(#2\) and MAX_PULL_REQUESTS_PER_ISSUE is 1/);
+  assert.match(toolResults, /Don't try again/);
+});
+
+test("the end-of-task publish step respects MAX_PULL_REQUESTS_PER_ISSUE without failing the task", async () => {
+  play([bash("echo more > MORE.md"), { text: "Wrote MORE.md." }], (request) => request.prompt.includes("write more notes"));
+  const before = pullCount();
+  const task = await waitForTask((await h.commentMention(10, "@aorch-second write more notes")).id);
+  assert.equal(task.status, "succeeded", task.error ?? "");
+  assert.equal(h.showRemote("agent/second/issue-10:MORE.md"), "more", "the left-behind work is still pushed");
+  assert.equal(pullCount(), before, "no new PR");
+  assert.ok(db.listEvents(task.id).some((event) => /Didn't open a pull request: issue #10 already has 1/.test(event.message)));
 });
 
 test("a read-only agent doesn't get push tools or edit tools", async () => {
@@ -269,7 +303,7 @@ test("the admin API lists profiles and edits profile files with validation", asy
   const agents = (await app.inject({ method: "GET", url: "/api/agents" })).json();
   assert.deepEqual(
     agents.agents.map((agent: { name: string }) => agent.name),
-    ["coder", "flaky", "flaky2", "limited", "reviewer"],
+    ["coder", "flaky", "flaky2", "limited", "reviewer", "second"],
   );
   assert.deepEqual(agents.library.skills.map((skill: { name: string }) => skill.name), ["shipping-changes"]);
 

@@ -114,6 +114,8 @@ export const config = {
   // times by the orchestrator, waiting MODEL_ERROR_RETRY_DELAY_SECONDS (doubling) in between.
   modelErrorRetries: Math.max(0, int("MODEL_ERROR_RETRIES", 3)),
   modelErrorRetryDelaySeconds: Math.max(1, int("MODEL_ERROR_RETRY_DELAY_SECONDS", 20)),
+  // Most pull requests agents may open for one issue (or discussion), open or closed. 0 = no limit.
+  maxPullRequestsPerIssue: Math.max(0, int("MAX_PULL_REQUESTS_PER_ISSUE", 0)),
 
   webhookProxyUrl: env("WEBHOOK_PROXY_URL"),
   // Testing hook: clone from `file:///…/{owner}/{repo}.git` instead of GITHUB_URL.

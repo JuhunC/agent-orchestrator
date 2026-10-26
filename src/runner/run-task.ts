@@ -8,7 +8,7 @@ import { installationClient, type GitHubClient } from "../github/app.ts";
 import { editComment, fetchThread, postComment, type ThreadContext } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
-import { commitAndPush, openOrUpdatePullRequest, type BoardContext, type ToolContext } from "../runtime/github-tools.ts";
+import { commitAndPush, openOrUpdatePullRequest, PullRequestLimitError, type BoardContext, type ToolContext } from "../runtime/github-tools.ts";
 import { sessions } from "../runtime/manager.ts";
 import { agentEnv, taskEnv } from "../runtime/options.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
@@ -218,7 +218,10 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         onEvent("system", "Publishing changes the agent left unpushed");
         const pushed = await commitAndPush(context, `${profile.name}: ${thread.title}`.slice(0, 72));
         if (pushed.pushed && task.threadKind !== "pull" && profile.github.pullRequest && !state.prNumber) {
-          await openOrUpdatePullRequest(context, thread.title, outcome.result || "_No summary from the agent._");
+          await openOrUpdatePullRequest(context, thread.title, outcome.result || "_No summary from the agent._").catch((error) => {
+            if (!(error instanceof PullRequestLimitError)) throw error;
+            onEvent("system", error.message);
+          });
         }
       } else if (left.dirty || left.unpushed) {
         onEvent("system", "The agent left changes it didn't push");

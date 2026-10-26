@@ -191,6 +191,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MAX_CONCURRENT_TASKS` | `2` | Agents working at once |
 | `MODEL_ERROR_RETRIES` | `3` | When the model API fails to answer (5xx, overloaded, dropped connection): each request is retried this many times, then a task that still fails is retried this many times, continuing its session |
 | `MODEL_ERROR_RETRY_DELAY_SECONDS` | `20` | First wait before a task retry; doubles each time |
+| `MAX_PULL_REQUESTS_PER_ISSUE` | `0` (no limit) | Most pull requests agents may open for one issue, counting closed ones. Past it, agents still push their branch and can update their open PR, but no new PR is opened |
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |
 

@@ -2,7 +2,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { linkThreads } from "../db.ts";
+import { config } from "../config.ts";
+import { linkedThreads, linkThreads } from "../db.ts";
 import { installationToken, repoRemoteUrl, type GitHubClient } from "../github/app.ts";
 import { ciStatus, fetchThread, findOpenPull, openPull, postComment, updatePull, type ThreadContext } from "../github/threads.ts";
 import { errorMessage } from "../log.ts";
@@ -78,22 +79,51 @@ export async function commitAndPush(ctx: ToolContext, message: string): Promise<
   return { pushed: ahead, sha: await git(dir, ["rev-parse", "HEAD"]), files };
 }
 
-/** Opens the task's pull request, or updates it if one is already open for the branch. */
+/** Thrown instead of opening a pull request when the issue already has MAX_PULL_REQUESTS_PER_ISSUE. */
+export class PullRequestLimitError extends Error {}
+
+// One PR check-and-open at a time per thread, so agents finishing together can't both slip under the limit.
+const pullLocks = new Map<string, Promise<unknown>>();
+function oneAtATime<T>(key: string, run: () => Promise<T>): Promise<T> {
+  const next = (pullLocks.get(key) ?? Promise.resolve()).catch(() => undefined).then(run);
+  pullLocks.set(key, next);
+  void next.catch(() => undefined).finally(() => {
+    if (pullLocks.get(key) === next) pullLocks.delete(key);
+  });
+  return next;
+}
+
+/**
+ * Opens the task's pull request, or updates it if one is already open for the branch.
+ * Throws PullRequestLimitError rather than open one past MAX_PULL_REQUESTS_PER_ISSUE.
+ */
 export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, body: string, draft = false): Promise<{ number: number; url: string; created: boolean }> {
   const { task, thread, workspace, gh, profile } = ctx;
   const link = thread.kind === "issue" ? `Closes #${thread.number}` : `From discussion #${thread.number}: ${thread.url}`;
   const footer = `<sub>Opened by **${profile.name}** for ${mention(task.requestedBy)} · orchestrator task #${task.id}. Mention @${profile.handle} here to ask for changes.</sub>`;
   const fullBody = [body.trim(), "", link, "", footer].join("\n");
-  const existing = await findOpenPull(gh, task.owner, task.repo, workspace.branch);
-  let pr: { number: number; url: string; created: boolean };
-  if (existing) {
-    await updatePull(gh, task.owner, task.repo, existing.number, title, fullBody);
-    pr = { ...existing, created: false };
-  } else {
-    const created = await openPull(gh, { owner: task.owner, repo: task.repo, head: workspace.branch, base: workspace.baseBranch, title, body: fullBody, draft });
-    pr = { ...created, created: true };
-  }
-  linkThreads(task.owner, task.repo, { kind: thread.kind, number: thread.number }, { kind: "pull", number: pr.number });
+  const source = { owner: task.owner, repo: task.repo, kind: thread.kind, number: thread.number };
+  const pr = await oneAtATime(`${task.owner}/${task.repo}/${thread.kind}/${thread.number}`.toLowerCase(), async () => {
+    let result: { number: number; url: string; created: boolean };
+    const existing = await findOpenPull(gh, task.owner, task.repo, workspace.branch);
+    if (existing) {
+      await updatePull(gh, task.owner, task.repo, existing.number, title, fullBody);
+      result = { ...existing, created: false };
+    } else {
+      const limit = config.maxPullRequestsPerIssue;
+      const opened = linkedThreads(source).filter((linked) => linked.kind === "pull");
+      if (limit > 0 && opened.length >= limit) {
+        const list = opened.map((linked) => `#${linked.number}`).join(", ");
+        throw new PullRequestLimitError(
+          `Didn't open a pull request: ${thread.kind} #${thread.number} already has ${opened.length} from agents (${list}) and MAX_PULL_REQUESTS_PER_ISSUE is ${limit}. The commits are on the branch ${workspace.branch}.`,
+        );
+      }
+      const created = await openPull(gh, { owner: task.owner, repo: task.repo, head: workspace.branch, base: workspace.baseBranch, title, body: fullBody, draft });
+      result = { ...created, created: true };
+    }
+    linkThreads(task.owner, task.repo, { kind: thread.kind, number: thread.number }, { kind: "pull", number: result.number });
+    return result;
+  });
   ctx.onPullRequest(pr);
   return pr;
 }
@@ -179,7 +209,14 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             const token = await installationToken(ctx.task.installationId);
             const remote = await git(ctx.workspace.dir, ["ls-remote", "--heads", "origin", ctx.workspace.branch], { token });
             if (!remote.trim()) return fail(`The branch ${ctx.workspace.branch} isn't on GitHub yet. Call commit_and_push first.`);
-            const pr = await openOrUpdatePullRequest(ctx, args.title, args.body, args.draft);
+            let pr: Awaited<ReturnType<typeof openOrUpdatePullRequest>>;
+            try {
+              pr = await openOrUpdatePullRequest(ctx, args.title, args.body, args.draft);
+            } catch (error) {
+              if (!(error instanceof PullRequestLimitError)) throw error;
+              ctx.onEvent("system", error.message);
+              return fail(`${error.message} Don't try again; say in your summary that the work is on that branch.`);
+            }
             ctx.onEvent("tool", `${pr.created ? "Opened" : "Updated"} pull request #${pr.number}`);
             return ok(`${pr.created ? "Opened" : "Updated"} pull request #${pr.number}: ${pr.url}`);
           })(),
