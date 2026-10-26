@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { delimiter, join, resolve } from "node:path";
 
 function env(name: string, fallback = ""): string {
   const value = process.env[name];
@@ -19,6 +20,14 @@ function list(name: string): string[] {
 
 function trimSlash(url: string): string {
   return url.replace(/\/+$/, "");
+}
+
+/** A path is resolved against the working directory; a bare command name is looked up on PATH. */
+function executable(name: string): string {
+  const value = env(name);
+  if (!value || value.includes("/")) return value && resolve(value);
+  const dir = (process.env.PATH ?? "").split(delimiter).find((entry) => entry && existsSync(join(entry, value)));
+  return dir ? join(dir, value) : value;
 }
 
 const port = int("PORT", 3000);
@@ -114,6 +123,9 @@ export const config = {
   // times by the orchestrator, waiting MODEL_ERROR_RETRY_DELAY_SECONDS (doubling) in between.
   modelErrorRetries: Math.max(0, int("MODEL_ERROR_RETRIES", 3)),
   modelErrorRetryDelaySeconds: Math.max(1, int("MODEL_ERROR_RETRY_DELAY_SECONDS", 20)),
+  // What agents run instead of the Claude Code bundled with the Agent SDK. It must take the same
+  // flags and speak the same stream-json protocol. Empty = the bundled one.
+  claudeCodeExecutable: executable("CLAUDE_CODE_EXECUTABLE"),
   // Most pull requests agents may open for one issue (or discussion), open or closed. 0 = no limit.
   maxPullRequestsPerIssue: Math.max(0, int("MAX_PULL_REQUESTS_PER_ISSUE", 0)),
 

@@ -40,6 +40,8 @@ Agents run Claude Code through the Agent SDK, so they use whatever the `ANTHROPI
 | A Claude subscription | `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token` |
 | Bedrock / Vertex / Foundry | `CLAUDE_CODE_USE_BEDROCK=1` etc. and the cloud's credentials |
 
+To run your own build of Claude Code instead of the one bundled with the SDK, set `CLAUDE_CODE_EXECUTABLE` to its path (or a command on `PATH`). The SDK starts it with the same flags it gives Claude Code (`--output-format stream-json --input-format stream-json`, `--resume`, `--mcp-config` and so on), so it must accept them and speak the same protocol on stdin/stdout. Paths ending in `.js`/`.mjs` run with Node; anything else (a binary, a script with a `#!` line) runs directly. In Docker, mount it into the container or add it to an image built on this one.
+
 When the service reports a usage limit, tasks pause and continue automatically when it resets (Settings shows the limit and can clear it). When it fails to answer (server errors, overloads, dropped connections), requests are retried, and a task that still fails is retried with the same session (`MODEL_ERROR_RETRIES`, default 3). Client errors such as a bad key or invalid request aren't retried.
 
 ## Agent profiles
@@ -191,6 +193,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MAX_CONCURRENT_TASKS` | `2` | Agents working at once |
 | `MODEL_ERROR_RETRIES` | `3` | When the model API fails to answer (5xx, overloaded, dropped connection): each request is retried this many times, then a task that still fails is retried this many times, continuing its session |
 | `MODEL_ERROR_RETRY_DELAY_SECONDS` | `20` | First wait before a task retry; doubles each time |
+| `CLAUDE_CODE_EXECUTABLE` | bundled | A Claude Code-compatible executable agents run instead of the SDK's own (see [The model service](#the-model-service)) |
 | `MAX_PULL_REQUESTS_PER_ISSUE` | `0` (no limit) | Most pull requests agents may open for one issue, counting closed ones. Past it, agents still push their branch and can update their open PR, but no new PR is opened |
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |

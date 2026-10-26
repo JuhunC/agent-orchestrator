@@ -132,6 +132,7 @@ export function buildOptions(setup: SessionSetup): Options {
     disallowedTools: profile.toolsDeny,
     additionalDirectories: [],
   };
+  if (config.claudeCodeExecutable) options.pathToClaudeCodeExecutable = config.claudeCodeExecutable;
   if (profile.toolsAllow) options.tools = profile.toolsAllow;
   if (model) options.model = model;
   if (effort) options.effort = effort;

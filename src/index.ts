@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { config } from "./config.ts";
 import { getCredentials } from "./github/app.ts";
 import { errorMessage, log } from "./log.ts";
@@ -33,7 +33,11 @@ async function main(): Promise<void> {
     url: config.publicUrl,
     github: config.github.url,
     githubApp: getCredentials() ? "configured" : "not configured — open the admin UI → Settings",
+    claudeCode: config.claudeCodeExecutable || "bundled with the Agent SDK",
   });
+  if (config.claudeCodeExecutable && !existsSync(config.claudeCodeExecutable)) {
+    log.warn("CLAUDE_CODE_EXECUTABLE doesn't exist; agent tasks will fail until it does", { path: config.claudeCodeExecutable });
+  }
 
   if (config.webhookProxyUrl) {
     const { default: SmeeClient } = await import("smee-client");
