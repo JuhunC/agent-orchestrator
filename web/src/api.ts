@@ -23,6 +23,10 @@ export interface GithubPermissions {
   clone: boolean;
   finalize: boolean;
   wiki: "none" | "read" | "write";
+  subIssues: "none" | "read" | "write";
+  relations: boolean;
+  mergeIntoParent: boolean;
+  parentBranch: boolean;
 }
 
 /** An agent profile (profiles/agents/<name>/agent.md). */
@@ -166,6 +170,8 @@ export interface BoardCard {
   status: string | null;
   moves: number;
   entries: Record<string, number>;
+  /** Project field values as last seen (dates YYYY-MM-DD). */
+  fields?: { start?: string | null; end?: string | null; estimate?: number | null };
   updatedAt: string;
 }
 
@@ -179,8 +185,12 @@ export interface BoardInfo {
   limits: { movesPerIssue: number; entriesPerColumn: number; budgetUsdPerIssue: number | null };
   columns: BoardColumnInfo[];
   workTypes: { name: string; labels: string[]; forbid: string[] }[];
+  /** Where agents' new sub-issues land, and where a parent's agent may move its sub-issues. */
+  subIssues: { column: string | null; movesTo: string[] };
+  /** Project fields tracked per card, and the columns that fill in the dates. */
+  fields: { start: string | null; end: string | null; estimate: string | null; startOn: string[]; endOn: string[] };
   errors: string[];
-  status: { project:{ title: string; url: string; columns: string[] } | null; lastSyncAt: string | null; error: string | null };
+  status: { project: { title: string; url: string; columns: string[] } | null; lastSyncAt: string | null; error: string | null };
   items: BoardCard[];
 }
 
@@ -189,6 +199,33 @@ export interface BoardsResponse {
   errors: string[];
   agents: string[];
   roles: string[];
+}
+
+/** One option of a profile file, from /api/profiles/reference. */
+export interface ConfigOption {
+  key: string;
+  type: string;
+  default?: string;
+  values?: string[];
+  source?: "skills" | "mcp" | "roles" | "agents" | "groups" | "agentRefs";
+  required?: boolean;
+  description: string;
+  example?: string;
+}
+
+export interface ConfigFileDoc {
+  id: string;
+  title: string;
+  pattern: string;
+  format: "markdown" | "yaml" | "json";
+  summary: string;
+  body?: string;
+  options: ConfigOption[];
+}
+
+export interface ConfigReference {
+  files: ConfigFileDoc[];
+  values: Record<NonNullable<ConfigOption["source"]>, string[]>;
 }
 
 export interface TaskEvent {

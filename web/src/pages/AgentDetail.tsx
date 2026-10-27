@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { api, useApi, type AgentsResponse, type ModelInfo } from "../api.ts";
+import { api, useApi, type AgentsResponse, type GithubPermissions, type ModelInfo } from "../api.ts";
 import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
@@ -27,6 +27,24 @@ const MCP_TEMPLATE = `{
 }
 `;
 
+/** What the agent may do on GitHub, as short labels. */
+export function githubPermissions(github: GithubPermissions): string[] {
+  const on = (allowed: boolean, label: string) => (allowed ? [label] : []);
+  return [
+    ...on(github.comment, "comment"),
+    ...on(github.updateIssue, "edit issues"),
+    ...on(github.review, "review"),
+    ...on(github.push, "push"),
+    ...on(github.pullRequest, "open PRs"),
+    ...on(github.clone, "clone"),
+    ...on(github.finalize, "finalize"),
+    ...(github.wiki !== "none" ? [`wiki: ${github.wiki}`] : []),
+    ...(github.subIssues !== "none" ? [`sub-issues: ${github.subIssues}`] : []),
+    ...on(github.relations, "link issues"),
+    ...on(github.mergeIntoParent, "merge into parent"),
+  ];
+}
+
 export function AgentDetail({ name }: { name: string }) {
   const { data, reload } = useApi<AgentsResponse>("/api/agents", (message) => message.type === "agents");
   const modelInfo = useApi<ModelInfo>("/api/model").data;
@@ -37,9 +55,7 @@ export function AgentDetail({ name }: { name: string }) {
   const agent = data.agents.find((candidate) => candidate.name === name);
   if (!agent) return <Empty>No agent called {name}. It may have been deleted.</Empty>;
   const base = `agents/${agent.name}`;
-  const permissions = Object.entries(agent.github)
-    .filter(([, allowed]) => allowed)
-    .map(([permission]) => permission);
+  const permissions = githubPermissions(agent.github);
 
   return (
     <div className="stack">
@@ -108,6 +124,14 @@ export function AgentDetail({ name }: { name: string }) {
             <dt>GitHub</dt>
             <dd>
               <Chips items={permissions} empty="read only" />
+            </dd>
+            <dt>Sub-issues</dt>
+            <dd>
+              {agent.github.parentBranch ? (
+                <span title="github.parent_branch">branch from and merge into the parent issue's branch</span>
+              ) : (
+                <span className="meta" title="github.parent_branch: false">merge into the default branch, like any issue</span>
+              )}
             </dd>
             <dt>Limits</dt>
             <dd>

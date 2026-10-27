@@ -47,6 +47,14 @@ export interface GithubPermissions {
   finalize: boolean;
   /** GitHub wiki pages: read any wiki the app can see; write only the task repository's. */
   wiki: "none" | "read" | "write";
+  /** Sub-issues of the issue it works on: read = list them and check their work is merged; write = also create them (and move their cards). */
+  subIssues: "none" | "read" | "write";
+  /** link_issue: add or remove blocked-by, blocking, parent and sub-issue links between issues. */
+  relations: boolean;
+  /** merge_into_parent: merge a sub-issue's work into its parent issue's branch (never the default branch). */
+  mergeIntoParent: boolean;
+  /** On a sub-issue, branch from and open the pull request against the parent issue's branch. */
+  parentBranch: boolean;
 }
 
 /** One agent: profiles/agents/<name>/agent.md plus its own skills/ and mcp.json. */

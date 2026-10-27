@@ -980,3 +980,110 @@ blockquote {
     margin-left: 4px;
   }
 }
+
+/* ---------- profile file editor: options reference ---------- */
+.editor-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+.reference {
+  width: 380px;
+  max-height: 640px;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.reference-text {
+  margin: 0;
+  color: var(--muted);
+}
+.reference-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.reference-heading {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.reference-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.reference-option > .row > code {
+  font-weight: 600;
+  color: var(--text);
+}
+.reference-values {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.reference-values code {
+  padding: 0 5px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 12px;
+}
+.reference-example {
+  margin: 0;
+  padding: 6px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1000px) {
+  .editor-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .reference {
+    width: auto;
+    max-height: 420px;
+  }
+}
+
+/* ---------- board move map ---------- */
+.board-map {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.board-map-scroll {
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+.board-map-scroll svg {
+  display: block;
+  font-family: inherit;
+}
+.board-map-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.board-map-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}

@@ -4,11 +4,13 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import type { HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Board } from "../boards/loader.ts";
-import { EVIDENCE_TEXT, FIELD_HINTS, forbids, isTestCommand, missingFields, workTypeFor, type ColumnRules, type HandoffFields, type WorkType } from "../boards/rules.ts";
+import { CARD_EVIDENCE, EVIDENCE_TEXT, FIELD_HINTS, forbids, isTestCommand, missingFields, workTypeFor, type ColumnRules, type HandoffFields, type WorkType } from "../boards/rules.ts";
+import { issueBranch, isIssueBranch, refText, type IssueRef } from "../github/relations.ts";
 import { findOpenPull } from "../github/threads.ts";
 import type { GitHubClient } from "../github/app.ts";
 import { git } from "../runner/git.ts";
 import type { ToolContext } from "./github-tools.ts";
+import { checkSubIssues, fetchBranch, isAncestor, subIssueProblems } from "./sub-issues.ts";
 
 /** A shell command that looked like a test run, as the orchestrator saw it finish. */
 export interface TestRun {
@@ -98,6 +100,17 @@ async function evidenceProblems(ctx: ToolContext, rules: ColumnRules): Promise<s
           : await findOpenPull(ctx.gh, owner, repo, branch);
       if (!pr) problems.push(`${need}: there's no open pull request for ${branch}. Push with commit_and_push, then call open_pull_request.`);
       else if (pr.headSha !== head) problems.push(`${need}: pull request #${pr.number} is at ${pr.headSha.slice(0, 10)}, but your checkout is at ${head.slice(0, 10)}. Push your commits with commit_and_push.`);
+    } else if (item === "merged") {
+      const base = ctx.workspace.baseBranch;
+      const baseSha = await fetchBranch(ctx, base);
+      const sha = await git(dir, ["rev-parse", "HEAD"]);
+      const how = ctx.profile.github.mergeIntoParent && isIssueBranch(base) ? "Push it with commit_and_push, then call merge_into_parent." : "It counts once your pull request is merged (with a merge commit).";
+      if (!baseSha) problems.push(`${need}: \`${base}\` isn't on GitHub yet. ${how}`);
+      else if (!(await isAncestor(dir, sha, baseSha))) problems.push(`${need}: your branch (at ${sha.slice(0, 10)}) isn't merged into \`${base}\` yet. ${how}`);
+    } else if (item === "sub_issues") {
+      const { owner, repo, threadNumber } = ctx.task;
+      const check = await checkSubIssues(ctx, threadNumber, issueBranch(threadNumber));
+      for (const problem of subIssueProblems(check, owner, repo)) problems.push(`${need}: ${problem}.${ctx.profile.github.subIssues !== "none" ? " See list_sub_issues." : ""}`);
     } else if (item === "pushed") {
       if (!ctx.pushes) problems.push(`${need}: you haven't pushed anything in this task. Make the change, then call commit_and_push.`);
     } else if (item === "tests") {
@@ -112,6 +125,45 @@ async function evidenceProblems(ctx: ToolContext, rules: ColumnRules): Promise<s
       if (!verdict) problems.push(`${need}: you haven't submitted a verdict in this task. Call submit_review with ${item === "approval" ? "APPROVE" : "APPROVE or REQUEST_CHANGES"}.`);
       else if (item === "approval" && verdict.event !== "APPROVE") problems.push(`${need}: your last review requested changes, so this card can't move here. Move it where changes get made instead.`);
       else if (verdict.sha !== head) problems.push(`${need}: you reviewed ${verdict.sha.slice(0, 10)}, but the checkout is now at ${head.slice(0, 10)}. Review it again.`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * Why a parent's agent may not move one of its sub-issue cards to `target` yet. Only evidence about
+ * the card itself can be checked (CARD_EVIDENCE); a column that needs the other card's agent to
+ * have run tests or reviewed can't be entered this way.
+ */
+export async function cardMoveProblems(ctx: ToolContext, card: IssueRef, target: string, fields: HandoffFields | null): Promise<string[]> {
+  const board = ctx.board?.board;
+  if (!board || target === board.needsHuman) return [];
+  const { owner, repo } = ctx.task;
+  const ref = refText(card, owner, repo);
+  const problems: string[] = [];
+  const workType = workTypeFor(board.workTypes, card.labels);
+  if (workType && forbids(workType.type, target)) problems.push(`${ref} is a ${workType.type.name} (label "${workType.label}"), and ${workType.type.name} cards can't go to "${target}"`);
+  const rules = board.columns[target]?.rules;
+  if (rules && fields) {
+    for (const field of missingFields(rules.handoffRequired, fields)) problems.push(`handoff field "${field}" is missing: pass fields.${field} (${FIELD_HINTS[field]})`);
+  }
+  const branch = issueBranch(card.number);
+  for (const item of rules?.evidence ?? []) {
+    const need = `evidence "${item}" for ${ref}`;
+    if (!CARD_EVIDENCE.includes(item)) {
+      problems.push(`${need}: only the agent working on ${ref} can show ${EVIDENCE_TEXT[item]}, so you can't move it to "${target}". Move it where its own agent works instead.`);
+    } else if (item === "pull_request") {
+      const [pr, head] = await Promise.all([findOpenPull(ctx.gh, owner, repo, branch), fetchBranch(ctx, branch)]);
+      if (!pr) problems.push(`${need}: there's no open pull request for \`${branch}\``);
+      else if (pr.headSha !== head) problems.push(`${need}: pull request #${pr.number} doesn't have the latest commit of \`${branch}\``);
+    } else if (item === "merged") {
+      const into = issueBranch(ctx.task.threadNumber);
+      const [head, intoSha] = [await fetchBranch(ctx, branch), await fetchBranch(ctx, into)];
+      if (!head) problems.push(`${need}: ${ref} has no branch (\`${branch}\`) yet`);
+      else if (!intoSha || !(await isAncestor(ctx.workspace.dir, head, intoSha))) problems.push(`${need}: \`${branch}\` (at ${head.slice(0, 10)}) isn't merged into \`${into}\` yet`);
+    } else {
+      const check = await checkSubIssues(ctx, card.number, branch);
+      for (const problem of subIssueProblems(check, owner, repo)) problems.push(`${need}: ${problem}`);
     }
   }
   return problems;

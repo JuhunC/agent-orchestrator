@@ -15,8 +15,14 @@ export interface FakeIssue {
   body: string;
   user: { login: string };
   comments: FakeComment[];
-  pull?: { head: string; base: string };
+  pull?: { head: string; base: string; merged?: boolean };
   labels?: string[];
+  state?: "open" | "closed";
+  stateReason?: string | null;
+  /** Sub-issue of this issue number. */
+  parent?: number;
+  /** Issue numbers this one is blocked by. */
+  blockedBy?: number[];
 }
 
 /**
@@ -36,25 +42,36 @@ export class FakeGitHub {
   prOpened?: (number: number) => void;
   /** The commit a branch points at in the test's git remote (set by the harness). */
   branchSha: (branch: string) => string = () => "";
+  /** Merges `head` into `base` in the test's git remote with a merge commit: the new commit, or null if there was nothing to merge. */
+  mergeBranches: (base: string, head: string, message: string) => string | null = () => null;
   /** One organization project (acme/1) with a Status field; items map node id → card. */
   project = {
     id: "PVT_acme_1",
     title: "Product",
     options: ["Backlog", "Ready", "In progress", "In review", "Done", "Needs human"].map((name) => ({ id: `opt_${name.replace(/\s+/g, "_")}`, name })),
   };
-  items = new Map<string, { id: string; number: number; status: string | null; history: string[] }>();
+  /** The project's other fields: two dates and a number, like a roadmap setup. */
+  fields = [
+    { id: "F_start", name: "Start date", dataType: "DATE" },
+    { id: "F_end", name: "End date", dataType: "DATE" },
+    { id: "F_estimate", name: "Estimate", dataType: "NUMBER" },
+  ];
+  items = new Map<string, { id: string; number: number; status: string | null; history: string[]; values: Record<string, string | number> }>();
   private nextId = 1000;
 
   addItem(number: number, status: string | null = null): string {
     const id = `PVTI_${number}`;
-    this.items.set(id, { id, number, status, history: status ? [status] : [] });
+    this.items.set(id, { id, number, status, history: status ? [status] : [], values: {} });
     return id;
   }
 
-  private itemNode(item: { id: string; number: number; status: string | null }) {
+  private itemNode(item: { id: string; number: number; status: string | null; values: Record<string, string | number> }) {
     const issue = this.issues.get(item.number);
     return {
       id: item.id,
+      start: item.values.F_start ? { date: item.values.F_start } : null,
+      end: item.values.F_end ? { date: item.values.F_end } : null,
+      estimate: item.values.F_estimate !== undefined ? { number: item.values.F_estimate } : null,
       project: { id: this.project.id },
       fieldValueByName: item.status ? { name: item.status, optionId: `opt_${item.status}` } : null,
       content: { __typename: issue?.pull ? "PullRequest" : "Issue", number: item.number, title: issue?.title ?? "", repository: { name: "widgets", owner: { login: "acme" } } },
@@ -106,12 +123,29 @@ export class FakeGitHub {
     return text ? JSON.parse(text) : null;
   }
 
+  /** Like GitHub's database ids, which the sub-issue and dependency endpoints take. */
+  static idOf(number: number): number {
+    return 100_000 + number;
+  }
+
+  private byId(id: number): FakeIssue | undefined {
+    return this.issues.get(id - 100_000);
+  }
+
   private issueJson(issue: FakeIssue) {
+    const children = [...this.issues.values()].filter((candidate) => candidate.parent === issue.number);
+    const blockedBy = issue.blockedBy ?? [];
+    const blocking = [...this.issues.values()].filter((candidate) => candidate.blockedBy?.includes(issue.number));
     return {
+      id: FakeGitHub.idOf(issue.number),
+      repository_url: `${this.url}/api/v3/repos/acme/widgets`,
+      state_reason: issue.stateReason ?? null,
+      sub_issues_summary: { total: children.length, completed: children.filter((child) => child.state === "closed").length, percent_completed: 0 },
+      issue_dependencies_summary: { blocked_by: blockedBy.length, total_blocked_by: blockedBy.length, blocking: blocking.length, total_blocking: blocking.length },
       number: issue.number,
       title: issue.title,
       body: issue.body,
-      state: "open",
+      state: issue.state ?? "open",
       node_id: `I_${issue.number}`,
       html_url: `${this.url}/acme/widgets/issues/${issue.number}`,
       user: issue.user,
@@ -142,6 +176,58 @@ export class FakeGitHub {
     if (method === "GET" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/))) {
       const issue = this.issues.get(Number(match[1]));
       return issue ? { status: 200, body: this.issueJson(issue) } : { status: 404, body: { message: "Not Found" } };
+    }
+    if (method === "POST" && path === "/repos/acme/widgets/issues") {
+      const number = Math.max(0, ...this.issues.keys()) + 1;
+      const issue = this.addIssue({ number, title: body.title, body: body.body ?? "", user: { login: "test-orchestrator[bot]" }, labels: body.labels ?? [] });
+      return { status: 201, body: this.issueJson(issue) };
+    }
+    if ((match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/(parent|sub_issues?|dependencies\/blocked_by|dependencies\/blocking)(?:\/(\d+))?$/))) {
+      const issue = this.issues.get(Number(match[1]));
+      if (!issue) return { status: 404, body: { message: "Not Found" } };
+      const what = match[2]!;
+      if (method === "GET" && what === "parent") {
+        const parent = issue.parent ? this.issues.get(issue.parent) : undefined;
+        return parent ? { status: 200, body: this.issueJson(parent) } : { status: 404, body: { message: "Not Found" } };
+      }
+      if (method === "GET" && what === "sub_issues") return { status: 200, body: [...this.issues.values()].filter((child) => child.parent === issue.number).map((child) => this.issueJson(child)) };
+      if (method === "POST" && what === "sub_issues") {
+        const child = this.byId(body.sub_issue_id);
+        if (!child) return { status: 404, body: { message: "Not Found" } };
+        if (child.parent && child.parent !== issue.number && !body.replace_parent) return { status: 422, body: { message: "Validation Failed: the issue already has a parent" } };
+        child.parent = issue.number;
+        return { status: 201, body: this.issueJson(issue) };
+      }
+      if (method === "DELETE" && what === "sub_issue") {
+        const child = this.byId(body.sub_issue_id);
+        if (child?.parent === issue.number) delete child.parent;
+        return { status: 200, body: this.issueJson(issue) };
+      }
+      if (method === "GET" && what === "dependencies/blocked_by") return { status: 200, body: (issue.blockedBy ?? []).map((number) => this.issueJson(this.issues.get(number)!)) };
+      if (method === "GET" && what === "dependencies/blocking") return { status: 200, body: [...this.issues.values()].filter((other) => other.blockedBy?.includes(issue.number)).map((other) => this.issueJson(other)) };
+      if (method === "POST" && what === "dependencies/blocked_by") {
+        const blocker = this.byId(body.issue_id);
+        if (!blocker) return { status: 404, body: { message: "Not Found" } };
+        issue.blockedBy = [...new Set([...(issue.blockedBy ?? []), blocker.number])];
+        return { status: 201, body: this.issueJson(issue) };
+      }
+      if (method === "DELETE" && what === "dependencies/blocked_by" && match[3]) {
+        const blocker = this.byId(Number(match[3]));
+        issue.blockedBy = (issue.blockedBy ?? []).filter((number) => number !== blocker?.number);
+        return { status: 200, body: this.issueJson(issue) };
+      }
+    }
+    if (method === "PUT" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/merge$/))) {
+      const pr = this.issues.get(Number(match[1]));
+      if (!pr?.pull || pr.state === "closed") return { status: 405, body: { message: "Pull Request is not mergeable" } };
+      const sha = this.mergeBranches(pr.pull.base, pr.pull.head, body.commit_title ?? `Merge pull request #${pr.number}`);
+      pr.pull.merged = true;
+      pr.state = "closed";
+      return { status: 200, body: { merged: true, sha: sha ?? this.branchSha(pr.pull.base), message: "Pull Request successfully merged" } };
+    }
+    if (method === "POST" && path === "/repos/acme/widgets/merges") {
+      const sha = this.mergeBranches(body.base, body.head, body.commit_message ?? `Merge ${body.head} into ${body.base}`);
+      return sha ? { status: 201, body: { sha } } : { status: 204, body: null };
     }
     if (method === "GET" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/comments$/))) {
       const issue = this.issues.get(Number(match[1]));
@@ -179,10 +265,10 @@ export class FakeGitHub {
     }
     if (method === "GET" && path === "/repos/acme/widgets/pulls") {
       const head = url.searchParams.get("head")?.split(":")[1];
-      const open = [...this.issues.values()].filter((issue) => issue.pull && issue.pull.head === head);
+      const open = [...this.issues.values()].filter((issue) => issue.pull && issue.pull.head === head && issue.state !== "closed");
       return {
         status: 200,
-        body: open.map((issue) => ({ number: issue.number, html_url: `${this.url}/acme/widgets/pull/${issue.number}`, head: { ref: issue.pull!.head, sha: this.branchSha(issue.pull!.head) } })),
+        body: open.map((issue) => ({ number: issue.number, html_url: `${this.url}/acme/widgets/pull/${issue.number}`, head: { ref: issue.pull!.head, sha: this.branchSha(issue.pull!.head) }, base: { ref: issue.pull!.base } })),
       };
     }
     if (method === "POST" && path === "/repos/acme/widgets/pulls") {
@@ -197,6 +283,8 @@ export class FakeGitHub {
       const issue = this.issues.get(Number(match[1]))!;
       if (body.title) issue.title = body.title;
       if (body.body !== undefined) issue.body = body.body;
+      if (body.state) issue.state = body.state;
+      if (body.state_reason !== undefined) issue.stateReason = body.state_reason;
       return { status: 200, body: this.issueJson(issue) };
     }
     if (method === "PATCH" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/))) {
@@ -226,6 +314,23 @@ export class FakeGitHub {
       if (query.includes("query BoardItem")) {
         const item = this.items.get(vars.id);
         return { status: 200, body: { data: { node: item ? this.itemNode(item) : null } } };
+      }
+      if (query.includes("query BoardFields")) {
+        return { status: 200, body: { data: { node: { fields: { nodes: [{ id: "F_status", name: "Status", dataType: "SINGLE_SELECT" }, ...this.fields] } } } } };
+      }
+      if (query.includes("mutation SetBoardField")) {
+        this.items.get(vars.item)!.values[vars.field] = vars.value;
+        return { status: 200, body: { data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: vars.item } } } } };
+      }
+      if (query.includes("mutation ClearBoardField")) {
+        delete this.items.get(vars.item)!.values[vars.field];
+        return { status: 200, body: { data: { clearProjectV2ItemFieldValue: { projectV2Item: { id: vars.item } } } } };
+      }
+      if (query.includes("mutation AddBoardItem")) {
+        const number = Number(String(vars.content).replace(/^I_/, ""));
+        const existing = [...this.items.values()].find((item) => item.number === number);
+        const id = existing?.id ?? this.addItem(number);
+        return { status: 200, body: { data: { addProjectV2ItemById: { item: { id } } } } };
       }
       if (query.includes("mutation MoveBoardItem")) {
         const item = this.items.get(vars.item)!;

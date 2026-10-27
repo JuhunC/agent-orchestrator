@@ -46,7 +46,7 @@ When the service reports a usage limit, tasks pause and continue automatically w
 
 ## Agent profiles
 
-Profiles are files, in `profiles/` (a git repository: every edit from the admin UI is a commit).
+Profiles are files, in `profiles/` (a git repository: every edit from the admin UI is a commit). Next to every file editor in the admin UI, **Options** lists what that kind of file can contain: each setting with its type, allowed values, default, an example to copy, and the skills, agents and roles that exist right now.
 
 ```
 profiles/
@@ -83,6 +83,10 @@ github:
   review: true                 # submit_review
   finalize: true               # push and open the PR if the agent forgot
   wiki: write                  # wiki pages: write, read or none (true/false work too)
+  sub_issues: none             # none | read (list_sub_issues) | write (also create_sub_issue, move_sub_issue)
+  relations: false             # link_issue: blocked-by, blocking, parent and sub-issue links
+  merge_into_parent: false     # merge_into_parent: merge a sub-issue into its parent's branch
+  parent_branch: true          # a sub-issue branches from and merges into its parent's branch
 max_turns: 300
 max_budget_usd: 20
 timeout_minutes: 90
@@ -134,10 +138,24 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 | `move_to_column` | board tasks: move the card on, with a handoff note for the next stage |
 | `list_wiki_pages`, `read_wiki_page` | the GitHub wiki of this repo, or of another repo the App can access |
 | `write_wiki_page`, `delete_wiki_page` | create, replace or delete a page in this repo's wiki, committed as the App |
+| `list_sub_issues` | `sub_issues: read`: the issue's sub-issues, and whether each one's branch head is an ancestor of (merged into) this issue's branch |
+| `create_sub_issue` | `sub_issues: write`: create an issue as a sub-issue of this one |
+| `move_sub_issue` | `sub_issues: write`, board tasks: move a sub-issue's card, where the board allows |
+| `set_card_fields` | `update_issue: true`, on a board with `fields`: set the card's (or a sub-issue's) start date, end date and estimate in the project |
+| `link_issue` | `relations: true`: add or remove `blocked_by`, `blocks`, `parent` or `sub_issue` links to another issue |
+| `merge_into_parent` | `merge_into_parent: true`: merge this sub-issue's pushed work into the parent's branch with a merge commit, and close the sub-issue |
 
 **Wikis** have no REST API: each is a git repository (`<repo>.wiki.git`), so the orchestrator keeps a checkout under `DATA_DIR/wikis` and pushes page changes with the installation token (the App's `contents: write` permission covers it). GitHub creates a wiki's repository only when its first page is saved, so turn on Wikis in the repository settings and create the first page in the web UI once. If someone edits the wiki at the same moment, the write is redone on top of their version.
 
-Agents push only to `agent/<name>/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to the default branch.
+Agents push only to `agent/<name>/issue-<n>` or `ao/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to or merge into the default branch.
+
+### Sub-issues
+
+GitHub sub-issues split an issue into parts. The orchestrator gives each issue in such a tree the shared branch `ao/issue-<n>`:
+
+- A sub-issue's branch starts from its **parent's branch**, and its pull request targets that branch instead of the default branch. If the parent's branch doesn't exist yet, it's created where the sub-issue's branch left the default branch. The parent's own pull request then takes all of it to the default branch, through a person. Set `parent_branch: false` on an agent to have it treat sub-issues like any other issue. Only open parents in the same repository count.
+- `list_sub_issues` checks each sub-issue's branch: its head must be an **ancestor** of the parent's branch on GitHub. A squash or rebase merge copies commits, so that work shows as not merged; `merge_into_parent` always uses a merge commit.
+- The agent's prompt lists the issue's parent, sub-issues and dependencies, and says where its work merges.
 
 ## Project boards
 
@@ -159,9 +177,9 @@ columns:
 - Each column maps a **harness** (`agents`: profiles with their tools, skills and MCP servers, or `group:<name>`) and a **role** (a `library/roles` name, or inline text). `model` and `effort` override the agents' for that column. `moves_to: any` allows every column.
 - With several agents, `mode` decides who gets a card: **pool** (default) gives it to the least busy agent; **all** has every agent work it at once and moves the card when they've all finished (needs-human wins, then sending it back, then the most common choice); **label** routes by the issue's labels (`routes: { frontend: web-dev, default: group:developers }`).
 - Agents finish with `move_to_column`; the move happens after the agent is done, and its **handoff note** goes to the next stage's agent along with all earlier notes.
-- All stages share one branch and PR per issue (`ao/issue-<n>`), so the tester tests the developer's work. The example tester only reports and sends cards back; agents never merge.
+- All stages share one branch and PR per issue (`ao/issue-<n>`), so the tester tests the developer's work. The example tester only reports and sends cards back; agents never merge into the default branch.
 - **Move requirements** (optional): a column can say what an agent must show before it moves a card *into* that column. `move_to_column` refuses a move that lacks them and tells the agent what to fix, so it can fix it in the same session. The evidence is checked again just before the card moves, so changing files after the move keeps the card where it is.
-  - `evidence`: `pull_request` (an open PR has the agent's latest commit), `pushed` (it pushed commits in this task), `tests` (a test command it ran passed, and no files changed since), `review` (it submitted a verdict with `submit_review` on the current commit), `approval` (that verdict was APPROVE). For `tests`, the orchestrator watches the agent's shell commands: common runners (`npm test`, `pytest`, `go test`, `cargo test`, `make test`, …) count, or set `test_command` to the command(s) that do.
+  - `evidence`: `pull_request` (an open PR has the agent's latest commit), `pushed` (it pushed commits in this task), `tests` (a test command it ran passed, and no files changed since), `review` (it submitted a verdict with `submit_review` on the current commit), `approval` (that verdict was APPROVE), `merged` (the card's branch is merged into the branch it targets: for a sub-issue, its parent's branch), `sub_issues` (every sub-issue's branch is merged into this card's branch, or the sub-issue is closed). For `tests`, the orchestrator watches the agent's shell commands: common runners (`npm test`, `pytest`, `go test`, `cargo test`, `make test`, …) count, or set `test_command` to the command(s) that do.
   - `handoff_required`: fields the agent must fill in `move_to_column`'s `fields`: `status`, `decisions`, `verified`, `open_questions`, `risks`, `do_not_redo`. They're added to the handoff note.
   - `work_types` (top level) keeps a kind of card, matched by issue label, out of some columns: `work_types: { docs: { labels: [documentation], forbid: [In review] } }`.
   - These rules apply only to agents' `move_to_column`. People can move cards anywhere, and an agent can always move a card to `needs_human`. Boards without these settings work as before. Mistakes in them (an unknown evidence name, a column that doesn't exist) are reported when the board loads and refused when the file is saved.
@@ -171,6 +189,9 @@ columns:
   In review: { agent: tester, role: verify, moves_to: [Done, In progress], evidence: [pull_request], handoff_required: [status] }
   Done: { evidence: [approval, tests], test_command: npm test, handoff_required: [verified, risks] }
 ```
+- **Move map**: the board page draws the columns and the moves agents can make between them (`moves_to` forward and back, `on_start`), with what each column requires.
+- **Sub-issues** (optional, top level): `sub_issues: { column: Backlog, moves_to: [Ready] }`. Sub-issues an agent creates on the board are added to it in `column` when its task finishes, which starts that column's agent. An agent working a parent card may move its sub-issues' cards to the `moves_to` columns with `move_sub_issue` (or to `needs_human`); like its own move, that happens when it finishes and is checked again first. Such a move counts toward the sub-issue's loop guards. Only evidence about the sub-issue itself (`pull_request`, `merged`, `sub_issues`) can be checked for it, so a column that needs another agent's tests or review can't be entered this way.
+- **Dates and estimates** (optional, top level): `fields: { start: Start date, end: End date, estimate: Estimate, start_on: [In progress], end_on: [Done] }` names the project's date fields and number field. GitHub issues have no dates of their own; in a Project they live in fields like these, which the roadmap view uses. Agents set them with `set_card_fields` (and `create_sub_issue` takes them for new sub-issues), and their prompt shows the card's current values. `start_on` fills in the start date (today, UTC) when a card enters one of those columns and has none yet; `end_on` sets the end date when it enters one. That happens for people's moves too. The board page shows the values per card.
 - **Loop guards**: too many agent moves, too many visits to one column, or too much spend on a card sends it to `needs_human` with a comment. Moving a card away from a column stops the agent working on it.
 - GitHub sends project webhooks only for **organization** projects, and the app needs the organization **Projects** permission (read and write). Boards are also polled every `poll_seconds` in case a webhook is missed. The first poll only records where cards are; it doesn't start agents for cards already on the board.
 - The App must be **installed on the account that owns the project** (which may differ from the repositories' owner). The board page says where it's installed if not. For a project the App can't reach, such as a user-owned project, set `token_env: SOME_VAR` in the board file and put a token with project read/write access in that environment variable. Agents still use the App for everything else.
@@ -225,7 +246,7 @@ The image includes git, Python and common CLI tools. For project toolchains, bui
 
 - Agents run with permission prompts off (`bypassPermissions`); the container is the sandbox. Use a machine where that's acceptable.
 - Thread content is untrusted input: only write-access users can start agents, but anyone can comment on public repos. Use `ALLOWED_REPOS`.
-- GitHub credentials stay in the orchestrator; agents act on GitHub only through its tools, on agent branches.
+- GitHub credentials stay in the orchestrator; agents act on GitHub only through its tools, on agent branches. The only merge an agent can make is `merge_into_parent` (off by default), which merges a sub-issue into its parent issue's `ao/issue-<n>` branch, never into the default branch.
 
 ## Development
 

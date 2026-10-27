@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS board_handoffs (
   ts TEXT NOT NULL
 );
 `);
+addColumn("board_items", "fields", "TEXT NOT NULL DEFAULT '{}'");
 
 export function now(): string {
   return new Date().toISOString();
@@ -582,7 +583,16 @@ export interface BoardItemRow {
   status: string | null;
   moves: number;
   entries: Record<string, number>;
+  /** The card's project field values (start/end dates, estimate) as last seen; kept apart from saveBoardItem. */
+  fields?: CardFieldValues;
   updatedAt: string;
+}
+
+/** A card's planning fields in the GitHub Project: dates as YYYY-MM-DD, null when empty. */
+export interface CardFieldValues {
+  start?: string | null;
+  end?: string | null;
+  estimate?: number | null;
 }
 
 function toBoardItem(row: Row): BoardItemRow {
@@ -597,6 +607,7 @@ function toBoardItem(row: Row): BoardItemRow {
     status: (row.status as string | null) ?? null,
     moves: Number(row.moves),
     entries: json(row.entries, {}),
+    fields: json(row.fields, {}),
     updatedAt: String(row.updated_at),
   };
 }
@@ -608,6 +619,13 @@ export function getBoardItem(board: string, itemId: string): BoardItemRow | null
 
 export function listBoardItems(board: string): BoardItemRow[] {
   return (db.prepare("SELECT * FROM board_items WHERE board = ? ORDER BY updated_at DESC").all(board) as Row[]).map(toBoardItem);
+}
+
+/** Records a card's project field values (merged into what's known). */
+export function saveBoardItemFields(board: string, itemId: string, fields: CardFieldValues): void {
+  const current = getBoardItem(board, itemId);
+  if (!current) return;
+  db.prepare("UPDATE board_items SET fields = ? WHERE board = ? AND item_id = ?").run(JSON.stringify({ ...current.fields, ...fields }), board, itemId);
 }
 
 export function saveBoardItem(item: Omit<BoardItemRow, "updatedAt">): void {

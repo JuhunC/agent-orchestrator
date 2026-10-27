@@ -11,6 +11,8 @@ import type { Task } from "../types.ts";
 import { createGithubServer, type ToolContext } from "./github-tools.ts";
 import { buildOptions, PER_TASK_ENV } from "./options.ts";
 import { testRunHooks } from "./evidence.ts";
+import { loadBoards } from "../boards/loader.ts";
+import { hasCardFields } from "../boards/rules.ts";
 import { AgentSession, type EventSink, type TurnOutcome } from "./session.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -83,6 +85,15 @@ function inboxHooks(context: Entry["context"]): Options["hooks"] {
     return { hookSpecificOutput: { hookEventName: event, additionalContext: text } };
   };
   return { PostToolBatch: [{ hooks: [hand("PostToolBatch")] }], Stop: [{ hooks: [hand("Stop")] }] };
+}
+
+/** Does any board track start/end dates or estimates? Then agents get set_card_fields. */
+function anyBoardTracksFields(): boolean {
+  try {
+    return loadBoards().boards.some((board) => hasCardFields(board.fields));
+  } catch {
+    return false;
+  }
 }
 
 function hash(value: unknown): string {
@@ -175,7 +186,7 @@ class Sessions {
     const { task, profile, library, workspace, env } = options;
     this.makeRoom();
     const context: Entry["context"] = { current: null };
-    const github = createGithubServer(profile, () => context.current);
+    const github = createGithubServer(profile, () => context.current, { cardFields: anyBoardTracksFields() });
     const session = new AgentSession(
       buildOptions({
         profile,
@@ -221,6 +232,7 @@ class Sessions {
       cwd: options.workspace.dir,
       model: options.model ?? null,
       effort: options.effort ?? null,
+      cardFields: anyBoardTracksFields(),
     });
 
     let entry = this.entries.get(key);

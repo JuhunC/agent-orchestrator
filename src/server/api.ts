@@ -25,6 +25,7 @@ import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
+import { configReference } from "../profiles/reference.ts";
 import type { Profile } from "../profiles/types.ts";
 import {
   addToGroup,
@@ -334,6 +335,9 @@ export function registerApi(app: FastifyInstance): void {
 
   app.get("/api/profiles/files", async () => listProfileFiles());
 
+  // What each kind of profile file can contain, with the skills, agents, … that exist now.
+  app.get("/api/profiles/reference", async () => configReference(loadProfiles()));
+
   // ---------- project boards ----------
   app.get("/api/boards", async () => {
     const profiles = loadProfiles();
@@ -349,6 +353,8 @@ export function registerApi(app: FastifyInstance): void {
         limits: board.limits,
         columns: Object.values(board.columns).map((column) => ({ ...column, role: undefined, roleText: column.roleName ? null : column.role.slice(0, 300) })),
         workTypes: board.workTypes,
+        subIssues: board.subIssues,
+        fields: board.fields,
         errors: board.errors,
         status: boardStatus(board.name),
         items: listBoardItems(board.name).slice(0, 200),

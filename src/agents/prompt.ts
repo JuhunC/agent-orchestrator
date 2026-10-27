@@ -1,7 +1,9 @@
+import { describeRelations } from "../github/relations.ts";
 import type { ThreadContext } from "../github/threads.ts";
+import type { GithubPermissions } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
 
-type Agent = { name: string; handle: string };
+type Agent = { name: string; handle: string; github?: Pick<GithubPermissions, "subIssues" | "relations" | "mergeIntoParent"> };
 
 export interface WorkspaceInfo {
   branch: string;
@@ -67,6 +69,24 @@ function workspaceSection(repo: string, thread: ThreadContext, workspace: Worksp
       ].join("\n");
 }
 
+/** Parent, sub-issues and dependencies, and what they mean for the agent's branch. Empty when there are none. */
+function relatedSection(task: Task, thread: ThreadContext, workspace: WorkspaceInfo, agent?: Agent): string {
+  const lines = describeRelations(thread.relations, task.owner, task.repo);
+  if (!lines.length) return "";
+  const github = agent?.github;
+  const parent = thread.relations.parent;
+  if (parent && workspace.baseBranch !== thread.defaultBranch) {
+    lines.push(
+      "",
+      `This is a sub-issue of #${parent.number}: your branch \`${workspace.branch}\` starts from the parent's branch \`${workspace.baseBranch}\`, and your work merges into that branch, not into \`${thread.defaultBranch}\`${workspace.willPush ? " (open_pull_request targets it)" : ""}.${github?.mergeIntoParent ? " When your work is pushed and done, merge it there with merge_into_parent." : ""}`,
+    );
+  }
+  if (thread.relations.subIssues.length && github && github.subIssues !== "none") {
+    lines.push("", `Sub-issues merge their work into this issue's branch \`${workspace.branch}\`. Check it all arrived with list_sub_issues: each sub-issue's branch head must be an ancestor of this branch.`);
+  }
+  return ["## Related issues", ...lines].join("\n");
+}
+
 const REPLY_INSTRUCTIONS =
   "When you are done, end with a concise summary for the people on GitHub: what you changed (or found), anything left to do, and any question you need answered. It is posted as a comment.";
 
@@ -88,6 +108,35 @@ export interface BoardStage {
   requirements?: { column: string; text: string }[];
   /** The card's work type, when the board has work types and the card matches one. */
   workType?: { name: string; label: string; forbid: string[] } | null;
+  /** The board's sub_issues settings, when this agent may create sub-issues and the board uses them. */
+  subIssues?: { column: string | null; movesTo: string[] } | null;
+  /** The agent may merge a sub-issue into its parent's branch. */
+  mergeIntoParent?: boolean;
+  /** The project fields the board tracks per card, and this card's values, when the agent may set them. */
+  fields?: {
+    start: string | null;
+    end: string | null;
+    estimate: string | null;
+    startOn: string[];
+    endOn: string[];
+    values: { start?: string | null; end?: string | null; estimate?: number | null };
+  } | null;
+}
+
+function fieldsLines(fields: NonNullable<BoardStage["fields"]>): string[] {
+  const parts = [
+    ...(fields.start ? [`start date ("${fields.start}"): ${fields.values.start ?? "not set"}`] : []),
+    ...(fields.end ? [`end date ("${fields.end}"): ${fields.values.end ?? "not set"}`] : []),
+    ...(fields.estimate ? [`estimate ("${fields.estimate}"): ${fields.values.estimate ?? "not set"}`] : []),
+  ];
+  const auto = [
+    ...(fields.startOn.length ? [`the start date is filled in when the card enters ${fields.startOn.map((name) => `"${name}"`).join(" or ")}`] : []),
+    ...(fields.endOn.length ? [`the end date when it enters ${fields.endOn.map((name) => `"${name}"`).join(" or ")}`] : []),
+  ];
+  return [
+    `The project tracks this card's ${parts.join("; ")}. Set them with set_card_fields (dates as YYYY-MM-DD) when you plan or learn something that changes them.`,
+    ...(auto.length ? [`The orchestrator also does it for you: ${auto.join(", and ")}.`] : []),
+  ];
 }
 
 function boardSection(stage: BoardStage): string {
@@ -107,11 +156,16 @@ function boardSection(stage: BoardStage): string {
           "Pass handoff fields in move_to_column's `fields`. Get the evidence before you move, and don't change files after moving.",
         ]
       : []),
+    ...(stage.fields ? fieldsLines(stage.fields) : []),
+    ...(stage.subIssues?.column ? [`Sub-issues you create with create_sub_issue are added to this board in "${stage.subIssues.column}" when you finish.`] : []),
+    ...(stage.subIssues?.movesTo.length
+      ? [`You can move this card's sub-issues with move_sub_issue to: ${stage.subIssues.movesTo.map((name) => `"${name}"`).join(", ")}. Those moves happen when you finish, and are checked like yours.`]
+      : []),
     stage.needsHuman ? `If you're blocked or unsure, move it to "${stage.needsHuman}" and explain why.` : "",
     stage.peers?.length
       ? `Other agents are working this card in this column at the same time: ${stage.peers.join(", ")}. Your move_to_column is a vote: the card moves when all of you finish, and if any of you sends it back, it goes back. Don't push changes another agent might also be making.`
       : "If you don't move the card, it stays in this column.",
-    "Never merge pull requests.",
+    stage.mergeIntoParent ? "Never merge into the default branch: merge_into_parent only merges a sub-issue's work into its parent issue's branch." : "Never merge pull requests.",
     ...(notes.length ? ["", "### Handoff notes from earlier stages (oldest first)", notes.join("\n\n")] : []),
   ]
     .filter((line, index, all) => line !== "" || all[index - 1] !== "")
@@ -119,6 +173,7 @@ function boardSection(stage: BoardStage): string {
 }
 
 export function buildFollowUpPrompt(input: {
+  agent?: Agent;
   task: Task;
   thread: ThreadContext;
   workspace: WorkspaceInfo;
@@ -151,6 +206,7 @@ export function buildFollowUpPrompt(input: {
     "",
     "## Working copy",
     `${workspaceSection(repo, thread, workspace)}\nThe branch has been refreshed from GitHub, so it includes anything pushed since your last run.`,
+    ...(relatedSection(task, thread, workspace, input.agent) ? ["", relatedSection(task, thread, workspace, input.agent)] : []),
     ...(input.board ? ["", boardSection(input.board)] : []),
     "",
     "## How to reply",
@@ -199,6 +255,8 @@ export function buildPrompt(input: {
   if (thread.pull) {
     sections.push("", `Head branch: \`${thread.pull.headRef}\`${thread.pull.isFork ? ` (from fork ${thread.pull.headRepo ?? "unknown"})` : ""} → base \`${thread.pull.baseRef}\``);
   }
+  const related = relatedSection(task, thread, workspace, agent);
+  if (related) sections.push("", related);
   if (conversation.length) sections.push("", "## Conversation so far (oldest first)", conversation.join("\n\n"));
   if (inline.length) sections.push("", "## Inline review comments", inline.join("\n\n"));
   const historyText = historySection(history);

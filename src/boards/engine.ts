@@ -12,17 +12,32 @@ import {
   lastTaskIds,
   listVotes,
   saveBoardItem,
+  saveBoardItemFields,
   tasksInRound,
   type BoardItemRow,
+  type CardFieldValues,
 } from "../db.ts";
 import { findInstallation, findOwnerInstallation, GitHubOctokit, installationClient, type GitHubClient } from "../github/app.ts";
-import { getProjectItem, listProjectItems, resolveProject, setItemStatus, type ProjectInfo, type ProjectItem } from "../github/projects.ts";
+import {
+  addProjectItem,
+  getProjectItem,
+  listProjectFields,
+  listProjectItems,
+  resolveProject,
+  setItemField,
+  setItemStatus,
+  type FieldNames,
+  type ProjectField,
+  type ProjectInfo,
+  type ProjectItem,
+} from "../github/projects.ts";
 import { postComment } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import type { Profile } from "../profiles/types.ts";
 import { loadBoards, type Board, type BoardColumn } from "./loader.ts";
+import { hasCardFields } from "./rules.ts";
 
 /** Live state of each board, for the admin UI. */
 export interface BoardStatus {
@@ -32,7 +47,7 @@ export interface BoardStatus {
 }
 
 const statuses = new Map<string, BoardStatus>();
-const projects = new Map<string, { info: ProjectInfo; gh: GitHubClient; at: number }>();
+const projects = new Map<string, { info: ProjectInfo; gh: GitHubClient; fields: ProjectField[]; at: number }>();
 const baselined = new Set<string>();
 
 export function boardStatus(name: string): BoardStatus {
@@ -45,7 +60,7 @@ function setStatus(name: string, patch: Partial<BoardStatus>): void {
 }
 
 /** The board's project, resolved through the installation on the project's owner (cached 10 minutes). */
-async function project(board: Board): Promise<{ info: ProjectInfo; gh: GitHubClient }> {
+async function project(board: Board): Promise<{ info: ProjectInfo; gh: GitHubClient; fields: ProjectField[] }> {
   const key = `${board.owner}/${board.projectNumber}/${board.statusField}`;
   const cached = projects.get(key);
   if (cached && Date.now() - cached.at < 10 * 60_000) return cached;
@@ -53,7 +68,8 @@ async function project(board: Board): Promise<{ info: ProjectInfo; gh: GitHubCli
   const token = board.tokenEnv ? process.env[board.tokenEnv] : undefined;
   const gh = token ? (new GitHubOctokit({ auth: token }) as GitHubClient) : await installationClient(await findOwnerInstallation(board.owner));
   const info = await resolveProject(gh, board.owner, board.projectNumber, board.statusField);
-  const entry = { info, gh, at: Date.now() };
+  const fields = hasCardFields(board.fields) ? await listProjectFields(gh, info.id) : [];
+  const entry = { info, gh, fields, at: Date.now() };
   projects.set(key, entry);
   setStatus(board.name, { project: { title: info.title, url: info.url, columns: info.options.map((option) => option.name) }, error: null });
   for (const column of Object.keys(board.columns)) {
@@ -61,7 +77,71 @@ async function project(board: Board): Promise<{ info: ProjectInfo; gh: GitHubCli
       setStatus(board.name, { error: `The project has no "${column}" column` });
     }
   }
+  const problem = Object.values(fieldNames(board))
+    .map((name) => (name ? fieldProblem(board, fields, name) : null))
+    .find(Boolean);
+  if (problem) setStatus(board.name, { error: problem });
   return entry;
+}
+
+/** The project field names the board tracks, for reading items. */
+function fieldNames(board: Board): FieldNames {
+  return { start: board.fields.start, end: board.fields.end, estimate: board.fields.estimate };
+}
+
+function fieldProblem(board: Board, fields: ProjectField[], name: string): string | null {
+  const field = fields.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+  const want = name === board.fields.estimate ? "NUMBER" : "DATE";
+  if (!field) return `The project has no "${name}" field (fields: in the board file). Add a ${want === "DATE" ? "date" : "number"} field with that name to the project.`;
+  if (field.dataType !== want) return `The project's "${name}" field is ${field.dataType.toLowerCase()}, but it needs to be a ${want === "DATE" ? "date" : "number"} field`;
+  return null;
+}
+
+/**
+ * Sets a card's tracked project fields (undefined = leave as is, null = clear) and remembers the
+ * values. Throws with a reason when the board or project doesn't have the field.
+ */
+export async function setCardFields(board: Board, itemId: string, values: CardFieldValues): Promise<CardFieldValues> {
+  const { info, gh, fields } = await project(board);
+  const changed: CardFieldValues = {};
+  for (const key of ["start", "end", "estimate"] as const) {
+    if (values[key] === undefined) continue;
+    const name = board.fields[key];
+    if (!name) throw new Error(`The ${board.name} board doesn't track ${key === "estimate" ? "an estimate" : `a ${key} date`} (set fields.${key} in its board file)`);
+    const problem = fieldProblem(board, fields, name);
+    if (problem) throw new Error(problem);
+    const field = fields.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase())!;
+    const value = values[key];
+    await setItemField(gh, info.id, itemId, field.id, value === null ? null : key === "estimate" ? { number: Number(value) } : { date: String(value) });
+    changed[key] = value as never;
+  }
+  saveBoardItemFields(board.name, itemId, changed);
+  bus.publish({ type: "boards" });
+  return changed;
+}
+
+/**
+ * fields.start_on / end_on: when a card enters one of those columns, set its start date (only if
+ * it has none) or its end date, to today (UTC). `known` is the card's field values if just read.
+ */
+async function stampDates(board: Board, itemId: string, column: string | null, known?: CardFieldValues): Promise<void> {
+  if (!column) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const changes: CardFieldValues = {};
+  try {
+    if (board.fields.start && board.fields.startOn.includes(column)) {
+      let current = known;
+      if (!current) {
+        const { gh } = await project(board);
+        current = (await getProjectItem(gh, itemId, board.statusField, fieldNames(board)))?.fields;
+      }
+      if (!current?.start) changes.start = today;
+    }
+    if (board.fields.end && board.fields.endOn.includes(column)) changes.end = today;
+    if (Object.keys(changes).length) await setCardFields(board, itemId, changes);
+  } catch (error) {
+    log.warn("Could not set the card's dates", { board: board.name, item: itemId, error: errorMessage(error) });
+  }
 }
 
 function rowFor(board: Board, item: ProjectItem, previous: BoardItemRow | null): Omit<BoardItemRow, "updatedAt"> {
@@ -86,9 +166,12 @@ function rowFor(board: Board, item: ProjectItem, previous: BoardItemRow | null):
 export async function observe(board: Board, item: ProjectItem, options: { excludeTaskId?: number; trigger?: boolean } = {}): Promise<void> {
   if (!item.kind || !item.repo) return; // draft issues have nothing to work on
   const previous = getBoardItem(board.name, item.itemId);
+  if (item.fields && previous && JSON.stringify({ ...previous.fields, ...item.fields }) !== JSON.stringify(previous.fields)) saveBoardItemFields(board.name, item.itemId, item.fields);
   if (previous && previous.status === item.status) return;
   saveBoardItem(rowFor(board, item, previous));
+  if (item.fields && !previous) saveBoardItemFields(board.name, item.itemId, item.fields);
   bus.publish({ type: "boards" });
+  await stampDates(board, item.itemId, item.status, item.fields ?? (previous ? undefined : {}));
 
   for (const task of activeBoardTasks(board.name, item.itemId)) {
     if (task.id === options.excludeTaskId || task.boardColumn === item.status) continue;
@@ -100,7 +183,6 @@ export async function observe(board: Board, item: ProjectItem, options: { exclud
   if (options.trigger !== false && item.status) await startColumnAgent(board, item.itemId);
 }
 
-/** Starts the agent mapped to the card's current column, unless a guard says to escalate instead. */
 /** Which agents may take a card in this column: enabled, valid, and routed by label in `label` mode. */
 async function candidatesFor(board: Board, column: BoardColumn, row: BoardItemRow): Promise<Profile[]> {
   const profiles = loadProfiles().agents.filter((profile) => profile.enabled && !profile.errors.length);
@@ -125,7 +207,7 @@ function leastBusy(candidates: Profile[]): Profile {
 }
 
 /** Starts the column's agent(s) for the card, unless a guard says to escalate instead. */
-async function startColumnAgent(board: Board, itemId: string): Promise<void> {
+export async function startColumnAgent(board: Board, itemId: string): Promise<void> {
   const row = getBoardItem(board.name, itemId);
   const column = row?.status ? board.columns[row.status] : undefined;
   if (!row || !column?.agents.length || board.errors.length) return;
@@ -241,6 +323,7 @@ export async function moveCard(board: Board, itemId: string, to: string, options
   if (target !== to) {
     await postComment(gh, { owner: row.owner, repo: row.repo, kind: row.kind, number: row.number }, `Moved to **${target}** instead of ${to}: agents have moved this card ${row.moves + 1} times, the limit for the ${board.name} board.`).catch(() => undefined);
   }
+  await stampDates(board, itemId, target);
   const moved = getBoardItem(board.name, itemId)!;
   if (options.trigger !== false) {
     // Our own move: stop agents left in other columns, then start the next column's agent.
@@ -250,6 +333,35 @@ export async function moveCard(board: Board, itemId: string, to: string, options
     await startColumnAgent(board, moved.itemId);
   }
   return target;
+}
+
+/**
+ * Puts an issue on the board in `column` (a sub-issue an agent created or moved). The card is
+ * recorded first, so the webhooks for it don't start anything; `trigger` then starts the column's agent.
+ */
+export async function addIssueToBoard(
+  board: Board,
+  issue: { owner: string; repo: string; number: number; nodeId: string; title: string },
+  column: string,
+  options: { trigger: boolean; fields?: CardFieldValues },
+): Promise<string> {
+  const { info, gh } = await project(board);
+  const itemId = await addProjectItem(gh, info, issue.nodeId);
+  const previous = getBoardItem(board.name, itemId);
+  saveBoardItem({ board: board.name, itemId, owner: issue.owner, repo: issue.repo, kind: "issue", number: issue.number, title: issue.title, status: column, moves: previous?.moves ?? 0, entries: previous?.entries ?? {} });
+  try {
+    await setItemStatus(gh, info, itemId, column);
+  } catch (error) {
+    if (previous) saveBoardItem(previous);
+    throw error;
+  }
+  bus.publish({ type: "boards" });
+  if (options.fields && Object.keys(options.fields).length) {
+    await setCardFields(board, itemId, options.fields).catch((error) => log.warn("Could not set the new card's fields", { board: board.name, item: itemId, error: errorMessage(error) }));
+  }
+  await stampDates(board, itemId, column, { ...options.fields });
+  if (options.trigger) await startColumnAgent(board, itemId);
+  return itemId;
 }
 
 async function escalate(board: Board, row: BoardItemRow, reason: string): Promise<void> {
@@ -281,7 +393,7 @@ export async function handleProjectItemWebhook(payload: Record<string, any>): Pr
         results.push(`${board.name}: another field changed`);
         continue;
       }
-      const current = await getProjectItem(gh, item.node_id, board.statusField);
+      const current = await getProjectItem(gh, item.node_id, board.statusField, fieldNames(board));
       if (!current) continue;
       await observe(board, current);
       results.push(`${board.name}: card in ${current.status ?? "no column"}`);
@@ -297,12 +409,15 @@ export async function handleProjectItemWebhook(payload: Record<string, any>): Pr
 export async function syncBoard(board: Board): Promise<void> {
   try {
     const { info, gh } = await project(board);
-    const items = await listProjectItems(gh, info.id, board.statusField);
+    const items = await listProjectItems(gh, info.id, board.statusField, fieldNames(board));
     const firstPass = !baselined.has(board.name);
     for (const item of items) {
       const known = getBoardItem(board.name, item.itemId);
       if (firstPass && !known) {
-        if (item.kind && item.repo) saveBoardItem(rowFor(board, item, null));
+        if (item.kind && item.repo) {
+          saveBoardItem(rowFor(board, item, null));
+          if (item.fields) saveBoardItemFields(board.name, item.itemId, item.fields);
+        }
         continue;
       }
       await observe(board, item);

@@ -38,6 +38,21 @@ export async function startHarness(profiles: Record<string, string>, env: Record
     }
   };
 
+  fake.mergeBranches = (base, head, message) => {
+    const work = mkdtempSync(join(root, "merge-"));
+    run(root, "clone", "-q", join(remotes, "acme", "widgets.git"), work);
+    run(work, "checkout", "-q", base);
+    try {
+      run(work, "merge-base", "--is-ancestor", `origin/${head}`, "HEAD");
+      return null;
+    } catch {
+      // not merged yet
+    }
+    run(work, "-c", "user.name=GitHub", "-c", "user.email=noreply@github.com", "merge", "--no-ff", "-q", "-m", message, `origin/${head}`);
+    run(work, "push", "-q", "origin", base);
+    return run(work, "rev-parse", "HEAD");
+  };
+
   const profilesDir = join(root, "profiles");
   for (const [path, content] of Object.entries(profiles)) {
     mkdirSync(dirname(join(profilesDir, path)), { recursive: true });

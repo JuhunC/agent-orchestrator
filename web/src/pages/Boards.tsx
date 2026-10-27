@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { ago, api, useApi, type BoardInfo, type BoardsResponse } from "../api.ts";
+import { BoardMap } from "../components/BoardMap.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
 import { Dialog, Empty, Panel, Pill } from "../components/ui.tsx";
 import { href, navigate } from "../router.ts";
@@ -37,6 +38,17 @@ columns:
     role: verify
     moves_to: [Done, In progress]
   Done: {}
+
+# Optional (see Options next to the editor):
+# fields:                      # GitHub Project fields to track per card
+#   start: Start date          # a date field
+#   end: End date              # a date field
+#   estimate: Estimate         # a number field
+#   start_on: [In progress]    # fill in the start date when a card enters these
+#   end_on: [Done]             # fill in the end date when a card enters these
+# sub_issues:
+#   column: Backlog            # where sub-issues that agents create land
+#   moves_to: [Ready]          # where a parent card's agent may move its sub-issues
 `;
 
 function NewBoardDialog({ onClose }: { onClose: () => void }) {
@@ -194,6 +206,10 @@ export function BoardDetail({ name }: { name: string }) {
         </div>
       )}
 
+      <Panel title="Move map" hint="where an agent can move a card from each column">
+        <BoardMap board={board} />
+      </Panel>
+
       <Panel title="Column mapping" hint="harness (agent) and role per column">
         <div className="table-wrap">
           <table>
@@ -258,11 +274,31 @@ export function BoardDetail({ name }: { name: string }) {
         </div>
         <p className="meta">
           Loop guards: {board.limits.movesPerIssue} agent moves per card, {board.limits.entriesPerColumn} visits per column
-          {board.limits.budgetUsdPerIssue !== null && `, $${board.limits.budgetUsdPerIssue} per card`}; then the card goes to <b>{board.needsHuman ?? "nowhere (it stays)"}</b>. Agents never merge.
+          {board.limits.budgetUsdPerIssue !== null && `, $${board.limits.budgetUsdPerIssue} per card`}; then the card goes to <b>{board.needsHuman ?? "nowhere (it stays)"}</b>. Agents never merge into the default branch.
         </p>
         {board.workTypes.length > 0 && (
           <p className="meta">
             Work types: {board.workTypes.map((type) => `${type.name} (${type.labels.join(", ")}) can't go to ${type.forbid.join(", ") || "—"}`).join(" · ")}. People can still move any card anywhere.
+          </p>
+        )}
+        {(board.fields.start || board.fields.end || board.fields.estimate) && (
+          <p className="meta">
+            Project fields:{" "}
+            {[
+              board.fields.start && `start date "${board.fields.start}"${board.fields.startOn.length ? ` (filled in on entering ${board.fields.startOn.join(" or ")})` : ""}`,
+              board.fields.end && `end date "${board.fields.end}"${board.fields.endOn.length ? ` (filled in on entering ${board.fields.endOn.join(" or ")})` : ""}`,
+              board.fields.estimate && `estimate "${board.fields.estimate}"`,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            . Agents set them with set_card_fields.
+          </p>
+        )}
+        {(board.subIssues.column || board.subIssues.movesTo.length > 0) && (
+          <p className="meta">
+            Sub-issues: {board.subIssues.column ? <>ones agents create land in <b>{board.subIssues.column}</b></> : "ones agents create aren't added to the board"}
+            {" · "}
+            {board.subIssues.movesTo.length ? <>a parent's agent may move them to {board.subIssues.movesTo.join(", ")}</> : "a parent's agent can't move them"}.
           </p>
         )}
       </Panel>
@@ -277,6 +313,9 @@ export function BoardDetail({ name }: { name: string }) {
                 <tr>
                   <th>Card</th>
                   <th>Column</th>
+                  {board.fields.start && <th>Start</th>}
+                  {board.fields.end && <th>End</th>}
+                  {board.fields.estimate && <th>Estimate</th>}
                   <th>Agent moves</th>
                   <th>Updated</th>
                 </tr>
@@ -291,6 +330,9 @@ export function BoardDetail({ name }: { name: string }) {
                       </div>
                     </td>
                     <td>{item.status ? <span className="badge">{item.status}</span> : "—"}</td>
+                    {board.fields.start && <td className="num meta">{item.fields?.start ?? "—"}</td>}
+                    {board.fields.end && <td className="num meta">{item.fields?.end ?? "—"}</td>}
+                    {board.fields.estimate && <td className="num">{item.fields?.estimate ?? "—"}</td>}
                     <td className="num">{item.moves}</td>
                     <td className="num meta">{ago(item.updatedAt)}</td>
                   </tr>

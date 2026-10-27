@@ -28,9 +28,26 @@ limits:
 #
 # Optional, per column: what an agent must show to move a card INTO that column.
 # move_to_column refuses the move with what's missing; people can still move cards anywhere.
-#   evidence:          pull_request | pushed | tests | review | approval
+#   evidence:          pull_request | pushed | tests | review | approval | merged | sub_issues
+#                      (merged: the card's branch is in the branch it targets, e.g. its parent's;
+#                       sub_issues: every sub-issue's branch is merged into this card's branch)
 #   test_command:      for tests: command(s) that count (default: common test runners)
 #   handoff_required:  status | decisions | verified | open_questions | risks | do_not_redo
+#
+# Optional: sub-issues. Agents with github.sub_issues: write can split a card into sub-issues;
+# they go on the board in `column`. An agent on the parent card may move them to `moves_to`.
+# sub_issues:
+#   column: Backlog
+#   moves_to: [Ready]
+#
+# Optional: project fields for dates and estimates (add them to the project first:
+# two date fields and a number field). Agents set them with set_card_fields.
+# fields:
+#   start: Start date
+#   end: End date
+#   estimate: Estimate
+#   start_on: [In progress]    # fill in the start date when a card enters these
+#   end_on: [Done]             # set the end date when a card enters these
 
 columns:
   Backlog:

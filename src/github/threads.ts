@@ -1,5 +1,6 @@
 import type { ThreadKind } from "../types.ts";
 import type { GitHubClient } from "./app.ts";
+import { fetchRelations, NO_RELATIONS, type Relations } from "./relations.ts";
 
 export const PROGRESS_MARKER = "<!-- agent-orchestrator:progress -->";
 export const RESULT_MARKER = "<!-- agent-orchestrator:result -->";
@@ -21,7 +22,11 @@ export interface ThreadContext {
   author: string;
   state: string;
   nodeId: string;
+  /** The issue's database id (sub-issue and dependency endpoints take it); null for discussions. */
+  databaseId: number | null;
   defaultBranch: string;
+  /** Parent, sub-issues and dependencies (issues only). */
+  relations: Relations;
   comments: ThreadComment[];
   reviewComments: { author: string; path: string; line: number | null; body: string }[];
   pull: {
@@ -69,6 +74,7 @@ export async function fetchThread(gh: GitHubClient, owner: string, repo: string,
       body: comment.body,
     }));
   }
+  const relations = kind === "issue" ? await fetchRelations(gh, owner, repo, issue) : NO_RELATIONS;
 
   return {
     kind,
@@ -79,7 +85,9 @@ export async function fetchThread(gh: GitHubClient, owner: string, repo: string,
     author: issue.user?.login ?? "ghost",
     state: issue.state,
     nodeId: issue.node_id,
+    databaseId: issue.id,
     defaultBranch: repository.default_branch,
+    relations,
     comments: comments.slice(-30).map((comment) => ({
       author: comment.user?.login ?? "ghost",
       body: comment.body ?? "",
@@ -131,7 +139,9 @@ async function fetchDiscussion(gh: GitHubClient, owner: string, repo: string, nu
     author: discussion.author?.login ?? "ghost",
     state: discussion.closed ? "closed" : "open",
     nodeId: discussion.id,
+    databaseId: null,
     defaultBranch: data.repository.defaultBranchRef?.name ?? "main",
+    relations: NO_RELATIONS,
     comments: discussion.comments.nodes.map((comment) => ({
       author: comment.author?.login ?? "ghost",
       body: comment.body,
@@ -224,10 +234,10 @@ export async function markAgentOnThread(
   if (label) await gh.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [label] }).catch(() => undefined);
 }
 
-export async function findOpenPull(gh: GitHubClient, owner: string, repo: string, branch: string): Promise<{ number: number; url: string; headSha: string } | null> {
+export async function findOpenPull(gh: GitHubClient, owner: string, repo: string, branch: string): Promise<{ number: number; url: string; headSha: string; base: string } | null> {
   const { data } = await gh.rest.pulls.list({ owner, repo, head: `${owner}:${branch}`, state: "open", per_page: 1 });
   const pr = data[0];
-  return pr ? { number: pr.number, url: pr.html_url, headSha: pr.head.sha } : null;
+  return pr ? { number: pr.number, url: pr.html_url, headSha: pr.head.sha, base: pr.base?.ref ?? "" } : null;
 }
 
 export async function openPull(

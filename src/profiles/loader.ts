@@ -103,14 +103,28 @@ function loadLibrary(root: string): Library {
   return library;
 }
 
-const GITHUB_DEFAULTS = { comment: true, update_issue: true, review: true, push: true, pull_request: true, clone: true, finalize: true, wiki: "write" };
+/** Defaults for the `github:` block of agent.md (keys as written in the file). */
+export const GITHUB_DEFAULTS = {
+  comment: true,
+  update_issue: true,
+  review: true,
+  push: true,
+  pull_request: true,
+  clone: true,
+  finalize: true,
+  wiki: "write",
+  sub_issues: "none",
+  relations: false,
+  merge_into_parent: false,
+  parent_branch: true,
+} as const;
 
-/** wiki: true | false | read | write | none */
-function parseWiki(value: unknown, errors: string[]): "none" | "read" | "write" {
+/** true | false | read | write | none (wiki, sub_issues) */
+function parseAccess(value: unknown, field: string, errors: string[]): "none" | "read" | "write" {
   if (value === true || value === "write") return "write";
   if (value === false || value === "none" || value === null) return "none";
   if (value === "read") return "read";
-  errors.push(`github.wiki must be write, read or none (got ${JSON.stringify(value)})`);
+  errors.push(`github.${field} must be write, read or none (got ${JSON.stringify(value)})`);
   return "none";
 }
 
@@ -173,7 +187,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
   if (!body) errors.push("Write the agent's role below the frontmatter");
 
   const tools = (data.tools ?? {}) as { allow?: unknown; deny?: unknown };
-  const github = { ...GITHUB_DEFAULTS, ...((data.github ?? {}) as Record<string, unknown>) };
+  const github: Record<string, unknown> = { ...GITHUB_DEFAULTS, ...((data.github ?? {}) as Record<string, unknown>) };
   const skills = union(...memberOf.map((group) => group.defaults.skills), list(data.skills, "skills"));
   const mcp = union(...memberOf.map((group) => group.defaults.mcp), list(data.mcp, "mcp"));
   const subagents = union(...memberOf.map((group) => group.defaults.subagents), list(data.subagents, "subagents"));
@@ -225,7 +239,11 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
       pullRequest: github.pull_request !== false,
       clone: github.clone !== false,
       finalize: github.finalize !== false,
-      wiki: parseWiki(github.wiki, errors),
+      wiki: parseAccess(github.wiki, "wiki", errors),
+      subIssues: parseAccess(github.sub_issues, "sub_issues", errors),
+      relations: github.relations === true,
+      mergeIntoParent: github.merge_into_parent === true,
+      parentBranch: github.parent_branch !== false,
     },
     maxTurns: number("max_turns"),
     maxBudgetUsd: number("max_budget_usd"),

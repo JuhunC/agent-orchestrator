@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { config } from "../config.ts";
-import { linkedThreads, linkThreads } from "../db.ts";
+import { getBoardItem, linkedThreads, linkThreads, listBoardItems, type CardFieldValues } from "../db.ts";
 import { installationToken, repoRemoteUrl, type GitHubClient } from "../github/app.ts";
 import { ciStatus, fetchThread, findOpenPull, openPull, postComment, updatePull, type ThreadContext } from "../github/threads.ts";
 import { errorMessage } from "../log.ts";
@@ -13,9 +13,27 @@ import { git, GitError } from "../runner/git.ts";
 import { mention } from "../runner/progress.ts";
 import type { EventKind, Task } from "../types.ts";
 import { allowedMoves, canMove, type Board } from "../boards/loader.ts";
-import { HANDOFF_FIELDS, renderHandoff, type HandoffField } from "../boards/rules.ts";
-import { cardWorkType, moveProblems, type ReviewRecord, type TestRun } from "./evidence.ts";
-import { excludeFromGit, type Workspace } from "./workspace.ts";
+import { HANDOFF_FIELDS, hasCardFields, renderHandoff, type HandoffField, type HandoffFields } from "../boards/rules.ts";
+import { setCardFields } from "../boards/engine.ts";
+import {
+  addBlockedBy,
+  addSubIssue,
+  describeRelations,
+  getIssue,
+  issueBranch,
+  isIssueBranch,
+  listSubIssues,
+  RELATIONS,
+  refText,
+  removeBlockedBy,
+  removeSubIssue,
+  sameRepo,
+  toIssueRef,
+  type IssueRef,
+} from "../github/relations.ts";
+import { cardMoveProblems, cardWorkType, moveProblems, type ReviewRecord, type TestRun } from "./evidence.ts";
+import { checkSubIssues, describeSubIssueWork, fetchBranch, isAncestor } from "./sub-issues.ts";
+import { ensureBaseBranch, excludeFromGit, parentBranchFor, type Workspace } from "./workspace.ts";
 
 /** Set when the task came from a project board column. */
 export interface BoardContext {
@@ -28,6 +46,23 @@ export interface BoardContext {
   testRuns: TestRun[];
   /** Reviews the agent submitted in this task (for `review` and `approval` evidence). */
   reviews: ReviewRecord[];
+  /** Sub-issue cards the agent asked to move (move_sub_issue); done when the task finishes successfully. */
+  subMoves: SubIssueMove[];
+  /** Sub-issues the agent created, to add to the board's sub_issues.column when the task finishes. */
+  newSubIssues: IssueRef[];
+  /** Start/end/estimate for sub-issues that aren't on the board yet, set when they're added. */
+  subIssueFields: Record<number, CardFieldValues>;
+}
+
+/** A parent's agent moving one of its sub-issue cards. */
+export interface SubIssueMove {
+  issue: IssueRef;
+  /** The card, or null when the sub-issue isn't on the board yet (it's added in the target column). */
+  itemId: string | null;
+  from: string | null;
+  to: string;
+  note: string;
+  fields: HandoffFields;
 }
 
 /** What the GitHub tools act on. Live sessions swap it for each task. */
@@ -42,10 +77,41 @@ export interface ToolContext {
   onPullRequest: (pr: { number: number; url: string }) => void;
   comments: number;
   pushes: number;
+  /** Sub-issues created in this task (create_sub_issue). */
+  subIssuesCreated?: number;
   board: BoardContext | null;
 }
 
 const MAX_COMMENTS_PER_TASK = 10;
+const MAX_SUB_ISSUES_PER_TASK = 20;
+
+const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a date like 2026-10-27");
+const FIELD_ARGS = {
+  start: DATE.nullable().optional().describe("Start date, YYYY-MM-DD (null clears it)"),
+  end: DATE.nullable().optional().describe("End date, YYYY-MM-DD (null clears it)"),
+  estimate: z.number().nonnegative().nullable().optional().describe("Estimate, in the team's unit (null clears it)"),
+};
+
+/** The card field values given in a tool call, checked; a string is a reason to refuse. */
+function fieldValues(args: CardFieldValues, known: CardFieldValues = {}): CardFieldValues | string {
+  const values: CardFieldValues = {};
+  for (const key of ["start", "end", "estimate"] as const) if (args[key] !== undefined) values[key] = args[key] as never;
+  for (const key of ["start", "end"] as const) {
+    const value = values[key];
+    if (value && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) return `${value} isn't a real date.`;
+  }
+  const start = values.start !== undefined ? values.start : known.start;
+  const end = values.end !== undefined ? values.end : known.end;
+  if (start && end && start > end) return `The start date (${start}) is after the end date (${end}).`;
+  return values;
+}
+
+function describeFields(values: CardFieldValues, names: { start: string | null; end: string | null; estimate: string | null }): string {
+  return (["start", "end", "estimate"] as const)
+    .filter((key) => values[key] !== undefined)
+    .map((key) => `${names[key] ?? key} ${values[key] === null ? "cleared" : values[key]}`)
+    .join(", ");
+}
 
 type ToolResult = { content: { type: "text"; text: string }[]; isError?: boolean };
 const ok = (text: string): ToolResult => ({ content: [{ type: "text", text }] });
@@ -105,7 +171,11 @@ function oneAtATime<T>(key: string, run: () => Promise<T>): Promise<T> {
  */
 export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, body: string, draft = false): Promise<{ number: number; url: string; created: boolean }> {
   const { task, thread, workspace, gh, profile } = ctx;
-  const link = thread.kind === "issue" ? `Closes #${thread.number}` : `From discussion #${thread.number}: ${thread.url}`;
+  const parent = workspace.baseBranch !== thread.defaultBranch ? thread.relations.parent : null;
+  const link =
+    thread.kind === "issue"
+      ? `Closes #${thread.number}${parent ? ` · part of #${parent.number} (merges into \`${workspace.baseBranch}\`, the parent issue's branch)` : ""}`
+      : `From discussion #${thread.number}: ${thread.url}`;
   const footer = `<sub>Opened by **${profile.name}** for ${mention(task.requestedBy)} · orchestrator task #${task.id}. Mention @${profile.handle} here to ask for changes.</sub>`;
   const fullBody = [body.trim(), "", link, "", footer].join("\n");
   const source = { owner: task.owner, repo: task.repo, kind: thread.kind, number: thread.number };
@@ -124,6 +194,9 @@ export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, b
           `Didn't open a pull request: ${thread.kind} #${thread.number} already has ${opened.length} from agents (${list}) and MAX_PULL_REQUESTS_PER_ISSUE is ${limit}. The commits are on the branch ${workspace.branch}.`,
         );
       }
+      if (thread.kind === "issue" && (await ensureBaseBranch(task, workspace, thread.defaultBranch))) {
+        ctx.onEvent("system", `Created \`${workspace.baseBranch}\` on GitHub for the parent issue's work`);
+      }
       const created = await openPull(gh, { owner: task.owner, repo: task.repo, head: workspace.branch, base: workspace.baseBranch, title, body: fullBody, draft });
       result = { ...created, created: true };
     }
@@ -138,7 +211,7 @@ export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, b
  * The orchestrator's GitHub tools, served in-process to the agent as the `github` MCP server.
  * The installation token stays in this process; the agent only sees the results.
  */
-export function createGithubServer(profile: Profile, current: () => ToolContext | null): McpSdkServerConfigWithInstance {
+export function createGithubServer(profile: Profile, current: () => ToolContext | null, options: { cardFields?: boolean } = {}): McpSdkServerConfigWithInstance {
   const withContext = (handler: (ctx: ToolContext) => Promise<ToolResult>) => async (): Promise<ToolResult> => {
     const ctx = current();
     if (!ctx) return fail("No task is active.");
@@ -158,7 +231,8 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
           .filter((comment) => !comment.fromOrchestrator)
           .map((comment) => `@${comment.author} (${comment.createdAt}):\n${comment.body}`)
           .join("\n\n---\n\n");
-        return ok(`# ${thread.title}\n${thread.url} (${thread.state})\n\n${thread.body}\n\n## Comments\n\n${comments || "(none)"}`);
+        const related = describeRelations(thread.relations, ctx.task.owner, ctx.task.repo);
+        return ok(`# ${thread.title}\n${thread.url} (${thread.state})\n\n${thread.body}${related.length ? `\n\n## Related issues\n${related.join("\n")}` : ""}\n\n## Comments\n\n${comments || "(none)"}`);
       })(),
     ),
   ];
@@ -269,6 +343,45 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
     ),
   );
 
+  if (profile.github.updateIssue && options.cardFields) {
+    tools.push(
+      tool(
+        "set_card_fields",
+        "Set this card's planning fields in the GitHub Project (board tasks only): start date, end date and estimate. Pass null to clear one. With number, set one of this issue's sub-issues instead.",
+        { number: z.number().int().positive().optional().describe("A sub-issue's number; defaults to this card"), ...FIELD_ARGS },
+        (args) =>
+          withContext(async (ctx) => {
+            if (!ctx.board) return fail("set_card_fields only works on a project board task.");
+            const { board } = ctx.board;
+            const { owner, repo, threadNumber } = ctx.task;
+            if (!hasCardFields(board.fields)) return fail(`The ${board.name} board doesn't track a start date, end date or estimate (fields: in its board file).`);
+            let itemId: string | null = ctx.board.itemId;
+            let number = threadNumber;
+            if (args.number && args.number !== threadNumber) {
+              if (profile.github.subIssues !== "write") return fail("You can set this card's fields only (github.sub_issues: write also allows its sub-issues').");
+              const subIssues = await listSubIssues(ctx.gh, owner, repo, threadNumber);
+              if (!subIssues.some((issue) => issue.number === args.number && sameRepo(issue, owner, repo))) return fail(`#${args.number} isn't a sub-issue of #${threadNumber}.`);
+              number = args.number;
+              itemId = listBoardItems(board.name).find((row) => row.kind === "issue" && row.number === number && row.owner.toLowerCase() === owner.toLowerCase() && row.repo.toLowerCase() === repo.toLowerCase())?.itemId ?? null;
+            }
+            const values = fieldValues(args as CardFieldValues, itemId ? getBoardItem(board.name, itemId)?.fields : ctx.board.subIssueFields[number]);
+            if (typeof values === "string") return fail(values);
+            if (!Object.keys(values).length) return fail("Pass start, end and/or estimate.");
+            if (!itemId) {
+              if (!ctx.board.newSubIssues.some((issue) => issue.number === number) && !ctx.board.subMoves.some((move) => move.issue.number === number)) {
+                return fail(`#${number} isn't on the ${board.name} board, so it has no project fields. Put it there with move_sub_issue first.`);
+              }
+              ctx.board.subIssueFields[number] = { ...ctx.board.subIssueFields[number], ...values };
+              return ok(`#${number} isn't on the board yet; its ${describeFields(values, board.fields)} are set when it's added.`);
+            }
+            const set = await setCardFields(board, itemId, values);
+            ctx.onEvent("tool", `Set #${number}'s ${describeFields(set, board.fields)}`);
+            return ok(`Set #${number}'s ${describeFields(set, board.fields)}.`);
+          })(),
+      ),
+    );
+  }
+
   if (profile.github.updateIssue) {
     tools.push(
       tool(
@@ -360,6 +473,214 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             excludeFromGit(ctx.workspace.dir, "/.deps/");
             ctx.onEvent("tool", `Cloned ${args.repository}`);
             return ok(`Cloned ${args.repository} into .deps/${owner}/${name} (read-only reference; changes there are not pushed).`);
+          })(),
+      ),
+    );
+  }
+
+  if (profile.github.subIssues !== "none") {
+    tools.push(
+      tool(
+        "list_sub_issues",
+        "List this issue's sub-issues and check each one's work: whether the head of its branch (ao/issue-<n>) is an ancestor of this issue's branch, i.e. merged into it on GitHub. Also shows each one's board column.",
+        {},
+        () =>
+          withContext(async (ctx) => {
+            const { owner, repo, threadKind, threadNumber } = ctx.task;
+            if (threadKind !== "issue") return fail("Only issues have sub-issues.");
+            const subIssues = await listSubIssues(ctx.gh, owner, repo, threadNumber);
+            if (!subIssues.length) return ok(`#${threadNumber} has no sub-issues.${profile.github.subIssues === "write" ? " Split the work with create_sub_issue." : ""}`);
+            const check = await checkSubIssues(ctx, threadNumber, issueBranch(threadNumber), subIssues);
+            const cards = ctx.board ? listBoardItems(ctx.board.board.name) : [];
+            const column = (issue: IssueRef) => {
+              const card = cards.find((row) => row.kind === "issue" && row.number === issue.number && sameRepo(row, issue.owner, issue.repo));
+              return card?.status ? ` · board column: ${card.status}` : "";
+            };
+            return ok(describeSubIssueWork(check, owner, repo, column));
+          })(),
+      ),
+    );
+  }
+
+  if (profile.github.subIssues === "write") {
+    tools.push(
+      tool(
+        "create_sub_issue",
+        "Create a new issue in this repository as a sub-issue of the current issue, to split the work. Agents working on a sub-issue branch from this issue's branch and merge into it.",
+        {
+          title: z.string().min(1).describe("What this piece of work is"),
+          body: z.string().describe("What to do and how to tell it's done (Markdown)"),
+          labels: z.array(z.string()).optional(),
+          ...(options.cardFields ? FIELD_ARGS : {}),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo, threadKind, threadNumber } = ctx.task;
+            if (threadKind !== "issue") return fail("Sub-issues can only be created under an issue.");
+            if ((ctx.subIssuesCreated ?? 0) >= MAX_SUB_ISSUES_PER_TASK) return fail(`You've already created ${MAX_SUB_ISSUES_PER_TASK} sub-issues in this task.`);
+            const values = fieldValues(args as CardFieldValues);
+            if (typeof values === "string") return fail(values);
+            const footer = `<sub>Sub-issue of #${threadNumber}, created by **${profile.name}** · orchestrator task #${ctx.task.id}.</sub>`;
+            const { data } = await ctx.gh.rest.issues.create({ owner, repo, title: args.title, body: [args.body.trim(), "", footer].join("\n"), ...(args.labels?.length ? { labels: args.labels } : {}) });
+            const child = toIssueRef(data);
+            ctx.subIssuesCreated = (ctx.subIssuesCreated ?? 0) + 1;
+            try {
+              await addSubIssue(ctx.gh, owner, repo, threadNumber, child);
+            } catch (error) {
+              return fail(`Created #${child.number} (${child.url}), but couldn't make it a sub-issue of #${threadNumber}: ${errorMessage(error)}`);
+            }
+            ctx.thread.relations = { ...ctx.thread.relations, subIssues: [...ctx.thread.relations.subIssues, child] };
+            const column = ctx.board?.board.subIssues.column;
+            if (ctx.board && column) ctx.board.newSubIssues.push(child);
+            const hasValues = Object.keys(values).length > 0;
+            const tracked = Boolean(ctx.board && hasCardFields(ctx.board.board.fields));
+            if (ctx.board && hasValues && tracked) ctx.board.subIssueFields[child.number] = values;
+            ctx.onEvent("tool", `Created sub-issue #${child.number}`);
+            return ok(
+              [
+                `Created #${child.number} "${child.title}" as a sub-issue of #${threadNumber}: ${child.url}`,
+                `Its work goes on \`${issueBranch(child.number)}\`, based on and merged into \`${issueBranch(threadNumber)}\`.`,
+                ...(ctx.board && column ? [`It's added to the ${ctx.board.board.name} board in "${column}" when you finish.`] : []),
+                ...(hasValues
+                  ? [tracked && (column || ctx.board!.board.subIssues.movesTo.length) ? `Its ${describeFields(values, ctx.board!.board.fields)} are set when it's added to the board (on its own column or with move_sub_issue).` : "The start, end and estimate weren't set: only cards on a board that tracks them have those."]
+                  : []),
+              ].join("\n"),
+            );
+          })(),
+      ),
+      tool(
+        "move_sub_issue",
+        "Move one of this issue's sub-issue cards on the project board (board tasks only, to the columns the board allows). The move happens after you finish, and that column's agent gets your handoff note. A sub-issue that isn't on the board yet is added in that column.",
+        {
+          number: z.number().int().positive().describe("The sub-issue's number"),
+          column: z.string().min(1).describe("Target column"),
+          handoff: z.string().min(1).describe("Note for whoever works the sub-issue next"),
+          fields: z
+            .object(Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, z.string().optional()])) as Record<HandoffField, z.ZodOptional<z.ZodString>>)
+            .optional()
+            .describe("Structured handoff fields the target column requires"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            if (!ctx.board) return fail("move_sub_issue only works on a project board task.");
+            const { board } = ctx.board;
+            const { owner, repo, threadKind, threadNumber } = ctx.task;
+            if (threadKind !== "issue") return fail("Only issues have sub-issues.");
+            if (!board.subIssues.movesTo.length) return fail(`The ${board.name} board doesn't let agents move sub-issues (sub_issues.moves_to isn't set in its board file).`);
+            const allowed = [...new Set([...board.subIssues.movesTo, ...(board.needsHuman ? [board.needsHuman] : [])])];
+            const target = allowed.find((name) => name.toLowerCase() === args.column.toLowerCase());
+            if (!target) return fail(`You can move sub-issues to: ${allowed.map((name) => `"${name}"`).join(", ")}.`);
+            const subIssues = await listSubIssues(ctx.gh, owner, repo, threadNumber);
+            const issue = subIssues.find((candidate) => candidate.number === args.number && sameRepo(candidate, owner, repo));
+            if (!issue) return fail(`#${args.number} isn't a sub-issue of #${threadNumber}. Its sub-issues: ${subIssues.map((candidate) => refText(candidate, owner, repo)).join(", ") || "none"}.`);
+            const card = listBoardItems(board.name).find((row) => row.kind === "issue" && row.number === issue.number && sameRepo(row, owner, repo)) ?? null;
+            if (card?.status === target) return ok(`#${issue.number} is already in "${target}".`);
+            const problems = await cardMoveProblems(ctx, issue, target, args.fields ?? {});
+            if (problems.length) {
+              ctx.onEvent("tool", `Move of #${issue.number} to ${target} refused: ${problems.length} requirement${problems.length === 1 ? "" : "s"} not met`);
+              return fail([`Can't move #${issue.number} to "${target}" yet:`, ...problems.map((problem) => `- ${problem}`), "Fix these and call move_sub_issue again, or leave it where it is."].join("\n"));
+            }
+            ctx.board.subMoves = ctx.board.subMoves.filter((move) => move.issue.number !== issue.number);
+            ctx.board.subMoves.push({ issue, itemId: card?.itemId ?? null, from: card?.status ?? null, to: target, note: renderHandoff(args.handoff, args.fields ?? {}), fields: args.fields ?? {} });
+            ctx.onEvent("tool", `Will move sub-issue #${issue.number} to ${target}`);
+            return ok(`#${issue.number} will move to "${target}" when you finish${card ? "" : " (it isn't on the board yet, so it's added there)"}.`);
+          })(),
+      ),
+    );
+  }
+
+  if (profile.github.relations) {
+    const TEXT: Record<(typeof RELATIONS)[number], (me: string, other: string) => string> = {
+      blocked_by: (me, other) => `${me} is blocked by ${other}`,
+      blocks: (me, other) => `${me} blocks ${other}`,
+      parent: (me, other) => `${me} is a sub-issue of ${other}`,
+      sub_issue: (me, other) => `${other} is a sub-issue of ${me}`,
+    };
+    tools.push(
+      tool(
+        "link_issue",
+        "Add (or remove) a GitHub relation between the current issue and another issue in this repository: blocked_by (this issue can't be done before the other), blocks, parent (this issue becomes a sub-issue of the other), sub_issue (the other becomes a sub-issue of this one).",
+        {
+          relation: z.enum(RELATIONS),
+          number: z.number().int().positive().describe("The other issue's number"),
+          remove: z.boolean().optional().describe("Remove the relation instead of adding it"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo, threadKind, threadNumber } = ctx.task;
+            if (threadKind !== "issue") return fail(`Relations are between issues; this task is on a ${threadKind === "pull" ? "pull request" : "discussion"}.`);
+            if (args.number === threadNumber) return fail("An issue can't be related to itself.");
+            const [me, other] = await Promise.all([getIssue(ctx.gh, owner, repo, threadNumber), getIssue(ctx.gh, owner, repo, args.number)]);
+            if (other.isPull) return fail(`#${args.number} is a pull request; relations are between issues.`);
+            const remove = args.remove === true;
+            if (args.relation === "blocked_by") await (remove ? removeBlockedBy : addBlockedBy)(ctx.gh, owner, repo, threadNumber, other);
+            else if (args.relation === "blocks") await (remove ? removeBlockedBy : addBlockedBy)(ctx.gh, owner, repo, other.number, me);
+            else if (args.relation === "parent") await (remove ? removeSubIssue : addSubIssue)(ctx.gh, owner, repo, other.number, me);
+            else await (remove ? removeSubIssue : addSubIssue)(ctx.gh, owner, repo, threadNumber, other);
+            const text = TEXT[args.relation](`#${threadNumber}`, `#${other.number}`);
+            ctx.onEvent("tool", `${remove ? "Removed" : "Linked"}: ${text}`);
+            return ok(remove ? `Removed the relation: ${text} no longer.` : `Linked: ${text}.`);
+          })(),
+      ),
+    );
+  }
+
+  if (profile.github.mergeIntoParent) {
+    tools.push(
+      tool(
+        "merge_into_parent",
+        "Merge this sub-issue's work into its parent issue's branch (ao/issue-<parent>) with a merge commit, so its head becomes an ancestor of the parent branch. Merges this task's open pull request if there is one. Never merges into the default branch. Push with commit_and_push first.",
+        {
+          close_issue: z.boolean().optional().describe("Close the sub-issue as completed after merging (default true)"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo, threadKind, threadNumber } = ctx.task;
+            const { workspace, thread } = ctx;
+            const base = threadKind === "pull" ? (thread.pull && !thread.pull.isFork ? thread.pull.baseRef : null) : parentBranchFor(profile, thread, ctx.task);
+            if (!base) {
+              return fail(
+                threadKind === "pull"
+                  ? "This pull request comes from a fork, so it can't be merged into a parent branch."
+                  : `#${threadNumber} has no open parent issue in this repository${profile.github.parentBranch ? "" : " (or github.parent_branch is off for this agent)"}, so there's no parent branch to merge into.`,
+              );
+            }
+            if (base === thread.defaultBranch || !isIssueBranch(base)) return fail(`merge_into_parent only merges into a parent issue's branch (ao/issue-<n>), never into \`${base}\`.`);
+            const head = await git(workspace.dir, ["rev-parse", "HEAD"]);
+            const pushed = await fetchBranch(ctx, workspace.branch);
+            if (pushed !== head) return fail(`Push your work first with commit_and_push: \`${workspace.branch}\` is ${pushed ? `at ${pushed.slice(0, 10)}` : "not"} on GitHub${pushed ? `, your checkout at ${head.slice(0, 10)}` : ""}.`);
+            if (await ensureBaseBranch(ctx.task, { ...workspace, baseBranch: base }, thread.defaultBranch)) ctx.onEvent("system", `Created \`${base}\` on GitHub`);
+            const before = await fetchBranch(ctx, base);
+            let how = "it was already merged";
+            if (!before || !(await isAncestor(workspace.dir, head, before))) {
+              const pr = threadKind === "pull" ? { number: threadNumber, base } : await findOpenPull(ctx.gh, owner, repo, workspace.branch);
+              try {
+                if (pr && pr.base === base) {
+                  await ctx.gh.rest.pulls.merge({ owner, repo, pull_number: pr.number, merge_method: "merge", sha: head, commit_title: `Merge #${pr.number} into ${base}` });
+                  how = `merged pull request #${pr.number}`;
+                } else if (pr) {
+                  return fail(`Pull request #${pr.number} targets \`${pr.base}\`, not the parent branch \`${base}\`. Change its base on GitHub, or ask a person to.`);
+                } else {
+                  await ctx.gh.rest.repos.merge({ owner, repo, base, head: workspace.branch, commit_message: `Merge ${workspace.branch} into ${base} (#${threadNumber})` });
+                  how = "merged the branch";
+                }
+              } catch (error) {
+                if (/conflict/i.test(errorMessage(error)) || Number((error as { status?: number }).status) === 409) {
+                  return fail(`GitHub can't merge \`${workspace.branch}\` into \`${base}\`: they conflict. Run \`git fetch origin ${base}\` and \`git merge origin/${base}\`, resolve the conflicts, commit_and_push, then call merge_into_parent again.`);
+                }
+                throw error;
+              }
+            }
+            const after = await fetchBranch(ctx, base);
+            if (!after || !(await isAncestor(workspace.dir, head, after))) return fail(`GitHub accepted the merge, but \`${base}\` doesn't contain ${head.slice(0, 10)} yet. Check with list_sub_issues on the parent later.`);
+            let closed = "";
+            if (threadKind === "issue" && args.close_issue !== false && thread.state === "open") {
+              await ctx.gh.rest.issues.update({ owner, repo, issue_number: threadNumber, state: "closed", state_reason: "completed" });
+              thread.state = "closed";
+              closed = ` Closed #${threadNumber} as completed.`;
+            }
+            ctx.onEvent("tool", `Merged \`${workspace.branch}\` into \`${base}\``);
+            return ok(`Done (${how}): \`${workspace.branch}\` at ${head.slice(0, 10)} is now an ancestor of \`${base}\` (at ${after.slice(0, 10)}).${closed}`);
           })(),
       ),
     );

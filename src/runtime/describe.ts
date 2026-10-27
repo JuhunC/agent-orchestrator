@@ -35,6 +35,11 @@ const GITHUB_TOOL_LABELS: Record<string, string> = {
   read_wiki_page: "Reading a wiki page",
   write_wiki_page: "Writing a wiki page",
   delete_wiki_page: "Deleting a wiki page",
+  list_sub_issues: "Checking the sub-issues",
+  create_sub_issue: "Creating a sub-issue",
+  move_sub_issue: "Moving a sub-issue's card",
+  link_issue: "Linking issues",
+  merge_into_parent: "Merging into the parent issue's branch",
 };
 
 /** A one-line, human description of a Claude Code tool call, for progress comments and the UI. */

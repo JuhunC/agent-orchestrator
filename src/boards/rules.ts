@@ -4,8 +4,11 @@
  * not enter. Boards without them behave as before. People moving cards are never checked.
  */
 
-export const EVIDENCE = ["pull_request", "pushed", "tests", "review", "approval"] as const;
+export const EVIDENCE = ["pull_request", "pushed", "tests", "review", "approval", "merged", "sub_issues"] as const;
 export type Evidence = (typeof EVIDENCE)[number];
+
+/** Evidence the orchestrator can check for a card someone else works on (a parent moving its sub-issues). */
+export const CARD_EVIDENCE: readonly Evidence[] = ["pull_request", "merged", "sub_issues"];
 
 export const HANDOFF_FIELDS = ["status", "decisions", "verified", "open_questions", "risks", "do_not_redo"] as const;
 export type HandoffField = (typeof HANDOFF_FIELDS)[number];
@@ -18,6 +21,8 @@ export const EVIDENCE_TEXT: Record<Evidence, string> = {
   tests: "a test run that passed after your last change",
   review: "your review verdict (approve or request changes) on the pull request",
   approval: "your approval of the pull request",
+  merged: "your branch merged into the branch it targets (a sub-issue's parent branch, otherwise the default branch)",
+  sub_issues: "every sub-issue's branch merged into this card's branch (or the sub-issue closed)",
 };
 
 const FIELD_TITLES: Record<HandoffField, string> = {
@@ -60,6 +65,36 @@ export interface WorkType {
 }
 
 export const NO_RULES: ColumnRules = { evidence: [], handoffRequired: [], testCommands: [] };
+
+/** How a board treats sub-issues (the optional `sub_issues:` section). */
+export interface SubIssueSettings {
+  /** Column that sub-issues created by agents on this board land in; null = they aren't added to the board. */
+  column: string | null;
+  /** Columns an agent on a parent card may move the card's sub-issues to (needs-human is always allowed). */
+  movesTo: string[];
+}
+
+export const NO_SUB_ISSUES: SubIssueSettings = { column: null, movesTo: [] };
+
+/** The project fields a board tracks per card (the optional `fields:` section). */
+export interface CardFieldSettings {
+  /** Name of the project's date field for when work starts, e.g. "Start date". */
+  start: string | null;
+  /** Name of the project's date field for when work ends, e.g. "End date". */
+  end: string | null;
+  /** Name of the project's number field for the estimate, e.g. "Estimate". */
+  estimate: string | null;
+  /** Columns that set the start date (when it's empty) as a card enters them. */
+  startOn: string[];
+  /** Columns that set the end date as a card enters them. */
+  endOn: string[];
+}
+
+export const NO_CARD_FIELDS: CardFieldSettings = { start: null, end: null, estimate: null, startOn: [], endOn: [] };
+
+export function hasCardFields(settings: CardFieldSettings): boolean {
+  return Boolean(settings.start || settings.end || settings.estimate);
+}
 
 export function hasRules(rules: ColumnRules): boolean {
   return rules.evidence.length > 0 || rules.handoffRequired.length > 0;
@@ -126,11 +161,72 @@ function parseWorkTypes(raw: unknown, columns: string[], needsHuman: string | nu
   return types;
 }
 
+function parseSubIssues(raw: unknown, columns: string[], needsHuman: string | null, errors: string[]): SubIssueSettings {
+  if (raw === undefined || raw === null) return NO_SUB_ISSUES;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push('"sub_issues" must be a map with "column" and/or "moves_to"');
+    return NO_SUB_ISSUES;
+  }
+  const entry = raw as Record<string, unknown>;
+  for (const key of Object.keys(entry)) if (key !== "column" && key !== "moves_to") errors.push(`sub_issues: unknown setting "${key}" (use column and moves_to)`);
+  let column: string | null = null;
+  if (entry.column !== undefined && entry.column !== null) {
+    const name = String(entry.column);
+    if (!columns.includes(name)) errors.push(`sub_issues.column: "${name}" isn't listed under columns`);
+    else column = name;
+  }
+  const movesTo: string[] = [];
+  for (const name of list(entry.moves_to)) {
+    if (!columns.includes(name) && name !== needsHuman) errors.push(`sub_issues.moves_to: "${name}" isn't listed under columns`);
+    else if (!movesTo.includes(name)) movesTo.push(name);
+  }
+  return { column, movesTo };
+}
+
+const FIELD_KEYS = ["start", "end", "estimate", "start_on", "end_on"];
+
+function parseCardFields(raw: unknown, columns: string[], needsHuman: string | null, errors: string[]): CardFieldSettings {
+  if (raw === undefined || raw === null) return NO_CARD_FIELDS;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push('"fields" must be a map: start, end, estimate (project field names), start_on, end_on (columns)');
+    return NO_CARD_FIELDS;
+  }
+  const entry = raw as Record<string, unknown>;
+  for (const key of Object.keys(entry)) if (!FIELD_KEYS.includes(key)) errors.push(`fields: unknown setting "${key}" (use ${FIELD_KEYS.join(", ")})`);
+  const name = (key: string): string | null => {
+    const value = entry[key];
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "string" || !value.trim()) {
+      errors.push(`fields.${key}: give the name of a field in the project, e.g. "${key === "estimate" ? "Estimate" : key === "start" ? "Start date" : "End date"}"`);
+      return null;
+    }
+    return value.trim();
+  };
+  const settings: CardFieldSettings = { start: name("start"), end: name("end"), estimate: name("estimate"), startOn: [], endOn: [] };
+  const names = [settings.start, settings.end, settings.estimate].filter(Boolean);
+  if (new Set(names.map((value) => value!.toLowerCase())).size !== names.length) errors.push("fields: start, end and estimate must be different project fields");
+  for (const [key, field, target] of [["start_on", "start", settings.startOn], ["end_on", "end", settings.endOn]] as const) {
+    const listed = list(entry[key]);
+    if (listed.length && !settings[field]) errors.push(`fields.${key} needs fields.${field} (the project's date field)`);
+    for (const column of listed) {
+      if (!columns.includes(column) && column !== needsHuman) errors.push(`fields.${key}: "${column}" isn't listed under columns`);
+      else if (!target.includes(column)) target.push(column);
+    }
+  }
+  return settings;
+}
+
 /**
  * Reads and checks the rules in a board file. Used when a board loads (errors disable the board,
  * like any other board error) and when a board file is saved (errors reject the save).
  */
-export function parseBoardRules(data: Record<string, unknown>): { columns: Record<string, ColumnRules>; workTypes: WorkType[]; errors: string[] } {
+export function parseBoardRules(data: Record<string, unknown>): {
+  columns: Record<string, ColumnRules>;
+  workTypes: WorkType[];
+  subIssues: SubIssueSettings;
+  fields: CardFieldSettings;
+  errors: string[];
+} {
   const errors: string[] = [];
   const rawColumns = (data.columns && typeof data.columns === "object" ? data.columns : {}) as Record<string, Record<string, unknown> | null>;
   const needsHuman = needsHumanOf(data);
@@ -142,7 +238,9 @@ export function parseBoardRules(data: Record<string, unknown>): { columns: Recor
     }
   }
   const workTypes = parseWorkTypes(data.work_types, Object.keys(rawColumns), needsHuman, errors);
-  return { columns, workTypes, errors };
+  const subIssues = parseSubIssues(data.sub_issues, Object.keys(rawColumns), needsHuman, errors);
+  const fields = parseCardFields(data.fields, Object.keys(rawColumns), needsHuman, errors);
+  return { columns, workTypes, subIssues, fields, errors };
 }
 
 /** The first work type (in file order) with one of the card's labels. */

@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
 import { api } from "../api.ts";
+import { ConfigReference } from "./ConfigReference.tsx";
+
+const OPTIONS_KEY = "ao.editor.options";
+
+function readOptionsPreference(): boolean {
+  try {
+    return localStorage.getItem(OPTIONS_KEY) !== "hidden";
+  } catch {
+    return true;
+  }
+}
 
 /**
  * Edits one file in the profiles folder. The server validates it (frontmatter, JSON) before
@@ -27,6 +38,17 @@ export function FileEditor({
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [showOptions, setShowOptions] = useState(readOptionsPreference);
+  const toggleOptions = () => {
+    setShowOptions((value) => {
+      try {
+        localStorage.setItem(OPTIONS_KEY, value ? "hidden" : "shown");
+      } catch {
+        // private window: the choice lasts for this page only
+      }
+      return !value;
+    });
+  };
 
   useEffect(() => {
     setContent(null);
@@ -83,6 +105,9 @@ export function FileEditor({
         {dirty && <span className="badge accent">unsaved</span>}
         <span className="grow" />
         {status && !dirty && <span className="meta">{status}</span>}
+        <button className="small" onClick={toggleOptions} title="What this file can contain">
+          {showOptions ? "Hide options" : "Options"}
+        </button>
         {onDeleted && exists && (
           <button className="small danger" onClick={remove}>
             {deleteLabel ?? "Delete"}
@@ -95,22 +120,25 @@ export function FileEditor({
           {busy ? "Saving…" : "Save"}
         </button>
       </div>
-      <textarea
-        className="mono"
-        rows={rows}
-        spellCheck={false}
-        value={content}
-        onChange={(event) => {
-          setContent(event.target.value);
-          setStatus(null);
-        }}
-        onKeyDown={(event) => {
-          if ((event.metaKey || event.ctrlKey) && event.key === "s") {
-            event.preventDefault();
-            void save();
-          }
-        }}
-      />
+      <div className={showOptions ? "editor-split" : undefined}>
+        <textarea
+          className="mono"
+          rows={rows}
+          spellCheck={false}
+          value={content}
+          onChange={(event) => {
+            setContent(event.target.value);
+            setStatus(null);
+          }}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "s") {
+              event.preventDefault();
+              void save();
+            }
+          }}
+        />
+        {showOptions && <ConfigReference path={path} />}
+      </div>
       {error && <p className="error-text">{error}</p>}
     </div>
   );
