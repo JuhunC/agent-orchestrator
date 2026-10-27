@@ -36,6 +36,8 @@ export class FakeGitHub {
   issues = new Map<number, FakeIssue>();
   permissions = new Map<string, string>();
   labels: string[] = [];
+  /** Labels defined in the repository (acme/widgets). */
+  repoLabels = new Set<string>(["type:refactor"]);
   assignees: string[] = [];
   reactions = 0;
   reviews: { number: number; event: string; body: string }[] = [];
@@ -176,6 +178,16 @@ export class FakeGitHub {
     if (method === "GET" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/))) {
       const issue = this.issues.get(Number(match[1]));
       return issue ? { status: 200, body: this.issueJson(issue) } : { status: 404, body: { message: "Not Found" } };
+    }
+    if (method === "GET" && (match = path.match(/^\/repos\/acme\/widgets\/labels\/(.+)$/))) {
+      const name = decodeURIComponent(match[1]!);
+      const found = [...this.repoLabels].find((label) => label.toLowerCase() === name.toLowerCase());
+      return found ? { status: 200, body: { name: found, color: "ededed" } } : { status: 404, body: { message: "Not Found" } };
+    }
+    if (method === "POST" && path === "/repos/acme/widgets/labels") {
+      if ([...this.repoLabels].some((label) => label.toLowerCase() === String(body.name).toLowerCase())) return { status: 422, body: { message: "Validation Failed", errors: [{ code: "already_exists" }] } };
+      this.repoLabels.add(body.name);
+      return { status: 201, body: { name: body.name, color: body.color } };
     }
     if (method === "POST" && path === "/repos/acme/widgets/issues") {
       const number = Math.max(0, ...this.issues.keys()) + 1;

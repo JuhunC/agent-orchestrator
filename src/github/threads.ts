@@ -1,5 +1,6 @@
 import type { ThreadKind } from "../types.ts";
 import type { GitHubClient } from "./app.ts";
+import { ensureLabels } from "./labels.ts";
 import { fetchRelations, NO_RELATIONS, type Relations } from "./relations.ts";
 
 export const PROGRESS_MARKER = "<!-- agent-orchestrator:progress -->";
@@ -231,7 +232,7 @@ export async function markAgentOnThread(
   label: string | null,
 ): Promise<void> {
   await gh.rest.issues.addAssignees({ owner, repo, issue_number: number, assignees: [handle] }).catch(() => undefined);
-  if (label) await gh.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [label] }).catch(() => undefined);
+  if (label) await ensureLabels(gh, owner, repo, [label]).then((labels) => gh.rest.issues.addLabels({ owner, repo, issue_number: number, labels })).catch(() => undefined);
 }
 
 export async function findOpenPull(gh: GitHubClient, owner: string, repo: string, branch: string): Promise<{ number: number; url: string; headSha: string; base: string } | null> {

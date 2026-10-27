@@ -17,6 +17,8 @@ export function agentEnv(profile: Profile, extra: Record<string, string> = {}): 
     HOME: config.agentHome,
     LANG: process.env.LANG ?? "C.UTF-8",
     CI: "true",
+    // The agent's git has no GitHub credentials: fail at once instead of waiting for a password.
+    GIT_TERMINAL_PROMPT: "0",
     DISABLE_AUTOUPDATER: "1",
     // Per-request retries for model API errors; CLAUDE_CODE_MAX_RETRIES or a profile's env overrides it.
     CLAUDE_CODE_MAX_RETRIES: String(config.modelErrorRetries),
@@ -108,6 +110,7 @@ const ORCHESTRATOR_NOTES = `
 - You are run by an orchestrator in response to a GitHub request. There is no human at the terminal: work autonomously, and ask questions with the github post_comment tool only when you're truly blocked.
 - Your working directory is a git checkout on the branch for this task. Don't switch branches.
 - You can't use \`git push\` or \`gh\` to change GitHub. Publish with the github MCP tools: commit_and_push, then open_pull_request.
+- Your shell has no GitHub credentials, so \`git fetch\`, \`git pull\` and cloning from GitHub fail there. The checkout is refreshed from GitHub when each task starts (all of it is local); for newer commits mid-task, use the github tool fetch_from_github, then merge or rebase locally.
 - End with a concise summary for the people on GitHub; it's posted as a comment.
 - People may comment or act on the issue or pull request while you work. The orchestrator passes that on to you as "New activity on GitHub"; take it into account when it arrives.`;
 

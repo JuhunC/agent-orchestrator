@@ -98,6 +98,7 @@ export function getApp(): App {
 export function saveCredentials(credentials: Omit<AppCredentials, "source">): void {
   writeFileSync(credentialsFile, JSON.stringify(credentials, null, 2), { mode: 0o600 });
   cached = null;
+  tokens.clear();
   getCredentials();
 }
 
@@ -105,10 +106,16 @@ export async function installationClient(installationId: number): Promise<GitHub
   return (await getApp().getInstallationOctokit(installationId)) as unknown as GitHubClient;
 }
 
+const tokens = new Map<number, { token: string; expiresAt: number }>();
+
+/** An installation token for git, reused until five minutes before it expires (GitHub gives them an hour). */
 export async function installationToken(installationId: number): Promise<string> {
+  const known = tokens.get(installationId);
+  if (known && known.expiresAt - Date.now() > 5 * 60_000) return known.token;
   const { data } = await getApp().octokit.request("POST /app/installations/{installation_id}/access_tokens", {
     installation_id: installationId,
   });
+  tokens.set(installationId, { token: data.token, expiresAt: Date.parse(data.expires_at) || Date.now() + 30 * 60_000 });
   return data.token;
 }
 

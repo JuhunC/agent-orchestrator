@@ -27,6 +27,7 @@ const GITHUB_TOOL_LABELS: Record<string, string> = {
   commit_and_push: "Committing and pushing",
   open_pull_request: "Opening a pull request",
   get_ci_status: "Checking CI",
+  fetch_from_github: "Fetching from GitHub",
   clone_repository: "Cloning a repository",
   move_to_column: "Moving the card",
   update_issue: "Updating the issue",

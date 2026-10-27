@@ -265,7 +265,13 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     const subMoves: SubIssueMove[] = [];
     const subLines: string[] = [];
     const newColumn = boardContext?.board.subIssues.column ?? null;
-    const newCards = boardContext && newColumn ? boardContext.newSubIssues.filter((issue) => !boardContext!.subMoves.some((subMove) => subMove.issue.number === issue.number)) : [];
+    const newCards: SubIssueMove["issue"][] = [];
+    for (const issue of boardContext && newColumn ? boardContext.newSubIssues.filter((candidate) => !boardContext!.subMoves.some((subMove) => subMove.issue.number === candidate.number)) : []) {
+      // New sub-issues meet their column's requirements like any agent move (e.g. dependencies).
+      const problems = await cardMoveProblems(context, issue, newColumn!, null).catch((error) => [`the requirements couldn't be checked: ${errorMessage(error)}`]);
+      if (problems.length) subLines.push(`Sub-issue #${issue.number} wasn't added to the board in **${newColumn}** because:\n${problems.map((problem) => `- ${problem}`).join("\n")}`);
+      else newCards.push(issue);
+    }
     for (const subMove of boardContext?.subMoves ?? []) {
       const problems = await cardMoveProblems(context, subMove.issue, subMove.to, null).catch((error) => [`the requirements couldn't be checked: ${errorMessage(error)}`]);
       if (problems.length) {
@@ -288,6 +294,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
               ? `The card stays in **${boardContext.column}**. ${refused}`
               : `The card stays in **${boardContext.column}** (the agent didn't move it).`
             : "";
+    const issueState = context.issueState ?? null;
+    if (issueState) subLines.push(issueState.state === "closed" ? `**Closed the issue** as ${issueState.reason.replace("_", " ")}.` : "**Reopened the issue.**");
     details = [own, ...subLines, details].filter(Boolean).join("\n\n");
     if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
     await finish("succeeded", outcome.result, "", details, commits);
@@ -301,6 +309,13 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       if (landed) emit(task.id, "system", `Moved the card to ${landed}`);
     }
     if (boardContext) await settleSubIssues(boardContext, subMoves, newCards, newColumn);
+    if (issueState) {
+      // Last, so a project workflow that moves closed cards can't stop this task's own moves.
+      await gh.rest.issues
+        .update({ owner: task.owner, repo: task.repo, issue_number: task.threadNumber, state: issueState.state, state_reason: issueState.reason })
+        .then(() => emit(task.id, "system", issueState.state === "closed" ? `Closed the issue as ${issueState.reason.replace("_", " ")}` : "Reopened the issue"))
+        .catch((error) => emit(task.id, "error", `Couldn't ${issueState.state === "closed" ? "close" : "reopen"} the issue: ${errorMessage(error)}`));
+    }
   } catch (error) {
     const message = errorMessage(error);
     log.error("Task failed", { task: task.id, error: message });

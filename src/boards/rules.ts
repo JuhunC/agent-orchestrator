@@ -4,11 +4,11 @@
  * not enter. Boards without them behave as before. People moving cards are never checked.
  */
 
-export const EVIDENCE = ["pull_request", "pushed", "tests", "review", "approval", "merged", "sub_issues"] as const;
+export const EVIDENCE = ["pull_request", "pushed", "tests", "review", "approval", "merged", "merged_into_parent", "sub_issues", "dependencies"] as const;
 export type Evidence = (typeof EVIDENCE)[number];
 
 /** Evidence the orchestrator can check for a card someone else works on (a parent moving its sub-issues). */
-export const CARD_EVIDENCE: readonly Evidence[] = ["pull_request", "merged", "sub_issues"];
+export const CARD_EVIDENCE: readonly Evidence[] = ["pull_request", "merged", "merged_into_parent", "sub_issues", "dependencies"];
 
 export const HANDOFF_FIELDS = ["status", "decisions", "verified", "open_questions", "risks", "do_not_redo"] as const;
 export type HandoffField = (typeof HANDOFF_FIELDS)[number];
@@ -23,6 +23,8 @@ export const EVIDENCE_TEXT: Record<Evidence, string> = {
   approval: "your approval of the pull request",
   merged: "your branch merged into the branch it targets (a sub-issue's parent branch, otherwise the default branch)",
   sub_issues: "every sub-issue's branch merged into this card's branch (or the sub-issue closed)",
+  merged_into_parent: "for a sub-issue, its branch merged into the parent issue's branch (cards without a parent, and sub-issues with nothing to merge, pass)",
+  dependencies: "every issue this card is blocked by is closed",
 };
 
 const FIELD_TITLES: Record<HandoffField, string> = {

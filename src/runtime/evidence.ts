@@ -5,7 +5,7 @@ import { isAbsolute, join } from "node:path";
 import type { HookCallback, Options } from "@anthropic-ai/claude-agent-sdk";
 import type { Board } from "../boards/loader.ts";
 import { CARD_EVIDENCE, EVIDENCE_TEXT, FIELD_HINTS, forbids, isTestCommand, missingFields, workTypeFor, type ColumnRules, type HandoffFields, type WorkType } from "../boards/rules.ts";
-import { issueBranch, isIssueBranch, refText, type IssueRef } from "../github/relations.ts";
+import { issueBranch, isIssueBranch, listBlockedBy, refText, type IssueRef } from "../github/relations.ts";
 import { findOpenPull } from "../github/threads.ts";
 import type { GitHubClient } from "../github/app.ts";
 import { git } from "../runner/git.ts";
@@ -107,6 +107,23 @@ async function evidenceProblems(ctx: ToolContext, rules: ColumnRules): Promise<s
       const how = ctx.profile.github.mergeIntoParent && isIssueBranch(base) ? "Push it with commit_and_push, then call merge_into_parent." : "It counts once your pull request is merged (with a merge commit).";
       if (!baseSha) problems.push(`${need}: \`${base}\` isn't on GitHub yet. ${how}`);
       else if (!(await isAncestor(dir, sha, baseSha))) problems.push(`${need}: your branch (at ${sha.slice(0, 10)}) isn't merged into \`${base}\` yet. ${how}`);
+    } else if (item === "merged_into_parent") {
+      const base = ctx.workspace.baseBranch;
+      // Only a sub-issue (one that branches from its parent's branch) has a parent to merge into.
+      if (base === ctx.thread.defaultBranch || !isIssueBranch(base)) continue;
+      const sha = await git(dir, ["rev-parse", "HEAD"]);
+      const baseSha = await fetchBranch(ctx, base);
+      if (baseSha && (await isAncestor(dir, sha, baseSha))) continue;
+      // Nothing to merge yet: no commits of its own (e.g. docs done in the wiki).
+      if (!baseSha && (await isAncestor(dir, sha, `refs/remotes/origin/${ctx.thread.defaultBranch}`))) continue;
+      const how = ctx.profile.github.mergeIntoParent ? "Push it with commit_and_push, then call merge_into_parent." : "It counts once your pull request into it is merged (with a merge commit).";
+      problems.push(`${need}: your branch (at ${sha.slice(0, 10)}) isn't merged into the parent's branch \`${base}\` yet. ${how}`);
+    } else if (item === "dependencies") {
+      const { owner, repo, threadKind, threadNumber } = ctx.task;
+      if (threadKind !== "issue") continue;
+      for (const blocker of (await listBlockedBy(ctx.gh, owner, repo, threadNumber)).filter((issue) => issue.state === "open")) {
+        problems.push(`${need}: this issue is blocked by ${refText(blocker, owner, repo)} "${blocker.title}", which is still open. It counts once that issue is closed; until then, leave the card where it is.`);
+      }
     } else if (item === "sub_issues") {
       const { owner, repo, threadNumber } = ctx.task;
       const check = await checkSubIssues(ctx, threadNumber, issueBranch(threadNumber));
@@ -156,6 +173,18 @@ export async function cardMoveProblems(ctx: ToolContext, card: IssueRef, target:
       const [pr, head] = await Promise.all([findOpenPull(ctx.gh, owner, repo, branch), fetchBranch(ctx, branch)]);
       if (!pr) problems.push(`${need}: there's no open pull request for \`${branch}\``);
       else if (pr.headSha !== head) problems.push(`${need}: pull request #${pr.number} doesn't have the latest commit of \`${branch}\``);
+    } else if (item === "merged_into_parent") {
+      const into = issueBranch(ctx.task.threadNumber);
+      const head = await fetchBranch(ctx, branch);
+      if (!head) continue; // no branch: nothing to merge
+      const intoSha = await fetchBranch(ctx, into);
+      if (intoSha && (await isAncestor(ctx.workspace.dir, head, intoSha))) continue;
+      if (!intoSha && (await isAncestor(ctx.workspace.dir, head, `refs/remotes/origin/${ctx.thread.defaultBranch}`))) continue;
+      problems.push(`${need}: \`${branch}\` (at ${head.slice(0, 10)}) isn't merged into \`${into}\` yet`);
+    } else if (item === "dependencies") {
+      for (const blocker of (await listBlockedBy(ctx.gh, owner, repo, card)).filter((issue) => issue.state === "open")) {
+        problems.push(`${need}: ${ref} is blocked by ${refText(blocker, owner, repo)} "${blocker.title}", which is still open`);
+      }
     } else if (item === "merged") {
       const into = issueBranch(ctx.task.threadNumber);
       const [head, intoSha] = [await fetchBranch(ctx, branch), await fetchBranch(ctx, into)];

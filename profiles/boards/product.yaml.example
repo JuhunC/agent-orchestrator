@@ -28,9 +28,12 @@ limits:
 #
 # Optional, per column: what an agent must show to move a card INTO that column.
 # move_to_column refuses the move with what's missing; people can still move cards anywhere.
-#   evidence:          pull_request | pushed | tests | review | approval | merged | sub_issues
+#   evidence:          pull_request | pushed | tests | review | approval | merged |
+#                      merged_into_parent | sub_issues | dependencies
 #                      (merged: the card's branch is in the branch it targets, e.g. its parent's;
-#                       sub_issues: every sub-issue's branch is merged into this card's branch)
+#                       merged_into_parent: the same, checked only for sub-issues with commits;
+#                       sub_issues: every sub-issue's branch is merged into this card's branch;
+#                       dependencies: every issue the card is blocked by is closed)
 #   test_command:      for tests: command(s) that count (default: common test runners)
 #   handoff_required:  status | decisions | verified | open_questions | risks | do_not_redo
 #

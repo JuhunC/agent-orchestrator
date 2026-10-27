@@ -18,6 +18,8 @@ export interface IssueRef {
   stateReason: string | null;
   url: string;
   labels: string[];
+  /** Blocked-by counts from GitHub's issue JSON (open blockers, all blockers); null when it doesn't say. */
+  blockedBy: { open: number; total: number } | null;
 }
 
 export interface Relations {
@@ -53,6 +55,9 @@ export function toIssueRef(issue: Record<string, any>): IssueRef {
     stateReason: issue.state_reason ? String(issue.state_reason) : null,
     url: String(issue.html_url ?? ""),
     labels: ((issue.labels ?? []) as unknown[]).map((label) => (typeof label === "string" ? label : String((label as { name?: unknown })?.name ?? ""))).filter(Boolean),
+    blockedBy: issue.issue_dependencies_summary
+      ? { open: Number(issue.issue_dependencies_summary.blocked_by ?? 0), total: Number(issue.issue_dependencies_summary.total_blocked_by ?? 0) }
+      : null,
   };
 }
 
@@ -85,7 +90,7 @@ export async function listSubIssues(gh: GitHubClient, owner: string, repo: strin
   return data.map((issue) => toIssueRef(issue));
 }
 
-async function listDependencies(gh: GitHubClient, owner: string, repo: string, number: number, which: "blocked_by" | "blocking"): Promise<IssueRef[]> {
+export async function listDependencies(gh: GitHubClient, owner: string, repo: string, number: number, which: "blocked_by" | "blocking"): Promise<IssueRef[]> {
   const call = which === "blocked_by" ? gh.rest.issues.listDependenciesBlockedBy : gh.rest.issues.listDependenciesBlocking;
   const { data } = await call({ owner, repo, issue_number: number, per_page: 100 });
   return data.map((issue) => toIssueRef(issue));
@@ -154,4 +159,10 @@ export function describeRelations(relations: Relations, owner: string, repo: str
     ...(relations.blockedBy.length ? [`- Blocked by: ${relations.blockedBy.map(item).join(", ")}`] : []),
     ...(relations.blocking.length ? [`- Blocking: ${relations.blocking.map(item).join(", ")}`] : []),
   ];
+}
+
+/** The issues #number is blocked by; skips the call when GitHub's counts say there are none. */
+export async function listBlockedBy(gh: GitHubClient, owner: string, repo: string, issue: number | IssueRef): Promise<IssueRef[]> {
+  if (typeof issue !== "number" && issue.blockedBy?.total === 0) return [];
+  return listDependencies(gh, owner, repo, typeof issue === "number" ? issue : issue.number, "blocked_by");
 }

@@ -1,6 +1,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "../config.ts";
+import { errorMessage, log } from "../log.ts";
 import { getBotIdentity, installationToken, repoRemoteUrl } from "../github/app.ts";
 import { issueBranch, sameRepo } from "../github/relations.ts";
 import type { ThreadContext } from "../github/threads.ts";
@@ -32,6 +33,11 @@ export function excludeFromGit(dir: string, pattern: string): void {
   appendFileSync(file, `${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
 }
 
+/** Was this checkout cloned with a filter (objects fetched from GitHub on demand)? */
+async function isPartialClone(dir: string): Promise<boolean> {
+  return (await git(dir, ["config", "--get", "remote.origin.promisor"]).catch(() => "")) === "true" || Boolean(await git(dir, ["config", "--get", "remote.origin.partialclonefilter"]).catch(() => ""));
+}
+
 /**
  * Where a sub-issue's work goes: its parent issue's branch, when the agent uses parent branches
  * (github.parent_branch, on by default) and the parent is an open issue in the same repository.
@@ -53,12 +59,30 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   const token = await installationToken(task.installationId);
   const remote = repoRemoteUrl(task.owner, task.repo);
 
+  // A full clone: the agent's shell has no GitHub credentials, so git must never need to fetch
+  // missing objects on its own (a blob-less partial clone does, for checkout, diff, log -p, merge…).
   if (!existsSync(join(dir, ".git"))) {
     mkdirSync(dirname(dir), { recursive: true });
-    await git(dirname(dir), ["clone", "--filter=blob:none", "--no-checkout", remote, dir], { token });
+    await git(dirname(dir), ["clone", "--no-checkout", remote, dir], { token });
   } else {
     await git(dir, ["remote", "set-url", "origin", remote]);
-    await git(dir, ["fetch", "--prune", "origin"], { token });
+    if (await isPartialClone(dir)) {
+      // Made by an older version with --filter=blob:none: download everything once (git 2.36+).
+      const filter = await git(dir, ["config", "--get", "remote.origin.partialclonefilter"]).catch(() => "blob:none");
+      await git(dir, ["config", "--unset-all", "remote.origin.promisor"]).catch(() => undefined);
+      await git(dir, ["config", "--unset-all", "remote.origin.partialclonefilter"]).catch(() => undefined);
+      try {
+        await git(dir, ["fetch", "--prune", "--refetch", "origin"], { token });
+      } catch (error) {
+        // Stay a working partial clone; the orchestrator's own git calls carry the token.
+        await git(dir, ["config", "remote.origin.promisor", "true"]);
+        await git(dir, ["config", "remote.origin.partialclonefilter", filter]);
+        log.warn("Could not turn the workspace into a full clone", { dir, error: errorMessage(error) });
+        await git(dir, ["fetch", "--prune", "origin"], { token });
+      }
+    } else {
+      await git(dir, ["fetch", "--prune", "origin"], { token });
+    }
   }
 
   let branch: string;
@@ -100,7 +124,7 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   const current = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
   const keepWork = task.attempts > 0 && current === branch;
   if (!keepWork) {
-    await git(dir, ["checkout", "--force", "-B", branch, startPoint]);
+    await git(dir, ["checkout", "--force", "-B", branch, startPoint], { token });
     await git(dir, ["clean", "-fd", "-e", ".deps/"]);
   }
   excludeFromGit(dir, "/.deps/");

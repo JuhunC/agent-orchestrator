@@ -15,6 +15,7 @@ import type { EventKind, Task } from "../types.ts";
 import { allowedMoves, canMove, type Board } from "../boards/loader.ts";
 import { HANDOFF_FIELDS, hasCardFields, renderHandoff, type HandoffField, type HandoffFields } from "../boards/rules.ts";
 import { setCardFields } from "../boards/engine.ts";
+import { ensureLabels } from "../github/labels.ts";
 import {
   addBlockedBy,
   addSubIssue,
@@ -22,6 +23,7 @@ import {
   getIssue,
   issueBranch,
   isIssueBranch,
+  listBlockedBy,
   listSubIssues,
   RELATIONS,
   refText,
@@ -79,6 +81,11 @@ export interface ToolContext {
   pushes: number;
   /** Sub-issues created in this task (create_sub_issue). */
   subIssuesCreated?: number;
+  /**
+   * Open or close the task's issue when the task finishes (update_issue, merge_into_parent). Not at
+   * once: a project's "item closed" workflow could move the card, which would stop this task.
+   */
+  issueState?: { state: "open" | "closed"; reason: "completed" | "not_planned" | "duplicate" | "reopened" } | null;
   board: BoardContext | null;
 }
 
@@ -140,7 +147,7 @@ export async function commitAndPush(ctx: ToolContext, message: string): Promise<
     if (!(error instanceof GitError) || !/rejected|non-fast-forward|fetch first/i.test(error.stderr)) throw error;
     // Someone else pushed to the branch: rebase onto it once and retry.
     try {
-      await git(dir, ["rebase", remoteRef]);
+      await git(dir, ["rebase", remoteRef], { token });
     } catch {
       await git(dir, ["rebase", "--abort"]).catch(() => undefined);
       throw new Error(`The branch ${workspace.branch} changed on GitHub and your commits conflict with it. Resolve with \`git rebase ${remoteRef}\`, then try again.`);
@@ -386,24 +393,40 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
     tools.push(
       tool(
         "update_issue",
-        "Edit the current issue: its title, its description (e.g. to add acceptance criteria), or labels.",
+        "Edit the current issue: its title, its description (e.g. to add acceptance criteria), labels (missing ones are created), or close it when its work is done (it closes when you finish).",
         {
           title: z.string().optional(),
           body: z.string().optional().describe("The full new description (replaces the old one)"),
-          add_labels: z.array(z.string()).optional(),
+          add_labels: z.array(z.string()).optional().describe("Labels to add; ones the repository doesn't have yet are created"),
           remove_labels: z.array(z.string()).optional(),
+          state: z.enum(["open", "closed"]).optional().describe("closed: close the issue when you finish (e.g. docs-only work that's done); open: reopen it"),
+          state_reason: z.enum(["completed", "not_planned", "duplicate"]).optional().describe("Why it's closed (default completed)"),
         },
         (args) =>
           withContext(async (ctx) => {
             const { owner, repo, threadNumber, threadKind } = ctx.task;
             if (threadKind === "discussion") return fail("Discussions can't be edited with this tool.");
+            if (args.state && threadKind === "pull") return fail("update_issue doesn't open or close pull requests.");
+            if (args.state_reason && args.state !== "closed") return fail("state_reason goes with state: closed.");
             if (args.title || args.body !== undefined) {
               await ctx.gh.rest.issues.update({ owner, repo, issue_number: threadNumber, ...(args.title ? { title: args.title } : {}), ...(args.body !== undefined ? { body: args.body } : {}) });
             }
-            if (args.add_labels?.length) await ctx.gh.rest.issues.addLabels({ owner, repo, issue_number: threadNumber, labels: args.add_labels });
+            const created: string[] = [];
+            if (args.add_labels?.length) {
+              const labels = await ensureLabels(ctx.gh, owner, repo, args.add_labels, (name) => created.push(name));
+              if (labels.length) await ctx.gh.rest.issues.addLabels({ owner, repo, issue_number: threadNumber, labels });
+            }
             for (const label of args.remove_labels ?? []) await ctx.gh.rest.issues.removeLabel({ owner, repo, issue_number: threadNumber, name: label }).catch(() => undefined);
-            ctx.onEvent("tool", "Updated the issue");
-            return ok("Updated the issue.");
+            let state = "";
+            if (args.state === "closed") {
+              ctx.issueState = { state: "closed", reason: args.state_reason ?? "completed" };
+              state = ` It's closed as ${ctx.issueState.reason.replace("_", " ")} when you finish.`;
+            } else if (args.state === "open") {
+              ctx.issueState = ctx.thread.state === "closed" ? { state: "open", reason: "reopened" } : null;
+              state = ctx.issueState ? " It's reopened when you finish." : " It's already open.";
+            }
+            ctx.onEvent("tool", `Updated the issue${created.length ? ` (created label${created.length === 1 ? "" : "s"} ${created.join(", ")})` : ""}`);
+            return ok(`Updated the issue.${created.length ? ` Created the label${created.length === 1 ? "" : "s"} ${created.join(", ")} in ${owner}/${repo}.` : ""}${state}`);
           })(),
       ),
     );
@@ -445,6 +468,50 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
         const sha = await git(ctx.workspace.dir, ["rev-parse", "HEAD"]);
         return ok(await ciStatus(ctx.gh, ctx.task.owner, ctx.task.repo, sha));
       })(),
+    ),
+  );
+
+  tools.push(
+    tool(
+      "fetch_from_github",
+      "Fetch the latest commits from GitHub into your checkout's origin/<branch> refs (a git fetch with the orchestrator's credentials; your shell has none, so `git fetch` and `git pull` fail there). Then merge or rebase locally if you need them.",
+      { branch: z.string().optional().describe("Just this branch (e.g. main); default: every branch") },
+      (args) =>
+        withContext(async (ctx) => {
+          const { dir } = ctx.workspace;
+          const branch = args.branch?.trim().replace(/^origin\//, "").replace(/^refs\/heads\//, "");
+          if (branch !== undefined) {
+            const valid = await git(dir, ["check-ref-format", "--branch", branch]).then(() => true, () => false);
+            if (!branch || branch.startsWith("-") || !valid) return fail(`"${args.branch}" isn't a branch name.`);
+          }
+          const refs = async () =>
+            new Map(
+              (await git(dir, ["for-each-ref", "--format=%(refname:short) %(objectname)", "refs/remotes/origin"]))
+                .split("\n")
+                .filter(Boolean)
+                .map((line) => line.split(" ") as [string, string]),
+            );
+          const before = await refs();
+          const token = await installationToken(ctx.task.installationId);
+          try {
+            if (branch) await git(dir, ["fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { token });
+            else await git(dir, ["fetch", "--prune", "--no-tags", "origin"], { token });
+          } catch (error) {
+            if (branch && /couldn't find remote ref|not our ref/i.test(errorMessage(error))) return fail(`There's no branch "${branch}" on GitHub.`);
+            throw error;
+          }
+          const after = await refs();
+          const lines: string[] = [];
+          for (const [name, sha] of after) {
+            if (name === "origin/HEAD" || name === "origin") continue;
+            const old = before.get(name);
+            if (!old) lines.push(`- ${name}: new, at ${sha.slice(0, 10)}`);
+            else if (old !== sha) lines.push(`- ${name}: ${old.slice(0, 10)} → ${sha.slice(0, 10)}`);
+          }
+          if (!branch) for (const name of before.keys()) if (!after.has(name) && name !== "origin/HEAD") lines.push(`- ${name}: deleted on GitHub`);
+          ctx.onEvent("tool", `Fetched ${branch ? `\`${branch}\`` : "every branch"} from GitHub`);
+          return ok(lines.length ? `Fetched from GitHub:\n${lines.join("\n")}` : `Already up to date: ${branch ? `origin/${branch} hasn't` : "no branch has"} changed on GitHub.`);
+        })(),
     ),
   );
 
@@ -492,11 +559,22 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             if (!subIssues.length) return ok(`#${threadNumber} has no sub-issues.${profile.github.subIssues === "write" ? " Split the work with create_sub_issue." : ""}`);
             const check = await checkSubIssues(ctx, threadNumber, issueBranch(threadNumber), subIssues);
             const cards = ctx.board ? listBoardItems(ctx.board.board.name) : [];
-            const column = (issue: IssueRef) => {
+            const blockers = new Map<number, IssueRef[]>();
+            for (const issue of subIssues) {
+              if (sameRepo(issue, owner, repo)) blockers.set(issue.number, await listBlockedBy(ctx.gh, owner, repo, issue).catch(() => []));
+            }
+            const extra = (issue: IssueRef) => {
               const card = cards.find((row) => row.kind === "issue" && row.number === issue.number && sameRepo(row, issue.owner, issue.repo));
-              return card?.status ? ` · board column: ${card.status}` : "";
+              const blocked = blockers.get(issue.number) ?? [];
+              return [
+                ...(card?.status ? [`board column: ${card.status}`] : []),
+                ...(issue.labels.length ? [`labels: ${issue.labels.join(", ")}`] : []),
+                ...(blocked.length ? [`blocked by ${blocked.map((blocker) => `${refText(blocker, owner, repo)} (${blocker.state})`).join(", ")}`] : []),
+              ]
+                .map((part) => ` · ${part}`)
+                .join("");
             };
-            return ok(describeSubIssueWork(check, owner, repo, column));
+            return ok(describeSubIssueWork(check, owner, repo, extra));
           })(),
       ),
     );
@@ -510,7 +588,8 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
         {
           title: z.string().min(1).describe("What this piece of work is"),
           body: z.string().describe("What to do and how to tell it's done (Markdown)"),
-          labels: z.array(z.string()).optional(),
+          labels: z.array(z.string()).optional().describe("Labels; ones the repository doesn't have yet are created"),
+          blocked_by: z.array(z.number().int().positive()).optional().describe("Issues this one can't be done before (e.g. sub-issues you created earlier); added as GitHub blocked-by relations"),
           ...(options.cardFields ? FIELD_ARGS : {}),
         },
         (args) =>
@@ -520,8 +599,16 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             if ((ctx.subIssuesCreated ?? 0) >= MAX_SUB_ISSUES_PER_TASK) return fail(`You've already created ${MAX_SUB_ISSUES_PER_TASK} sub-issues in this task.`);
             const values = fieldValues(args as CardFieldValues);
             if (typeof values === "string") return fail(values);
+            const blockers: IssueRef[] = [];
+            for (const number of [...new Set(args.blocked_by ?? [])]) {
+              const blocker = await getIssue(ctx.gh, owner, repo, number).catch(() => null);
+              if (!blocker || blocker.isPull) return fail(`#${number} isn't an issue in ${owner}/${repo}, so it can't block the new sub-issue.`);
+              blockers.push(blocker);
+            }
+            const created: string[] = [];
+            const labels = args.labels?.length ? await ensureLabels(ctx.gh, owner, repo, args.labels, (name) => created.push(name)) : [];
             const footer = `<sub>Sub-issue of #${threadNumber}, created by **${profile.name}** · orchestrator task #${ctx.task.id}.</sub>`;
-            const { data } = await ctx.gh.rest.issues.create({ owner, repo, title: args.title, body: [args.body.trim(), "", footer].join("\n"), ...(args.labels?.length ? { labels: args.labels } : {}) });
+            const { data } = await ctx.gh.rest.issues.create({ owner, repo, title: args.title, body: [args.body.trim(), "", footer].join("\n"), ...(labels.length ? { labels } : {}) });
             const child = toIssueRef(data);
             ctx.subIssuesCreated = (ctx.subIssuesCreated ?? 0) + 1;
             try {
@@ -529,6 +616,8 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             } catch (error) {
               return fail(`Created #${child.number} (${child.url}), but couldn't make it a sub-issue of #${threadNumber}: ${errorMessage(error)}`);
             }
+            for (const blocker of blockers) await addBlockedBy(ctx.gh, owner, repo, child.number, blocker);
+            if (blockers.length) child.blockedBy = { open: blockers.filter((blocker) => blocker.state === "open").length, total: blockers.length };
             ctx.thread.relations = { ...ctx.thread.relations, subIssues: [...ctx.thread.relations.subIssues, child] };
             const column = ctx.board?.board.subIssues.column;
             if (ctx.board && column) ctx.board.newSubIssues.push(child);
@@ -540,6 +629,8 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
               [
                 `Created #${child.number} "${child.title}" as a sub-issue of #${threadNumber}: ${child.url}`,
                 `Its work goes on \`${issueBranch(child.number)}\`, based on and merged into \`${issueBranch(threadNumber)}\`.`,
+                ...(blockers.length ? [`It's blocked by ${blockers.map((blocker) => `#${blocker.number}`).join(", ")}.`] : []),
+                ...(created.length ? [`Created the label${created.length === 1 ? "" : "s"} ${created.join(", ")} in ${owner}/${repo}.`] : []),
                 ...(ctx.board && column ? [`It's added to the ${ctx.board.board.name} board in "${column}" when you finish.`] : []),
                 ...(hasValues
                   ? [tracked && (column || ctx.board!.board.subIssues.movesTo.length) ? `Its ${describeFields(values, ctx.board!.board.fields)} are set when it's added to the board (on its own column or with move_sub_issue).` : "The start, end and estimate weren't set: only cards on a board that tracks them have those."]
@@ -583,7 +674,10 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             ctx.board.subMoves = ctx.board.subMoves.filter((move) => move.issue.number !== issue.number);
             ctx.board.subMoves.push({ issue, itemId: card?.itemId ?? null, from: card?.status ?? null, to: target, note: renderHandoff(args.handoff, args.fields ?? {}), fields: args.fields ?? {} });
             ctx.onEvent("tool", `Will move sub-issue #${issue.number} to ${target}`);
-            return ok(`#${issue.number} will move to "${target}" when you finish${card ? "" : " (it isn't on the board yet, so it's added there)"}.`);
+            const gated = board.columns[target]?.rules.evidence.includes("dependencies");
+            const open = gated ? [] : (await listBlockedBy(ctx.gh, owner, repo, issue).catch(() => [])).filter((blocker) => blocker.state === "open");
+            const warning = open.length ? ` Note: it's still blocked by ${open.map((blocker) => `#${blocker.number}`).join(", ")} (open); "${target}" doesn't require dependencies, so it moves anyway.` : "";
+            return ok(`#${issue.number} will move to "${target}" when you finish${card ? "" : " (it isn't on the board yet, so it's added there)"}.${warning}`);
           })(),
       ),
     );
@@ -666,7 +760,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
                 }
               } catch (error) {
                 if (/conflict/i.test(errorMessage(error)) || Number((error as { status?: number }).status) === 409) {
-                  return fail(`GitHub can't merge \`${workspace.branch}\` into \`${base}\`: they conflict. Run \`git fetch origin ${base}\` and \`git merge origin/${base}\`, resolve the conflicts, commit_and_push, then call merge_into_parent again.`);
+                  return fail(`GitHub can't merge \`${workspace.branch}\` into \`${base}\`: they conflict. \`origin/${base}\` is up to date in your checkout: run \`git merge origin/${base}\`, resolve the conflicts, commit_and_push, then call merge_into_parent again.`);
                 }
                 throw error;
               }
@@ -675,9 +769,8 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             if (!after || !(await isAncestor(workspace.dir, head, after))) return fail(`GitHub accepted the merge, but \`${base}\` doesn't contain ${head.slice(0, 10)} yet. Check with list_sub_issues on the parent later.`);
             let closed = "";
             if (threadKind === "issue" && args.close_issue !== false && thread.state === "open") {
-              await ctx.gh.rest.issues.update({ owner, repo, issue_number: threadNumber, state: "closed", state_reason: "completed" });
-              thread.state = "closed";
-              closed = ` Closed #${threadNumber} as completed.`;
+              ctx.issueState = { state: "closed", reason: "completed" };
+              closed = ` #${threadNumber} is closed as completed when you finish.`;
             }
             ctx.onEvent("tool", `Merged \`${workspace.branch}\` into \`${base}\``);
             return ok(`Done (${how}): \`${workspace.branch}\` at ${head.slice(0, 10)} is now an ancestor of \`${base}\` (at ${after.slice(0, 10)}).${closed}`);
