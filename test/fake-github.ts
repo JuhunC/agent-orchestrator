@@ -34,6 +34,8 @@ export class FakeGitHub {
   reactions = 0;
   reviews: { number: number; event: string; body: string }[] = [];
   prOpened?: (number: number) => void;
+  /** The commit a branch points at in the test's git remote (set by the harness). */
+  branchSha: (branch: string) => string = () => "";
   /** One organization project (acme/1) with a Status field; items map node id → card. */
   project = {
     id: "PVT_acme_1",
@@ -169,14 +171,19 @@ export class FakeGitHub {
       this.assignees.push(...body.assignees);
       return { status: 201, body: {} };
     }
-    if (method === "POST" && path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/\d+\/labels$/)) {
+    if (method === "POST" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/labels$/))) {
       this.labels.push(...body.labels);
+      const issue = this.issues.get(Number(match[1]));
+      if (issue) issue.labels = [...(issue.labels ?? []), ...body.labels];
       return { status: 200, body: [] };
     }
     if (method === "GET" && path === "/repos/acme/widgets/pulls") {
       const head = url.searchParams.get("head")?.split(":")[1];
       const open = [...this.issues.values()].filter((issue) => issue.pull && issue.pull.head === head);
-      return { status: 200, body: open.map((issue) => ({ number: issue.number, html_url: `${this.url}/acme/widgets/pull/${issue.number}` })) };
+      return {
+        status: 200,
+        body: open.map((issue) => ({ number: issue.number, html_url: `${this.url}/acme/widgets/pull/${issue.number}`, head: { ref: issue.pull!.head, sha: this.branchSha(issue.pull!.head) } })),
+      };
     }
     if (method === "POST" && path === "/repos/acme/widgets/pulls") {
       const number = Math.max(0, ...this.issues.keys()) + 1;

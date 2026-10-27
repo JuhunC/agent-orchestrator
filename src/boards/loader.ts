@@ -4,6 +4,7 @@ import { parse } from "yaml";
 import { config } from "../config.ts";
 import { expandAgents, loadProfiles, parseEffort } from "../profiles/loader.ts";
 import type { Effort, ProfileSet } from "../profiles/types.ts";
+import { forbids, NO_RULES, parseBoardRules, type ColumnRules, type WorkType } from "./rules.ts";
 
 /** What happens when a card lands in one column of a project board. */
 export type ColumnMode = "pool" | "all" | "label";
@@ -30,6 +31,8 @@ export interface BoardColumn {
   onStart: string | null;
   /** Columns the agent may move the card to; "any" allows every column. */
   movesTo: string[] | "any";
+  /** What an agent must show to move a card into this column (evidence, handoff fields). */
+  rules: ColumnRules;
 }
 
 export interface Board {
@@ -45,6 +48,8 @@ export interface Board {
   tokenEnv: string | null;
   limits: { movesPerIssue: number; entriesPerColumn: number; budgetUsdPerIssue: number | null };
   columns: Record<string, BoardColumn>;
+  /** Card types (by issue label) and the columns agents may not move them into. */
+  workTypes: WorkType[];
   errors: string[];
 }
 
@@ -63,6 +68,8 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
   const columns: Record<string, BoardColumn> = {};
   const rawColumns = (data.columns ?? {}) as Record<string, Record<string, unknown> | null>;
   if (!Object.keys(rawColumns).length) errors.push("Add at least one column under \"columns\"");
+  const rules = parseBoardRules(data);
+  errors.push(...rules.errors);
 
   for (const [columnName, raw] of Object.entries(rawColumns)) {
     const column = raw ?? {};
@@ -99,6 +106,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
       effort: parseEffort(column.effort, errors, `${columnName}.effort`),
       onStart: column.on_start ? String(column.on_start) : null,
       movesTo,
+      rules: rules.columns[columnName] ?? NO_RULES,
     };
     if (agent && !roleValue) errors.push(`${columnName}: give the agent a "role" (a library role name or text)`);
   }
@@ -127,6 +135,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
       budgetUsdPerIssue: limits.budget_usd_per_issue === undefined ? null : Number(limits.budget_usd_per_issue),
     },
     columns,
+    workTypes: rules.workTypes,
     errors,
   };
 }
@@ -158,9 +167,10 @@ export function canMove(board: Board, from: string, to: string): boolean {
   return column.movesTo === "any" ? Boolean(board.columns[to]) : column.movesTo.includes(to);
 }
 
-export function allowedMoves(board: Board, from: string): string[] {
+/** Where an agent in `from` may move a card; a work type leaves out the columns it forbids. */
+export function allowedMoves(board: Board, from: string, workType?: WorkType | null): string[] {
   const column = board.columns[from];
   if (!column) return [];
-  const targets = column.movesTo === "any" ? Object.keys(board.columns).filter((name) => name !== from) : column.movesTo;
+  const targets = (column.movesTo === "any" ? Object.keys(board.columns).filter((name) => name !== from) : column.movesTo).filter((name) => !forbids(workType, name));
   return [...new Set([...targets, ...(board.needsHuman ? [board.needsHuman] : [])])];
 }

@@ -214,6 +214,11 @@ export function BoardDetail({ name }: { name: string }) {
                     {projectColumns.length > 0 && !projectColumns.some((option) => option.toLowerCase() === column.name.toLowerCase()) && (
                       <div className="error-text">not in the project</div>
                     )}
+                    {(column.rules.evidence.length > 0 || column.rules.handoffRequired.length > 0) && (
+                      <div className="meta" title="What an agent must show to move a card here">
+                        to enter: {[...column.rules.evidence, ...column.rules.handoffRequired.map((field) => `handoff ${field}`)].join(", ")}
+                      </div>
+                    )}
                   </td>
                   <td>
                     {column.agents.length === 0 ? (
@@ -255,6 +260,11 @@ export function BoardDetail({ name }: { name: string }) {
           Loop guards: {board.limits.movesPerIssue} agent moves per card, {board.limits.entriesPerColumn} visits per column
           {board.limits.budgetUsdPerIssue !== null && `, $${board.limits.budgetUsdPerIssue} per card`}; then the card goes to <b>{board.needsHuman ?? "nowhere (it stays)"}</b>. Agents never merge.
         </p>
+        {board.workTypes.length > 0 && (
+          <p className="meta">
+            Work types: {board.workTypes.map((type) => `${type.name} (${type.labels.join(", ")}) can't go to ${type.forbid.join(", ") || "—"}`).join(" · ")}. People can still move any card anywhere.
+          </p>
+        )}
       </Panel>
 
       <Panel title="Cards" hint={board.items.length ? `${board.items.length} seen` : undefined} tight>

@@ -160,6 +160,17 @@ columns:
 - With several agents, `mode` decides who gets a card: **pool** (default) gives it to the least busy agent; **all** has every agent work it at once and moves the card when they've all finished (needs-human wins, then sending it back, then the most common choice); **label** routes by the issue's labels (`routes: { frontend: web-dev, default: group:developers }`).
 - Agents finish with `move_to_column`; the move happens after the agent is done, and its **handoff note** goes to the next stage's agent along with all earlier notes.
 - All stages share one branch and PR per issue (`ao/issue-<n>`), so the tester tests the developer's work. The example tester only reports and sends cards back; agents never merge.
+- **Move requirements** (optional): a column can say what an agent must show before it moves a card *into* that column. `move_to_column` refuses a move that lacks them and tells the agent what to fix, so it can fix it in the same session. The evidence is checked again just before the card moves, so changing files after the move keeps the card where it is.
+  - `evidence`: `pull_request` (an open PR has the agent's latest commit), `pushed` (it pushed commits in this task), `tests` (a test command it ran passed, and no files changed since), `review` (it submitted a verdict with `submit_review` on the current commit), `approval` (that verdict was APPROVE). For `tests`, the orchestrator watches the agent's shell commands: common runners (`npm test`, `pytest`, `go test`, `cargo test`, `make test`, …) count, or set `test_command` to the command(s) that do.
+  - `handoff_required`: fields the agent must fill in `move_to_column`'s `fields`: `status`, `decisions`, `verified`, `open_questions`, `risks`, `do_not_redo`. They're added to the handoff note.
+  - `work_types` (top level) keeps a kind of card, matched by issue label, out of some columns: `work_types: { docs: { labels: [documentation], forbid: [In review] } }`.
+  - These rules apply only to agents' `move_to_column`. People can move cards anywhere, and an agent can always move a card to `needs_human`. Boards without these settings work as before. Mistakes in them (an unknown evidence name, a column that doesn't exist) are reported when the board loads and refused when the file is saved.
+
+```yaml
+columns:
+  In review: { agent: tester, role: verify, moves_to: [Done, In progress], evidence: [pull_request], handoff_required: [status] }
+  Done: { evidence: [approval, tests], test_command: npm test, handoff_required: [verified, risks] }
+```
 - **Loop guards**: too many agent moves, too many visits to one column, or too much spend on a card sends it to `needs_human` with a comment. Moving a card away from a column stops the agent working on it.
 - GitHub sends project webhooks only for **organization** projects, and the app needs the organization **Projects** permission (read and write). Boards are also polled every `poll_seconds` in case a webhook is missed. The first poll only records where cards are; it doesn't start agents for cards already on the board.
 - The App must be **installed on the account that owns the project** (which may differ from the repositories' owner). The board page says where it's installed if not. For a project the App can't reach, such as a user-owned project, set `token_env: SOME_VAR` in the board file and put a token with project read/write access in that environment variable. Agents still use the App for everything else.

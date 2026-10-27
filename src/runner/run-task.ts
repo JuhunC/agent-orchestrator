@@ -1,6 +1,7 @@
 import { buildFollowUpPrompt, buildPrompt, type BoardStage } from "../agents/prompt.ts";
 import { moveCard } from "../boards/engine.ts";
 import { allowedMoves, getBoard } from "../boards/loader.ts";
+import { describeRules, hasRules } from "../boards/rules.ts";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { addEvent, addHandoff, addVote, getBoardItem, lastSessionId, listHandoffs, tasksInRound, threadHistory, updateTask } from "../db.ts";
@@ -10,6 +11,7 @@ import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import { commitAndPush, openOrUpdatePullRequest, PullRequestLimitError, type BoardContext, type ToolContext } from "../runtime/github-tools.ts";
 import { sessions } from "../runtime/manager.ts";
+import { cardWorkType, moveProblems } from "../runtime/evidence.ts";
 import { agentEnv, taskEnv } from "../runtime/options.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
 import type { EventKind, Task, ThreadRef } from "../types.ts";
@@ -97,7 +99,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       const column = board && task.boardColumn ? board.columns[task.boardColumn] : undefined;
       if (!board || !column || !task.boardItemId) throw new Error(`The ${task.board} board no longer has a "${task.boardColumn}" column`);
       if (board.errors.length) throw new Error(`The ${board.name} board has errors: ${board.errors.join("; ")}`);
-      boardContext = { board, column: column.name, itemId: task.boardItemId, pendingMove: null };
+      boardContext = { board, column: column.name, itemId: task.boardItemId, pendingMove: null, testRuns: [], reviews: [] };
     }
     emit(task.id, "status", `Started ${profile.name}${boardContext ? ` (${boardContext.board.name}: ${boardContext.column})` : ""}`);
     gh = await installationClient(task.installationId);
@@ -126,13 +128,20 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
 
     const history = threadHistory(ref, profile.name, task.id);
     if (history.length) onEvent("system", `Loaded ${history.length} earlier run${history.length === 1 ? "" : "s"} as context`);
+    const workType = boardContext ? await cardWorkType({ gh, task }, boardContext.board).catch(() => null) : null;
+    const moves = boardContext && column ? allowedMoves(boardContext.board, column.name, workType?.type) : [];
     const stage: BoardStage | null =
       boardContext && column
         ? {
             board: boardContext.board.name,
             column: column.name,
             role: column.role,
-            moves: allowedMoves(boardContext.board, column.name),
+            moves,
+            requirements: moves.flatMap((name) => {
+              const rules = boardContext!.board.columns[name]?.rules;
+              return rules && hasRules(rules) ? [{ column: name, text: describeRules(rules) }] : [];
+            }),
+            workType: workType ? { name: workType.type.name, label: workType.label, forbid: workType.type.forbid } : null,
             needsHuman: boardContext.board.needsHuman,
             handoffs: listHandoffs(boardContext.board.name, boardContext.itemId),
             peers: task.boardRound ? tasksInRound(task.boardRound).map((peer) => peer.agent).filter((name) => name !== profile.name) : [],
@@ -235,13 +244,23 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       details = `<details><summary>Changed files (${files.length})</summary>\n\n${list}${files.length > 30 ? "\n- …" : ""}\n</details>`;
     }
     task = patch(task.id, { commits });
-    const move = boardContext?.pendingMove;
+    let move = boardContext?.pendingMove ?? null;
+    let refused = "";
+    if (boardContext && move) {
+      // The evidence was checked when the agent asked; check it again in case it changed since.
+      const problems = await moveProblems(context, move.to, null).catch((error) => [`the requirements couldn't be checked: ${errorMessage(error)}`]);
+      if (problems.length) {
+        refused = `The move to **${move.to}** was refused because, by the end of the task:\n${problems.map((problem) => `- ${problem}`).join("\n")}`;
+        onEvent("system", `Refused the move to ${move.to}: ${problems.join("; ")}`);
+        move = null;
+      }
+    }
     if (boardContext && move && task.boardRound) {
       details = [`**Voted to move the card to ${move.to}** (it moves when every agent in this column has finished). Handoff:\n\n${move.note.split("\n").map((line) => `> ${line}`).join("\n")}`, details].filter(Boolean).join("\n\n");
     } else if (boardContext && move) {
       details = [`**Moved the card to ${move.to}.** Handoff:\n\n${move.note.split("\n").map((line) => `> ${line}`).join("\n")}`, details].filter(Boolean).join("\n\n");
     } else if (boardContext) {
-      details = [`The card stays in **${boardContext.column}** (the agent didn't move it).`, details].filter(Boolean).join("\n\n");
+      details = [refused ? `The card stays in **${boardContext.column}**. ${refused}` : `The card stays in **${boardContext.column}** (the agent didn't move it).`, details].filter(Boolean).join("\n\n");
     }
     if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
     await finish("succeeded", outcome.result, "", details, commits);

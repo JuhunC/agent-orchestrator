@@ -84,6 +84,10 @@ export interface BoardStage {
   /** Other agents working this card in the same column at the same time ("all" columns). */
   peers?: string[];
   handoffs: { agent: string; fromColumn: string; toColumn: string; note: string; ts: string }[];
+  /** What the orchestrator checks before a move into each target column that has rules. */
+  requirements?: { column: string; text: string }[];
+  /** The card's work type, when the board has work types and the card matches one. */
+  workType?: { name: string; label: string; forbid: string[] } | null;
 }
 
 function boardSection(stage: BoardStage): string {
@@ -95,6 +99,14 @@ function boardSection(stage: BoardStage): string {
     stage.role.trim() || "_(no role text)_",
     "",
     `When your part is done, call the github tool move_to_column with one of: ${stage.moves.map((move) => `"${move}"`).join(", ")}, and a handoff note for whoever works the card next.`,
+    ...(stage.workType ? [`This card is a ${stage.workType.name} (label "${stage.workType.label}"), so it can't go to: ${stage.workType.forbid.map((name) => `"${name}"`).join(", ")}.`] : []),
+    ...(stage.requirements?.length
+      ? [
+          "Before a move, the orchestrator checks what the target column requires, and refuses the move with what's missing:",
+          ...stage.requirements.map((requirement) => `- "${requirement.column}": ${requirement.text}`),
+          "Pass handoff fields in move_to_column's `fields`. Get the evidence before you move, and don't change files after moving.",
+        ]
+      : []),
     stage.needsHuman ? `If you're blocked or unsure, move it to "${stage.needsHuman}" and explain why.` : "",
     stage.peers?.length
       ? `Other agents are working this card in this column at the same time: ${stage.peers.join(", ")}. Your move_to_column is a vote: the card moves when all of you finish, and if any of you sends it back, it goes back. Don't push changes another agent might also be making.`

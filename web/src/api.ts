@@ -152,6 +152,8 @@ export interface BoardColumnInfo {
   effort: Effort | null;
   onStart: string | null;
   movesTo: string[] | "any";
+  /** What an agent must show to move a card into this column. */
+  rules: { evidence: string[]; handoffRequired: string[]; testCommands: string[] };
 }
 
 export interface BoardCard {
@@ -176,8 +178,9 @@ export interface BoardInfo {
   pollSeconds: number;
   limits: { movesPerIssue: number; entriesPerColumn: number; budgetUsdPerIssue: number | null };
   columns: BoardColumnInfo[];
+  workTypes: { name: string; labels: string[]; forbid: string[] }[];
   errors: string[];
-  status: { project: { title: string; url: string; columns: string[] } | null; lastSyncAt: string | null; error: string | null };
+  status: { project:{ title: string; url: string; columns: string[] } | null; lastSyncAt: string | null; error: string | null };
   items: BoardCard[];
 }
 

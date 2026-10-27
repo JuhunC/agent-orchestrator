@@ -122,6 +122,7 @@ test("a card moves through the whole board: requirements, implement, test, fix, 
   const fixPrompt = tasks[3]!.prompt!;
   assert.match(fixPrompt, /ROLE_FIX/);
   assert.match(fixPrompt, /HELLO\.md must say hello world/, "the developer got the tester's handoff");
+  assert.doesNotMatch(fixPrompt, /orchestrator checks|This card is a/, "a board without rules prompts as before");
 
   const implementRequest = model.agentRequests().find((request) => request.prompt.includes("ROLE_IMPLEMENT"))!;
   assert.equal(implementRequest.body.model, "claude-sonnet-5-5", "the column's model override is used");

@@ -20,6 +20,18 @@ limits:
   entries_per_column: 3        # times a card may come back to the same column
   budget_usd_per_issue: 30     # stop when agents have spent this much on a card
 
+# Optional: kinds of card (by issue label) agents may not move into some columns.
+# work_types:
+#   docs:
+#     labels: [documentation]
+#     forbid: [In review]
+#
+# Optional, per column: what an agent must show to move a card INTO that column.
+# move_to_column refuses the move with what's missing; people can still move cards anywhere.
+#   evidence:          pull_request | pushed | tests | review | approval
+#   test_command:      for tests: command(s) that count (default: common test runners)
+#   handoff_required:  status | decisions | verified | open_questions | risks | do_not_redo
+
 columns:
   Backlog:
     agent: analyst
@@ -41,4 +53,7 @@ columns:
     agents: [tester]            # e.g. [tester, security-reviewer] with mode: all
     role: verify
     moves_to: [Done, In progress]
+    # evidence: [pull_request]          # the developer's PR has their latest commit
+    # handoff_required: [status]
   Done: {}                     # no agent; agents never merge
+    # e.g. Done: { evidence: [approval, tests], handoff_required: [verified, risks] }

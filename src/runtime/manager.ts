@@ -10,6 +10,7 @@ import type { Effort, Library, Profile } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
 import { createGithubServer, type ToolContext } from "./github-tools.ts";
 import { buildOptions, PER_TASK_ENV } from "./options.ts";
+import { testRunHooks } from "./evidence.ts";
 import { AgentSession, type EventSink, type TurnOutcome } from "./session.ts";
 import type { Workspace } from "./workspace.ts";
 
@@ -186,7 +187,7 @@ class Sessions {
         stateDir: join(config.dataDir, "sessions", hash(key)),
         model: options.model,
         effort: options.effort,
-        hooks: inboxHooks(context),
+        hooks: { ...inboxHooks(context), ...testRunHooks(() => context.current) },
       }),
     );
     const entry: Entry = {

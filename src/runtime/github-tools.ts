@@ -13,6 +13,8 @@ import { git, GitError } from "../runner/git.ts";
 import { mention } from "../runner/progress.ts";
 import type { EventKind, Task } from "../types.ts";
 import { allowedMoves, canMove, type Board } from "../boards/loader.ts";
+import { HANDOFF_FIELDS, renderHandoff, type HandoffField } from "../boards/rules.ts";
+import { cardWorkType, moveProblems, type ReviewRecord, type TestRun } from "./evidence.ts";
 import { excludeFromGit, type Workspace } from "./workspace.ts";
 
 /** Set when the task came from a project board column. */
@@ -22,6 +24,10 @@ export interface BoardContext {
   itemId: string;
   /** Where the agent asked to move the card; done when the task finishes successfully. */
   pendingMove: { to: string; note: string } | null;
+  /** Test commands the orchestrator saw finish in this task (for `tests` evidence). */
+  testRuns: TestRun[];
+  /** Reviews the agent submitted in this task (for `review` and `approval` evidence). */
+  reviews: ReviewRecord[];
 }
 
 /** What the GitHub tools act on. Live sessions swap it for each task. */
@@ -227,10 +233,14 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
   tools.push(
     tool(
       "move_to_column",
-      "Move this card on the project board when your part is done (board tasks only). The move happens after you finish, and the next column's agent receives your handoff note.",
+      "Move this card on the project board when your part is done (board tasks only). The move happens after you finish, and the next column's agent receives your handoff note. Some columns require evidence or handoff fields; if something's missing the move is refused with what to fix.",
       {
         column: z.string().min(1).describe("Target column, from the allowed list in your instructions"),
         handoff: z.string().min(1).describe("Note for whoever works the card next: what you did, what's left, what to check"),
+        fields: z
+          .object(Object.fromEntries(HANDOFF_FIELDS.map((field) => [field, z.string().optional()])) as Record<HandoffField, z.ZodOptional<z.ZodString>>)
+          .optional()
+          .describe("Structured handoff: status, decisions, verified, open_questions, risks, do_not_redo. Fill the ones the target column requires."),
       },
       (args) =>
         withContext(async (ctx) => {
@@ -238,9 +248,23 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
           const { board, column } = ctx.board;
           const target = Object.keys(board.columns).find((name) => name.toLowerCase() === args.column.toLowerCase()) ?? (board.needsHuman?.toLowerCase() === args.column.toLowerCase() ? board.needsHuman : null);
           if (!target || !canMove(board, column, target)) return fail(`You can't move the card from "${column}" to "${args.column}". Allowed: ${allowedMoves(board, column).join(", ")}.`);
-          ctx.board.pendingMove = { to: target, note: args.handoff };
+          const problems = await moveProblems(ctx, target, args.fields ?? {});
+          if (problems.length) {
+            const allowed = allowedMoves(board, column, (await cardWorkType(ctx, board))?.type);
+            ctx.onEvent("tool", `Move to ${target} refused: ${problems.length} requirement${problems.length === 1 ? "" : "s"} not met`);
+            return fail(
+              [
+                `Can't move the card to "${target}" yet:`,
+                ...problems.map((problem) => `- ${problem}`),
+                `Fix these and call move_to_column again (allowed: ${allowed.join(", ")}).${board.needsHuman ? ` If you can't, move it to "${board.needsHuman}" and explain why.` : ""}`,
+              ].join("\n"),
+            );
+          }
+          ctx.board.pendingMove = { to: target, note: renderHandoff(args.handoff, args.fields ?? {}) };
           ctx.onEvent("tool", `Will move the card to ${target}`);
-          return ok(`The card will move to "${target}" when you finish. Wrap up now.`);
+          const rules = board.columns[target]?.rules;
+          const frozen = rules?.evidence.length ? " Don't change files or push after this: the evidence is checked again before the card moves." : "";
+          return ok(`The card will move to "${target}" when you finish. Wrap up now.${frozen}`);
         })(),
     ),
   );
@@ -294,6 +318,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
               const verdict = args.event === "APPROVE" ? "Approved" : "Changes requested";
               await ctx.gh.rest.pulls.createReview({ owner, repo, pull_number: pr.number, event: "COMMENT", body: `**${verdict}.**\n\n${args.body}` });
             }
+            ctx.board?.reviews.push({ event: args.event, sha: await git(ctx.workspace.dir, ["rev-parse", "HEAD"]) });
             ctx.onEvent("tool", `Reviewed pull request #${pr.number}: ${args.event.toLowerCase().replace("_", " ")}`);
             return ok(`Submitted a ${args.event} review on #${pr.number}.`);
           })(),

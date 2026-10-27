@@ -7,6 +7,7 @@ import { parse, parseDocument } from "yaml";
 import { loadProfiles, parseFrontmatter } from "./loader.ts";
 import { EFFORTS } from "./types.ts";
 import { normaliseMcpServers } from "./mcp.ts";
+import { parseBoardRules } from "../boards/rules.ts";
 
 /** Files the admin UI may edit, relative to PROFILES_DIR. */
 const EDITABLE = [
@@ -43,6 +44,8 @@ function validate(rel: string, content: string): void {
     const data = parse(content) as Record<string, unknown> | null;
     if (!data || typeof data !== "object" || !/^[\w.-]+\/\d+$/.test(String(data.project ?? ""))) throw new ProfileFileError('A board needs "project: owner/number"');
     if (!data.columns || typeof data.columns !== "object") throw new ProfileFileError('A board needs a "columns" map');
+    const { errors } = parseBoardRules(data);
+    if (errors.length) throw new ProfileFileError(errors.join("; "));
     return;
   }
   if (rel.endsWith(".json")) {

@@ -348,6 +348,7 @@ export function registerApi(app: FastifyInstance): void {
         pollSeconds: board.pollSeconds,
         limits: board.limits,
         columns: Object.values(board.columns).map((column) => ({ ...column, role: undefined, roleText: column.roleName ? null : column.role.slice(0, 300) })),
+        workTypes: board.workTypes,
         errors: board.errors,
         status: boardStatus(board.name),
         items: listBoardItems(board.name).slice(0, 200),

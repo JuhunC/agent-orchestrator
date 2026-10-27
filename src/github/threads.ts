@@ -224,10 +224,10 @@ export async function markAgentOnThread(
   if (label) await gh.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [label] }).catch(() => undefined);
 }
 
-export async function findOpenPull(gh: GitHubClient, owner: string, repo: string, branch: string): Promise<{ number: number; url: string } | null> {
+export async function findOpenPull(gh: GitHubClient, owner: string, repo: string, branch: string): Promise<{ number: number; url: string; headSha: string } | null> {
   const { data } = await gh.rest.pulls.list({ owner, repo, head: `${owner}:${branch}`, state: "open", per_page: 1 });
   const pr = data[0];
-  return pr ? { number: pr.number, url: pr.html_url } : null;
+  return pr ? { number: pr.number, url: pr.html_url, headSha: pr.head.sha } : null;
 }
 
 export async function openPull(

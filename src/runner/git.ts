@@ -12,8 +12,8 @@ export class GitError extends Error {
  * Runs git. The token, when given, is passed as an HTTP auth header through GIT_CONFIG_*
  * environment variables, so it never lands in .git/config or the process list.
  */
-export function git(cwd: string, args: string[], options: { token?: string; timeoutMs?: number } = {}): Promise<string> {
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", LC_ALL: "C" };
+export function git(cwd: string, args: string[], options: { token?: string; timeoutMs?: number; env?: Record<string, string> } = {}): Promise<string> {
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "echo", LC_ALL: "C", ...options.env };
   if (options.token) {
     const basic = Buffer.from(`x-access-token:${options.token}`).toString("base64");
     env.GIT_CONFIG_COUNT = "1";

@@ -15,6 +15,22 @@ const { serverErrorOf } = await import("../src/runtime/session.ts");
 const { mention, renderProgress, formatDuration } = await import("../src/runner/progress.ts");
 const { verifySignature } = await import("../src/server/http.ts");
 const { createHmac } = await import("node:crypto");
+const { isTestCommand, NO_RULES, renderHandoff, workTypeFor } = await import("../src/boards/rules.ts");
+
+test("board rules: common test runners count as test runs, and handoff fields render in order", () => {
+  for (const command of ["npm test", "npm run test -- --watch=false", "pnpm test", "node --test test/", "python -m pytest -q", "pytest", "go test ./...", "cargo test", "./gradlew check", "make test"]) {
+    assert.ok(isTestCommand(NO_RULES, command), command);
+  }
+  for (const command of ["cat test.txt", "npm install", "git status", "echo latest"]) assert.ok(!isTestCommand(NO_RULES, command), command);
+  assert.ok(isTestCommand({ ...NO_RULES, testCommands: ["scripts/ci.sh"] }, "bash scripts/ci.sh --fast"));
+  assert.ok(!isTestCommand({ ...NO_RULES, testCommands: ["scripts/ci.sh"] }, "npm test"), "a column's own command replaces the defaults");
+
+  assert.equal(renderHandoff("Did it.", { risks: "none", verified: "ran it\nand read it", status: "  " }), "Did it.\n\n**Verified:**\nran it\nand read it\n\n**Risks:** none");
+  assert.equal(renderHandoff("Plain note", {}), "Plain note");
+  const types = [{ name: "bugfix", labels: ["Bug"], forbid: [] }, { name: "docs", labels: ["documentation"], forbid: [] }];
+  assert.equal(workTypeFor(types, ["documentation", "bug"])?.type.name, "bugfix", "the first type in the file wins");
+  assert.equal(workTypeFor(types, ["enhancement"]), null);
+});
 
 test("extractMentions finds handles and skips code, quotes, emails and teams", () => {
   const body = [

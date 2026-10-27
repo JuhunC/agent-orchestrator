@@ -30,6 +30,13 @@ export async function startHarness(profiles: Record<string, string>, env: Record
   mkdirSync(join(remotes, "acme"), { recursive: true });
   run(root, "clone", "-q", "--bare", seed, join(remotes, "acme", "widgets.git"));
   const showRemote = (ref: string) => run(root, "--git-dir", join(remotes, "acme", "widgets.git"), "show", ref);
+  fake.branchSha = (branch) => {
+    try {
+      return run(root, "--git-dir", join(remotes, "acme", "widgets.git"), "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`);
+    } catch {
+      return "";
+    }
+  };
 
   const profilesDir = join(root, "profiles");
   for (const [path, content] of Object.entries(profiles)) {
