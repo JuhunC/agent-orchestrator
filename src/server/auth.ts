@@ -2,7 +2,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { config } from "../config.ts";
 import { createSession, deleteSession, getSession } from "../db.ts";
-import { ensureAppDetails, getCredentials } from "../github/app.ts";
+import { addressCheck, appAddresses, ensureAppDetails, getCredentials } from "../github/app.ts";
 import { errorMessage, log } from "../log.ts";
 import { adminToken } from "./secrets.ts";
 
@@ -72,10 +72,15 @@ export function registerAuth(app: FastifyInstance): void {
   app.get("/api/auth/me", async (request) => {
     const login = currentLogin(request);
     const credentials = getCredentials();
+    const githubLogin = Boolean(credentials?.clientId && credentials.clientSecret);
+    // Before sign-in, say when the App's Callback URL can't match PUBLIC_URL (GitHub only shows a generic error).
+    const check = githubLogin && !login ? addressCheck(await appAddresses()) : null;
     return {
       login,
-      githubLogin: Boolean(credentials?.clientId && credentials.clientSecret),
+      githubLogin,
       authDisabled: config.authDisabled,
+      callbackUrl: `${config.publicUrl}/api/auth/github/callback`,
+      signInProblem: check?.callbackProblem ?? null,
     };
   });
 

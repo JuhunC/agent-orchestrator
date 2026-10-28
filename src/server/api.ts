@@ -20,7 +20,7 @@ import {
   listBoardItems,
   listHandoffs,
 } from "../db.ts";
-import { ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials } from "../github/app.ts";
+import { addressCheck, appAddresses, ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials, setAppWebhookUrl } from "../github/app.ts";
 import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
@@ -89,8 +89,14 @@ function settingsView() {
 async function setupView() {
   const credentials = await ensureAppDetails();
   const webhookUrl = config.webhookProxyUrl || `${config.publicUrl}/api/github/webhooks`;
+  const addresses = credentials ? await appAddresses() : null;
+  const check = addresses ? addressCheck(addresses) : null;
   return {
     configured: Boolean(credentials),
+    callbackUrl: `${config.publicUrl}/api/auth/github/callback`,
+    appAddresses: addresses,
+    callbackProblem: check?.callbackProblem ?? null,
+    webhookProblem: check?.webhookProblem ?? null,
     app: credentials
       ? {
           appId: credentials.appId,
@@ -558,4 +564,14 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   app.get("/api/setup", async () => setupView());
+
+  // Point the App's webhooks at this PUBLIC_URL (after PUBLIC_URL changed).
+  app.post("/api/setup/webhook-url", async (_request, reply) => {
+    try {
+      await setAppWebhookUrl(config.webhookProxyUrl || `${config.publicUrl}/api/github/webhooks`);
+      return setupView();
+    } catch (error) {
+      return reply.code(502).send({ error: `GitHub didn't accept the new webhook URL: ${errorMessage(error)}` });
+    }
+  });
 }

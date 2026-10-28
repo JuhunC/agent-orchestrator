@@ -29,6 +29,8 @@ Open `PUBLIC_URL`, sign in with the token, then **Settings → Create GitHub App
 
 GitHub must reach `PUBLIC_URL/api/github/webhooks`. On a laptop, set `WEBHOOK_PROXY_URL` to a channel from <https://smee.io>.
 
+Set `PUBLIC_URL` to the address you'll use (on a server without a domain, e.g. `http://203.0.113.7:3000`) **before** creating the App: the App's Callback URL (for **Sign in with GitHub**), webhook URL and Homepage URL are made from it. If you change `PUBLIC_URL` later, GitHub sign-in fails with "The redirect_uri is not associated with this application". Settings and the sign-in page then show the URLs to set: on GitHub, open the App's settings (Settings → Developer settings → GitHub Apps, or the organization's) and set the **Callback URL** to `PUBLIC_URL/api/auth/github/callback` and the **Homepage URL** to `PUBLIC_URL`. The webhook URL can be updated from Settings with one click. Until then, sign in with the admin token.
+
 ### The model service
 
 Agents run Claude Code through the Agent SDK, so they use whatever the `ANTHROPIC_*` variables point at:

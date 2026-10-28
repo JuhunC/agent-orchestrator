@@ -2,7 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { App, Octokit } from "octokit";
 import { config } from "../config.ts";
-import { log } from "../log.ts";
+import { errorMessage, log } from "../log.ts";
 
 export interface AppCredentials {
   appId: string;
@@ -173,4 +173,64 @@ export async function findOwnerInstallation(owner: string): Promise<number> {
     `The GitHub App isn't installed on "${owner}", which owns this project${where.length ? ` (it's installed on: ${where.join(", ")})` : " (it isn't installed anywhere yet)"}. ` +
       `Install it on ${owner}, or set token_env in the board file to use a token that can see the project.`,
   );
+}
+
+/** What GitHub has for the App's own addresses, to compare with PUBLIC_URL. */
+export interface AppAddresses {
+  /** Homepage URL: PUBLIC_URL when the App was created here. */
+  homepage: string | null;
+  /** Where GitHub sends webhooks. */
+  webhookUrl: string | null;
+  /** The App's settings page on GitHub (where the Callback URL is edited). */
+  settingsUrl: string | null;
+}
+
+let addresses: { at: number; value: AppAddresses } | null = null;
+
+/**
+ * The App's homepage and webhook URLs as GitHub has them (cached for a minute). GitHub doesn't
+ * show an app its own Callback URL; the homepage URL is set from PUBLIC_URL at the same moment,
+ * so it tells whether PUBLIC_URL has changed since.
+ */
+export async function appAddresses(): Promise<AppAddresses> {
+  if (addresses && Date.now() - addresses.at < 60_000) return addresses.value;
+  const value: AppAddresses = { homepage: null, webhookUrl: null, settingsUrl: null };
+  try {
+    const octokit = getApp().octokit;
+    const [{ data: app }, hook] = await Promise.all([
+      octokit.request("GET /app"),
+      octokit.request("GET /app/hook/config").then(({ data }) => data).catch(() => null),
+    ]);
+    const owner = app?.owner as { login?: string; type?: string } | null | undefined;
+    value.homepage = (app as { external_url?: string } | null)?.external_url || null;
+    value.webhookUrl = (hook as { url?: string } | null)?.url || null;
+    if (app?.slug && owner?.login) {
+      value.settingsUrl = owner.type === "Organization" ? `${config.github.url}/organizations/${owner.login}/settings/apps/${app.slug}` : `${config.github.url}/settings/apps/${app.slug}`;
+    }
+  } catch (error) {
+    log.warn("Could not read the GitHub App's settings", { error: errorMessage(error) });
+  }
+  addresses = { at: Date.now(), value };
+  return value;
+}
+
+/** Points the App's webhooks at `url` (GitHub lets an app change this, unlike its Callback URL). */
+export async function setAppWebhookUrl(url: string): Promise<void> {
+  // `url` is Octokit's own option (the address to call), so the body goes in `data`.
+  await getApp().octokit.request("PATCH /app/hook/config", { data: { url } });
+  addresses = null;
+}
+
+const trim = (url: string) => url.replace(/\/+$/, "");
+
+/** The addresses the App needs for this PUBLIC_URL, and what doesn't match on GitHub. */
+export function addressCheck(app: AppAddresses): { callbackUrl: string; webhookUrl: string; callbackProblem: string | null; webhookProblem: string | null } {
+  const callbackUrl = `${config.publicUrl}/api/auth/github/callback`;
+  const webhookUrl = config.webhookProxyUrl || `${config.publicUrl}/api/github/webhooks`;
+  const callbackProblem =
+    app.homepage && trim(app.homepage) !== trim(config.publicUrl)
+      ? `The GitHub App was set up for ${trim(app.homepage)} (its Homepage URL), but PUBLIC_URL is ${config.publicUrl}. Its Callback URL is probably still ${trim(app.homepage)}/api/auth/github/callback, so "Sign in with GitHub" fails with "The redirect_uri is not associated with this application". In the App's settings on GitHub, set the Callback URL to ${callbackUrl} and the Homepage URL to ${config.publicUrl}.`
+      : null;
+  const webhookProblem = app.webhookUrl && trim(app.webhookUrl) !== trim(webhookUrl) ? `GitHub sends this App's webhooks to ${app.webhookUrl}, not to ${webhookUrl}, so agents won't hear about mentions.` : null;
+  return { callbackUrl, webhookUrl, callbackProblem, webhookProblem };
 }

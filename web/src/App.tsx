@@ -19,6 +19,9 @@ interface Me {
   login: string | null;
   githubLogin: boolean;
   authDisabled: boolean;
+  callbackUrl?: string;
+  /** Why "Sign in with GitHub" will fail, when the server can tell. */
+  signInProblem?: string | null;
 }
 
 function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
@@ -153,7 +156,7 @@ export function App() {
   }, [load]);
 
   if (!me) return null;
-  if (!me.login) return <Login githubLogin={me.githubLogin} onSignedIn={() => void load()} />;
+  if (!me.login) return <Login githubLogin={me.githubLogin} callbackUrl={me.callbackUrl ?? null} signInProblem={me.signInProblem ?? null} onSignedIn={() => void load()} />;
   return (
     <Shell
       me={me}

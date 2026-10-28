@@ -8,6 +8,8 @@ function CreateApp({ setup }: { setup: Setup }) {
   const [org, setOrg] = useState("");
   const [error, setError] = useState<string | null>(null);
   const localOnly = /\/\/(localhost|127\.0\.0\.1)/.test(setup.publicUrl) && !setup.webhookProxy;
+  // The App is created for PUBLIC_URL (its Callback and webhook URLs), not for the address in the browser.
+  const elsewhere = new URL(setup.publicUrl).origin !== window.location.origin;
 
   const create = async () => {
     setError(null);
@@ -35,6 +37,14 @@ function CreateApp({ setup }: { setup: Setup }) {
         Create the GitHub App in one step: GitHub shows you the app's settings, you confirm, and the credentials come back here automatically. Then install the
         app on the repositories the agents should work on.
       </p>
+      {elsewhere && (
+        <div className="banner error">
+          <span>
+            You opened this page at {window.location.origin}, but PUBLIC_URL is {setup.publicUrl}. The App would be created for {setup.publicUrl}: its Callback URL (for
+            "Sign in with GitHub") and webhooks would point there. Set PUBLIC_URL to the address people and GitHub use, restart the orchestrator, then create the App.
+          </span>
+        </div>
+      )}
       {localOnly && (
         <div className="banner">
           PUBLIC_URL is {setup.publicUrl}, which GitHub can't reach. Webhooks won't arrive unless you set PUBLIC_URL to this server's public address, or set
@@ -104,6 +114,48 @@ function Installations({ setup }: { setup: Setup }) {
   );
 }
 
+/** The App's settings on GitHub don't match PUBLIC_URL: say what to change, and fix the webhook URL for them. */
+function AddressProblems({ setup, onFixed }: { setup: Setup; onFixed: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const settingsUrl = setup.appAddresses?.settingsUrl;
+  const fixWebhook = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/api/setup/webhook-url");
+      onFixed();
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="banner error">
+      <div className="stack" style={{ gap: 8 }}>
+        <b>The GitHub App's settings don't match PUBLIC_URL ({setup.publicUrl})</b>
+        {setup.callbackProblem && <span>{setup.callbackProblem}</span>}
+        {setup.webhookProblem && <span>{setup.webhookProblem}</span>}
+        <div className="row">
+          {settingsUrl && (
+            <a className="button small" href={settingsUrl} target="_blank" rel="noreferrer">
+              Open the App's settings on GitHub ↗
+            </a>
+          )}
+          {setup.webhookProblem && (
+            <button className="small primary" disabled={busy} onClick={fixWebhook}>
+              {busy ? "Updating…" : `Send webhooks to ${setup.webhookUrl}`}
+            </button>
+          )}
+        </div>
+        {setup.callbackProblem && <span className="meta">GitHub doesn't let an app change its own Callback URL, so that one is a change on GitHub. This notice goes away once the Homepage URL matches too.</span>}
+        {error && <span className="error-text">{error}</span>}
+      </div>
+    </div>
+  );
+}
+
 export function Settings() {
   const route = useRoute();
   const { data, reload } = useApi<SettingsData & { setup: Setup }>("/api/settings", (message) => message.type === "settings");
@@ -127,6 +179,8 @@ export function Settings() {
       {setupResult === "expired" && <div className="banner error">That setup link expired or was already used. Start again.</div>}
       {setupResult === "error" && <div className="banner error">GitHub App setup failed: {route.query.get("message")}</div>}
 
+      {setup.app && (setup.callbackProblem || setup.webhookProblem) && <AddressProblems setup={setup} onFixed={() => void reload()} />}
+
       <Panel title="GitHub App" hint={setup.app ? (setup.app.source === "env" ? "from environment variables" : "created here") : "not connected"}>
         {setup.app ? (
           <div className="stack" style={{ gap: 16 }}>
@@ -146,6 +200,8 @@ export function Settings() {
               <dd className="mono">{setup.app.slug ? `${setup.app.slug}[bot]` : "—"}</dd>
               <dt>Webhook URL</dt>
               <dd className="mono">{setup.webhookUrl}</dd>
+              <dt>Callback URL</dt>
+              <dd className="mono">{setup.callbackUrl}</dd>
               <dt>GitHub sign-in</dt>
               <dd>{setup.app.githubLogin ? `on, for ${[...setup.adminUsers, setup.app.ownerLogin].filter(Boolean).join(", ") || "nobody yet — set ADMIN_USERS"}` : "off (no client secret)"}</dd>
             </dl>

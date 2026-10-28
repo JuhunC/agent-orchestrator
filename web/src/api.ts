@@ -260,6 +260,13 @@ export interface Settings {
 
 export interface Setup {
   configured: boolean;
+  /** The Callback URL GitHub sign-in uses: PUBLIC_URL/api/auth/github/callback. */
+  callbackUrl: string;
+  /** The App's addresses as GitHub has them. */
+  appAddresses: { homepage: string | null; webhookUrl: string | null; settingsUrl: string | null } | null;
+  /** Set when the App's settings on GitHub don't match PUBLIC_URL. */
+  callbackProblem: string | null;
+  webhookProblem: string | null;
   app: {
     appId: string;
     slug: string;

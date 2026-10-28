@@ -36,6 +36,9 @@ export class FakeGitHub {
   issues = new Map<number, FakeIssue>();
   permissions = new Map<string, string>();
   labels: string[] = [];
+  /** The App's Homepage and webhook URLs on GitHub (PUBLIC_URL when it was created; the tests' default). */
+  appHomepage = "http://localhost:3000";
+  appWebhookUrl = "http://localhost:3000/api/github/webhooks";
   /** Labels defined in the repository (acme/widgets). */
   repoLabels = new Set<string>(["type:refactor"]);
   assignees: string[] = [];
@@ -168,7 +171,14 @@ export class FakeGitHub {
     if (method === "POST" && (match = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/))) {
       return { status: 201, body: { token: "ghs_faketoken", expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: {}, repository_selection: "all" } };
     }
-    if (method === "GET" && path === "/app") return { status: 200, body: { slug: "test-orchestrator", html_url: `${this.url}/apps/test-orchestrator`, owner: { login: "acme" } } };
+    if (method === "GET" && path === "/app") {
+      return { status: 200, body: { slug: "test-orchestrator", html_url: `${this.url}/apps/test-orchestrator`, external_url: this.appHomepage, owner: { login: "acme", type: "Organization" } } };
+    }
+    if (method === "GET" && path === "/app/hook/config") return { status: 200, body: { url: this.appWebhookUrl, content_type: "json" } };
+    if (method === "PATCH" && path === "/app/hook/config") {
+      this.appWebhookUrl = body.url;
+      return { status: 200, body: { url: this.appWebhookUrl, content_type: "json" } };
+    }
     if (method === "GET" && (match = path.match(/^\/users\/(.+)$/))) return { status: 200, body: { id: 4242, login: decodeURIComponent(match[1]!) } };
     if (method === "GET" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/collaborators\/([^/]+)\/permission$/))) {
       const permission = this.permissions.get(match[1]!) ?? "none";
