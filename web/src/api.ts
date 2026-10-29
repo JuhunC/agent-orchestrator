@@ -27,6 +27,8 @@ export interface GithubPermissions {
   relations: boolean;
   mergeIntoParent: boolean;
   parentBranch: boolean;
+  /** Related issues whose agents it may start (start_related_agent). */
+  startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
 }
 
 /** An agent profile (profiles/agents/<name>/agent.md). */
@@ -113,7 +115,7 @@ export interface Task {
   threadNumber: number;
   threadTitle: string;
   threadUrl: string;
-  triggerKind: "mention" | "assignment" | "manual" | "retry";
+  triggerKind: "mention" | "assignment" | "manual" | "retry" | "board" | "agent";
   requestedBy: string;
   requestText: string;
   requestUrl: string;
@@ -140,6 +142,8 @@ export interface Task {
   board: string | null;
   boardColumn: string | null;
   boardItemId: string | null;
+  /** The task whose agent started this one from a related issue. */
+  startedByTask: number | null;
 }
 
 export interface BoardColumnInfo {

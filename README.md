@@ -89,6 +89,7 @@ github:
   relations: false             # link_issue: blocked-by, blocking, parent and sub-issue links
   merge_into_parent: false     # merge_into_parent: merge a sub-issue into its parent's branch
   parent_branch: true          # a sub-issue branches from and merges into its parent's branch
+  start_related: false         # start_related_agent: true, or some of [parent, sub_issue, blocked_by, blocks]
 max_turns: 300
 max_budget_usd: 20
 timeout_minutes: 90
@@ -147,6 +148,7 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 | `set_card_fields` | `update_issue: true`, on a board with `fields`: set the card's (or a sub-issue's) start date, end date and estimate in the project |
 | `link_issue` | `relations: true`: add or remove `blocked_by`, `blocks`, `parent` or `sub_issue` links to another issue |
 | `merge_into_parent` | `merge_into_parent: true`: merge this sub-issue's pushed work into the parent's branch with a merge commit, and close the sub-issue |
+| `start_related_agent` | `start_related`: when this task finishes, start the agent responsible for a related issue (parent, sub-issue, blocker, or an issue this one blocks) with a message |
 
 **Wikis** have no REST API: each is a git repository (`<repo>.wiki.git`), so the orchestrator keeps a checkout under `DATA_DIR/wikis` and pushes page changes with the installation token (the App's `contents: write` permission covers it). GitHub creates a wiki's repository only when its first page is saved, so turn on Wikis in the repository settings and create the first page in the web UI once. If someone edits the wiki at the same moment, the write is redone on top of their version.
 
@@ -161,6 +163,15 @@ GitHub sub-issues split an issue into parts. The orchestrator gives each issue i
 - A sub-issue's branch starts from its **parent's branch**, and its pull request targets that branch instead of the default branch. If the parent's branch doesn't exist yet, it's created where the sub-issue's branch left the default branch. The parent's own pull request then takes all of it to the default branch, through a person. Set `parent_branch: false` on an agent to have it treat sub-issues like any other issue. Only open parents in the same repository count.
 - `list_sub_issues` checks each sub-issue's branch: its head must be an **ancestor** of the parent's branch on GitHub. A squash or rebase merge copies commits, so that work shows as not merged; `merge_into_parent` always uses a merge commit.
 - The agent's prompt lists the issue's parent, sub-issues and dependencies, and says where its work merges.
+
+### Starting the agent of a related issue
+
+An agent can hand work over to a related issue: a sub-issue that merged its work tells the parent's agent to carry on, a parent asks a sub-issue's agent to fix something, or a finished blocker starts the issue it was blocking. Give the agent `start_related: [parent]` (or `true` for every relation, or any of `parent`, `sub_issue`, `blocked_by`, `blocks`) and it gets `start_related_agent`, which takes the related issue, a message, and optionally an agent.
+
+- **Who starts.** For a card on a project board, the agent of the card's column, as if the card had just entered it, so the board's loop guards apply. A board can limit which columns may be started this way with `related_agents: { columns: [...] }`. For any other issue, the agent named in the call, or else the agent that last worked on that issue.
+- **When.** When the asking task finishes, and only if it succeeds: after its card moves and after its issue is closed, so the other agent sees the finished work. An agent already working on the related issue gets the message instead, and one already queued there gets it added to its request.
+- **Loops.** A task started this way records which task started it. Once `MAX_AGENT_CHAIN` (default 3) agents have started each other in a row, the last one can't start another. Each task can start at most 5.
+- Only issues related on GitHub count; link others first with `link_issue`. The task page shows which task started a task, and the related issue gets the usual progress comment.
 
 ## Project boards
 
@@ -196,6 +207,7 @@ columns:
 ```
 - **Move map**: the board page draws the columns and the moves agents can make between them (`moves_to` forward and back, `on_start`), with what each column requires.
 - **Sub-issues** (optional, top level): `sub_issues: { column: Backlog, moves_to: [Ready] }`. Sub-issues an agent creates on the board are added to it in `column` when its task finishes, which starts that column's agent; one that doesn't meet that column's requirements (e.g. `dependencies` while it's blocked) stays off the board until the parent moves it. Put `dependencies` on columns like Ready to make blocked-by relations a hard gate; without it, `move_sub_issue` still points out open blockers. An agent working a parent card may move its sub-issues' cards to the `moves_to` columns with `move_sub_issue` (or to `needs_human`); like its own move, that happens when it finishes and is checked again first. Such a move counts toward the sub-issue's loop guards. Only evidence about the sub-issue itself (`pull_request`, `merged`, `sub_issues`) can be checked for it, so a column that needs another agent's tests or review can't be entered this way.
+- **Related-issue starts** (optional, top level): `related_agents: { columns: [In progress, Integration] }` lists the columns whose agent an agent on a related issue may start with `start_related_agent` (see [Starting the agent of a related issue](#starting-the-agent-of-a-related-issue)). Without it, every column with agents can be; `columns: []` allows none. Each start counts as the card entering its column again, toward `entries_per_column`.
 - **Dates and estimates** (optional, top level): `fields: { start: Start date, end: End date, estimate: Estimate, start_on: [In progress], end_on: [Done] }` names the project's date fields and number field. GitHub issues have no dates of their own; in a Project they live in fields like these, which the roadmap view uses. Agents set them with `set_card_fields` (and `create_sub_issue` takes them for new sub-issues), and their prompt shows the card's current values. `start_on` fills in the start date (today, UTC) when a card enters one of those columns and has none yet; `end_on` sets the end date when it enters one. That happens for people's moves too. The board page shows the values per card.
 - **Loop guards**: too many agent moves, too many visits to one column, or too much spend on a card sends it to `needs_human` with a comment. Moving a card away from a column stops the agent working on it.
 - GitHub sends project webhooks only for **organization** projects, and the app needs the organization **Projects** permission (read and write). Boards are also polled every `poll_seconds` in case a webhook is missed. The first poll only records where cards are; it doesn't start agents for cards already on the board.
@@ -233,6 +245,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MODEL_ERROR_RETRIES` | `3` | When the model API fails to answer (5xx, overloaded, dropped connection): each request is retried this many times, then a task that still fails is retried this many times, continuing its session |
 | `MODEL_ERROR_RETRY_DELAY_SECONDS` | `20` | First wait before a task retry; doubles each time |
 | `CLAUDE_CODE_EXECUTABLE` | bundled | A Claude Code-compatible executable agents run instead of the SDK's own (see [The model service](#the-model-service)) |
+| `MAX_AGENT_CHAIN` | `3` | How many agents in a row may start each other on related issues with `start_related_agent`; `0` turns it off |
 | `MAX_PULL_REQUESTS_PER_ISSUE` | `0` (no limit) | Most pull requests agents may open for one issue, counting closed ones. Past it, agents still push their branch and can update their open PR, but no new PR is opened |
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |

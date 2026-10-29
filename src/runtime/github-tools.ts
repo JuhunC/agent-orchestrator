@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { config } from "../config.ts";
+import { config, repoAllowed } from "../config.ts";
 import { getBoardItem, linkedThreads, linkThreads, listBoardItems, type CardFieldValues } from "../db.ts";
 import { installationToken, repoRemoteUrl, type GitHubClient } from "../github/app.ts";
 import { ciStatus, fetchThread, findOpenPull, openPull, postComment, updatePull, type ThreadContext } from "../github/threads.ts";
@@ -20,6 +20,7 @@ import {
   addBlockedBy,
   addSubIssue,
   describeRelations,
+  fetchRelations,
   getIssue,
   issueBranch,
   isIssueBranch,
@@ -34,6 +35,7 @@ import {
   type IssueRef,
 } from "../github/relations.ts";
 import { cardMoveProblems, cardWorkType, moveProblems, type ReviewRecord, type TestRun } from "./evidence.ts";
+import { chainProblem, describePlan, MAX_RELATED_STARTS_PER_TASK, planStart, RELATION_NAME, relationOf, type RelatedStart } from "./related-agents.ts";
 import { checkSubIssues, describeSubIssueWork, fetchBranch, isAncestor } from "./sub-issues.ts";
 import { ensureBaseBranch, excludeFromGit, parentBranchFor, type Workspace } from "./workspace.ts";
 
@@ -86,6 +88,8 @@ export interface ToolContext {
    * once: a project's "item closed" workflow could move the card, which would stop this task.
    */
   issueState?: { state: "open" | "closed"; reason: "completed" | "not_planned" | "duplicate" | "reopened" } | null;
+  /** Agents to start on related issues when the task finishes successfully (start_related_agent). */
+  relatedStarts?: RelatedStart[];
   board: BoardContext | null;
 }
 
@@ -714,6 +718,52 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             const text = TEXT[args.relation](`#${threadNumber}`, `#${other.number}`);
             ctx.onEvent("tool", `${remove ? "Removed" : "Linked"}: ${text}`);
             return ok(remove ? `Removed the relation: ${text} no longer.` : `Linked: ${text}.`);
+          })(),
+      ),
+    );
+  }
+
+  if (profile.github.startRelated.length) {
+    const allowed = profile.github.startRelated;
+    tools.push(
+      tool(
+        "start_related_agent",
+        `Start the agent responsible for an issue related to this one (${allowed.map((relation) => RELATION_NAME[relation]).join("; ")}), with a message: what you did and what you need from it. For a card on a project board that's the agent of the card's column; otherwise the agent you name, or the one that last worked on that issue. It starts when you finish, and only if your task succeeds, so it sees your finished work; an agent already working there gets your message instead.`,
+        {
+          number: z.number().int().positive().describe("The related issue's number"),
+          repository: z.string().regex(/^[\w.-]+\/[\w.-]+$/).optional().describe("owner/name, when the related issue is in another repository"),
+          message: z.string().min(1).describe('What you did and what you need, e.g. "#13 is merged into ao/issue-12: carry on with the integration"'),
+          agent: z.string().optional().describe("The agent to start, by name or handle; leave out to start the one responsible"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo, threadKind, threadNumber } = ctx.task;
+            if (threadKind !== "issue") return fail(`Relations are between issues; this task is on a ${threadKind === "pull" ? "pull request" : "discussion"}.`);
+            const chain = chainProblem(ctx.task);
+            if (chain) return fail(chain);
+            const [targetOwner, targetRepo] = (args.repository ?? `${owner}/${repo}`).split("/") as [string, string];
+            if (!repoAllowed(`${targetOwner}/${targetRepo}`)) return fail(`${targetOwner}/${targetRepo} isn't in ALLOWED_REPOS, so agents can't be started there.`);
+            const { data: me } = await ctx.gh.rest.issues.get({ owner, repo, issue_number: threadNumber });
+            const relations = await fetchRelations(ctx.gh, owner, repo, me);
+            ctx.thread.relations = relations;
+            const found = relationOf(relations, targetOwner, targetRepo, args.number);
+            const target = args.repository ? `${targetOwner}/${targetRepo}#${args.number}` : `#${args.number}`;
+            if (!found) {
+              const related = describeRelations(relations, owner, repo);
+              return fail([`${target} isn't related to #${threadNumber}.${profile.github.relations ? " Link it first with link_issue if it should be." : ""}`, ...(related.length ? ["Related issues:", ...related] : [`#${threadNumber} has no related issues.`])].join("\n"));
+            }
+            if (!allowed.includes(found.relation)) {
+              return fail(`${target} is ${RELATION_NAME[found.relation]}, and you may only start agents on ${allowed.map((relation) => RELATION_NAME[relation].replace(/^(a|an) /, "")).join(", ")} (github.start_related in your agent.md).`);
+            }
+            const pending = ctx.relatedStarts ?? [];
+            const same = (start: RelatedStart) => start.target.number === found.issue.number && sameRepo(start.target, found.issue.owner, found.issue.repo);
+            if (!pending.some(same) && pending.length >= MAX_RELATED_STARTS_PER_TASK) return fail(`You've already asked for ${MAX_RELATED_STARTS_PER_TASK} agents on related issues in this task.`);
+            const start: RelatedStart = { target: found.issue, relation: found.relation, agent: args.agent?.trim() || null, message: args.message };
+            const plan = planStart(start);
+            if (typeof plan === "string") return fail(plan);
+            ctx.relatedStarts = [...pending.filter((other) => !same(other)), start];
+            ctx.onEvent("tool", `Will start ${describePlan(plan).replace(/\*\*/g, "")} on ${target} when the task finishes`);
+            return ok(`When you finish, ${describePlan(plan)} starts on ${target} (${RELATION_NAME[found.relation]}) with your message${pending.some(same) ? ", replacing your earlier one" : ""}. If it's already working there, it gets the message instead. Nothing is started if your task fails.`);
           })(),
       ),
     );

@@ -18,6 +18,8 @@ interface Note extends Activity {
   trusted: boolean;
   /** They mentioned this agent: if it never sees the note, it becomes a follow-up task. */
   mention: boolean;
+  /** From another issue's agent (start_related_agent): its task, so a follow-up keeps the chain. */
+  startedByTask: number | null;
 }
 
 type Payload = Record<string, any>;
@@ -138,9 +140,9 @@ function emit(taskId: number, message: string): void {
 }
 
 /** Queues the activity for an agent that's working on the thread; it sees it at its next step. */
-export function deliver(task: Task, activity: Activity, options: { trusted: boolean; mention?: boolean }): void {
+export function deliver(task: Task, activity: Activity, options: { trusted: boolean; mention?: boolean; startedByTask?: number }): void {
   const box = inboxes.get(task.id) ?? [];
-  box.push({ ...activity, trusted: options.trusted, mention: options.mention ?? false });
+  box.push({ ...activity, trusted: options.trusted, mention: options.mention ?? false, startedByTask: options.startedByTask ?? null });
   inboxes.set(task.id, box);
   const where = sameThread(task, activity.ref) ? "" : ` on #${activity.ref.number}`;
   emit(task.id, `@${activity.author} ${activity.summary}${where}${activity.body ? `: ${activity.body.split("\n")[0]!.slice(0, 160)}` : ""}`);
@@ -183,6 +185,7 @@ export function settleInbox(task: Task, startFollowUp: boolean): Task | null {
   if (!startFollowUp || !mentions.length) return null;
   const text = mentions.map((note) => `@${note.author} asked (${note.url}):\n\n${note.body}`).join("\n\n---\n\n");
   const ref = { owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber };
+  const fromAgent = mentions.find((note) => note.startedByTask !== null)?.startedByTask ?? null;
   const queued = queuedTaskForThread(ref, task.agent);
   const follow = queued
     ? updateTask(queued.id, { requestText: `${queued.requestText}\n\n---\n\n${text}` })
@@ -195,10 +198,11 @@ export function settleInbox(task: Task, startFollowUp: boolean): Task | null {
         threadNumber: task.threadNumber,
         threadTitle: task.threadTitle,
         threadUrl: task.threadUrl,
-        triggerKind: "mention",
+        triggerKind: fromAgent ? "agent" : "mention",
         requestedBy: mentions[0]!.author,
         requestText: text,
         requestUrl: mentions[0]!.url,
+        startedByTask: fromAgent,
       });
   bus.publish({ type: "task", task: follow });
   emit(task.id, `Finished before seeing ${mentions.length === 1 ? "a mention" : `${mentions.length} mentions`}; queued it as task #${follow.id}`);

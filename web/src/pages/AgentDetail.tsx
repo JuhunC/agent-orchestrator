@@ -43,6 +43,7 @@ export function githubPermissions(github: GithubPermissions): string[] {
     ...(github.subIssues !== "none" ? [`sub-issues: ${github.subIssues}`] : []),
     ...on(github.relations, "link issues"),
     ...on(github.mergeIntoParent, "merge into parent"),
+    ...(github.startRelated?.length ? [github.startRelated.length === 4 ? "start related agents" : `start agents: ${github.startRelated.map((relation) => relation.replace("_", "-")).join(", ")}`] : []),
   ];
 }
 

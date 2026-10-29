@@ -78,6 +78,14 @@ export interface SubIssueSettings {
 
 export const NO_SUB_ISSUES: SubIssueSettings = { column: null, movesTo: [] };
 
+/** Which columns' agents an agent on a related issue may start (the optional `related_agents:` section). */
+export interface RelatedAgentSettings {
+  /** Columns whose agents start_related_agent may start; null = every column with agents. */
+  columns: string[] | null;
+}
+
+export const ANY_RELATED_AGENTS: RelatedAgentSettings = { columns: null };
+
 /** The project fields a board tracks per card (the optional `fields:` section). */
 export interface CardFieldSettings {
   /** Name of the project's date field for when work starts, e.g. "Start date". */
@@ -185,6 +193,23 @@ function parseSubIssues(raw: unknown, columns: string[], needsHuman: string | nu
   return { column, movesTo };
 }
 
+function parseRelatedAgents(raw: unknown, columns: string[], errors: string[]): RelatedAgentSettings {
+  if (raw === undefined || raw === null) return ANY_RELATED_AGENTS;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push('"related_agents" must be a map with "columns"');
+    return ANY_RELATED_AGENTS;
+  }
+  const entry = raw as Record<string, unknown>;
+  for (const key of Object.keys(entry)) if (key !== "columns") errors.push(`related_agents: unknown setting "${key}" (use columns)`);
+  if (entry.columns === undefined || entry.columns === null || entry.columns === "all") return ANY_RELATED_AGENTS;
+  const picked: string[] = [];
+  for (const name of list(entry.columns)) {
+    if (!columns.includes(name)) errors.push(`related_agents.columns: "${name}" isn't listed under columns`);
+    else if (!picked.includes(name)) picked.push(name);
+  }
+  return { columns: picked };
+}
+
 const FIELD_KEYS = ["start", "end", "estimate", "start_on", "end_on"];
 
 function parseCardFields(raw: unknown, columns: string[], needsHuman: string | null, errors: string[]): CardFieldSettings {
@@ -227,6 +252,7 @@ export function parseBoardRules(data: Record<string, unknown>): {
   workTypes: WorkType[];
   subIssues: SubIssueSettings;
   fields: CardFieldSettings;
+  relatedAgents: RelatedAgentSettings;
   errors: string[];
 } {
   const errors: string[] = [];
@@ -242,7 +268,8 @@ export function parseBoardRules(data: Record<string, unknown>): {
   const workTypes = parseWorkTypes(data.work_types, Object.keys(rawColumns), needsHuman, errors);
   const subIssues = parseSubIssues(data.sub_issues, Object.keys(rawColumns), needsHuman, errors);
   const fields = parseCardFields(data.fields, Object.keys(rawColumns), needsHuman, errors);
-  return { columns, workTypes, subIssues, fields, errors };
+  const relatedAgents = parseRelatedAgents(data.related_agents, Object.keys(rawColumns), errors);
+  return { columns, workTypes, subIssues, fields, relatedAgents, errors };
 }
 
 /** The first work type (in file order) with one of the card's labels. */

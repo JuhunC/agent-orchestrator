@@ -105,6 +105,12 @@ export function TaskDetail({ id }: { id: number }) {
                   <a href={href(`/tasks/${task.retryOf}`)}>#{task.retryOf}</a>
                 </>
               )}
+              {task.startedByTask && (
+                <>
+                  {" · started by task "}
+                  <a href={href(`/tasks/${task.startedByTask}`)}>#{task.startedByTask}</a>
+                </>
+              )}
             </div>
           </div>
         </Panel>

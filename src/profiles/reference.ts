@@ -89,6 +89,13 @@ const AGENT: FileDoc = {
       description: "On a sub-issue, branch from the parent issue's branch (ao/issue-<parent>) and open the pull request against it. Issues with a parent or sub-issues use the shared branch ao/issue-<n>. Off: every issue branches from and merges into the default branch.",
       example: "github:\n  parent_branch: false",
     },
+    {
+      key: "github.start_related",
+      type: "boolean or list",
+      default: bool(GITHUB_DEFAULTS.start_related),
+      description: `start_related_agent: when its task finishes, start the agent responsible for a related issue, with a message. true allows every relation; a list allows some of ${RELATIONS.join(", ")} (parent: its parent issue; sub_issue: its sub-issues; blocked_by: issues blocking it; blocks: issues it blocks). On a board card the card's column's agent starts (the board's related_agents and loop guards apply); otherwise the agent named, or the one that last worked on that issue. MAX_AGENT_CHAIN limits how many agents may start each other in a row.`,
+      example: "github:\n  start_related: [parent]",
+    },
     { key: "max_turns", type: "number", default: "no limit", description: "Most model turns per task.", example: "max_turns: 200" },
     { key: "max_budget_usd", type: "number", default: "no limit", description: "Most it may spend per task, in US dollars.", example: "max_budget_usd: 5" },
     { key: "timeout_minutes", type: "number", default: "DEFAULT_TIMEOUT_MINUTES", description: "Stop a task after this long.", example: "timeout_minutes: 45" },
@@ -215,6 +222,13 @@ const BOARD: FileDoc = {
     { key: "fields.estimate", type: "string", default: "not tracked", description: "Name of the project's number field for the card's estimate.", example: "fields:\n  estimate: Estimate" },
     { key: "fields.start_on", type: "list", default: "[]", description: "Columns that fill in the start date (today, UTC) when a card enters them, if it has none yet. Needs fields.start.", example: "  start_on: [In progress]" },
     { key: "fields.end_on", type: "list", default: "[]", description: "Columns that set the end date to today (UTC) when a card enters them. Needs fields.end.", example: "  end_on: [Done]" },
+    {
+      key: "related_agents.columns",
+      type: "list",
+      default: "every column with agents",
+      description: "Columns whose agent an agent on a related issue (parent, sub-issue, blocker) may start with start_related_agent. [] allows none. Each start counts as the card entering its column again (limits.entries_per_column).",
+      example: "related_agents:\n  columns: [In progress, Integration]",
+    },
     {
       key: "sub_issues.column",
       type: "string",

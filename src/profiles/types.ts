@@ -55,6 +55,8 @@ export interface GithubPermissions {
   mergeIntoParent: boolean;
   /** On a sub-issue, branch from and open the pull request against the parent issue's branch. */
   parentBranch: boolean;
+  /** start_related_agent: the related issues whose agents it may start (empty = none). */
+  startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
 }
 
 /** One agent: profiles/agents/<name>/agent.md plus its own skills/ and mcp.json. */

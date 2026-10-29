@@ -1,6 +1,7 @@
 export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
-export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board";
+/** "agent": another issue's agent started it (start_related_agent). */
+export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent";
 /** "github": something a person did on the thread while the agent was working. */
 export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error" | "github";
 
@@ -52,6 +53,8 @@ export interface Task {
   boardItemId: string | null;
   /** Set when several agents work the same card at once ("all" columns). */
   boardRound: string | null;
+  /** The task whose agent started this one from a related issue (start_related_agent). */
+  startedByTask: number | null;
 }
 
 /** Tokens one model used. */

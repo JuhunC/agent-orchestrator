@@ -36,6 +36,7 @@ import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import type { Profile } from "../profiles/types.ts";
+import type { Task } from "../types.ts";
 import { loadBoards, type Board, type BoardColumn } from "./loader.ts";
 import { hasCardFields } from "./rules.ts";
 
@@ -206,16 +207,32 @@ function leastBusy(candidates: Profile[]): Profile {
   })[0]!;
 }
 
-/** Starts the column's agent(s) for the card, unless a guard says to escalate instead. */
-export async function startColumnAgent(board: Board, itemId: string): Promise<void> {
+/** Extra for a column start that another issue's agent asked for (start_related_agent). */
+export interface ColumnStartRequest {
+  /** Added to the column's usual request. */
+  request: string;
+  requestedBy: string;
+  requestUrl: string;
+  startedByTask: number;
+  /** Only this agent (one of the column's), instead of picking from the column. */
+  agent?: string;
+}
+
+/**
+ * Starts the column's agent(s) for the card, unless a guard says to escalate instead. Returns the
+ * tasks it queued, or why it started none.
+ */
+export async function startColumnAgent(board: Board, itemId: string, extra?: ColumnStartRequest): Promise<{ tasks: Task[]; skipped: string | null }> {
   const row = getBoardItem(board.name, itemId);
   const column = row?.status ? board.columns[row.status] : undefined;
-  if (!row || !column?.agents.length || board.errors.length) return;
-  if (activeBoardTasks(board.name, itemId).some((task) => task.boardColumn === column.name)) return;
-  const candidates = await candidatesFor(board, column, row);
+  if (!row || !column?.agents.length || board.errors.length) {
+    return { tasks: [], skipped: !row ? "the card isn't known to the board" : board.errors.length ? `the ${board.name} board has errors` : `"${row.status ?? "no column"}" has no agent` };
+  }
+  if (activeBoardTasks(board.name, itemId).some((task) => task.boardColumn === column.name)) return { tasks: [], skipped: `an agent is already working it in "${column.name}"` };
+  const candidates = (await candidatesFor(board, column, row)).filter((profile) => !extra?.agent || profile.name === extra.agent);
   if (!candidates.length) {
     log.info("No available agent for the card's column", { board: board.name, column: column.name });
-    return;
+    return { tasks: [], skipped: extra?.agent ? `${extra.agent} isn't available for "${column.name}" (turned off, or the column's labels route the card elsewhere)` : `no agent of "${column.name}" is available (turned off or invalid)` };
   }
 
   const entries = (row.entries[column.name] ?? 0) + 1;
@@ -228,15 +245,17 @@ export async function startColumnAgent(board: Board, itemId: string): Promise<vo
         : null;
   if (guard) {
     await escalate(board, row, `Stopped the agents on this card because ${guard}.`);
-    return;
+    return { tasks: [], skipped: `the board's loop guard stopped it: ${guard}${board.needsHuman ? `, so the card went to "${board.needsHuman}"` : ""}` };
   }
   saveBoardItem({ ...row, entries: { ...row.entries, [column.name]: entries } });
 
   // "all": every agent works the card at once, then they vote where it goes. Otherwise one agent.
-  const chosen = column.mode === "all" ? candidates : [leastBusy(candidates)];
-  const round = column.mode === "all" ? `${board.name}:${itemId}:${column.name}:${randomUUID()}` : null;
+  const chosen = column.mode === "all" && !extra?.agent ? candidates : [leastBusy(candidates)];
+  const round = column.mode === "all" && !extra?.agent ? `${board.name}:${itemId}:${column.name}:${randomUUID()}` : null;
   const installationId = await findInstallation(row.owner, row.repo);
+  const tasks: Task[] = [];
   for (const profile of chosen) {
+    const base = `The card is in the "${column.name}" column of the ${board.name} board. Do this column's work (see your role below), then move the card on.`;
     const task = createTask({
       agent: profile.name,
       installationId,
@@ -246,19 +265,22 @@ export async function startColumnAgent(board: Board, itemId: string): Promise<vo
       threadNumber: row.number,
       threadTitle: row.title,
       threadUrl: "",
-      triggerKind: "board",
-      requestedBy: "project board",
-      requestText: `The card is in the "${column.name}" column of the ${board.name} board. Do this column's work (see your role below), then move the card on.`,
-      requestUrl: "",
+      triggerKind: extra ? "agent" : "board",
+      requestedBy: extra?.requestedBy ?? "project board",
+      requestText: extra ? `${base}\n\n${extra.request}` : base,
+      requestUrl: extra?.requestUrl ?? "",
       board: board.name,
       boardColumn: column.name,
       boardItemId: itemId,
       boardRound: round,
+      startedByTask: extra?.startedByTask ?? null,
     });
     bus.publish({ type: "task", task });
-    log.info("Board started an agent", { board: board.name, column: column.name, agent: profile.name, task: task.id, mode: column.mode });
+    tasks.push(task);
+    log.info("Board started an agent", { board: board.name, column: column.name, agent: profile.name, task: task.id, mode: column.mode, ...(extra ? { startedByTask: extra.startedByTask } : {}) });
   }
   scheduler.kick();
+  return { tasks, skipped: null };
 }
 
 /**

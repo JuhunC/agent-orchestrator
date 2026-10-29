@@ -6,6 +6,7 @@ import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { addEvent, addHandoff, addVote, getBoardItem, lastSessionId, listHandoffs, tasksInRound, threadHistory, updateTask } from "../db.ts";
 import { installationClient, type GitHubClient } from "../github/app.ts";
+import { refText } from "../github/relations.ts";
 import { editComment, fetchThread, postComment, type ThreadContext } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
@@ -13,6 +14,7 @@ import { commitAndPush, openOrUpdatePullRequest, PullRequestLimitError, type Boa
 import { sessions } from "../runtime/manager.ts";
 import { cardMoveProblems, cardWorkType, moveProblems } from "../runtime/evidence.ts";
 import { agentEnv, taskEnv } from "../runtime/options.ts";
+import { RELATION_NAME, runRelatedStart } from "../runtime/related-agents.ts";
 import { addUsage } from "../runtime/usage.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
 import type { EventKind, Task, ThreadRef } from "../types.ts";
@@ -301,6 +303,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
             : "";
     const issueState = context.issueState ?? null;
     if (issueState) subLines.push(issueState.state === "closed" ? `**Closed the issue** as ${issueState.reason.replace("_", " ")}.` : "**Reopened the issue.**");
+    const relatedStarts = context.relatedStarts ?? [];
+    for (const start of relatedStarts) subLines.push(`**Asked the agent of ${refText(start.target, task.owner, task.repo)} to pick it up** (${RELATION_NAME[start.relation]}).`);
     details = [own, ...subLines, details].filter(Boolean).join("\n\n");
     if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
     await finish("succeeded", outcome.result, "", details, commits);
@@ -320,6 +324,12 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         .update({ owner: task.owner, repo: task.repo, issue_number: task.threadNumber, state: issueState.state, state_reason: issueState.reason })
         .then(() => emit(task.id, "system", issueState.state === "closed" ? `Closed the issue as ${issueState.reason.replace("_", " ")}` : "Reopened the issue"))
         .catch((error) => emit(task.id, "error", `Couldn't ${issueState.state === "closed" ? "close" : "reopen"} the issue: ${errorMessage(error)}`));
+    }
+    // After everything else, so the related issue's agent sees this task's finished work.
+    for (const start of relatedStarts) {
+      const line = await runRelatedStart(start, { task, profile, title: thread.title, url: thread.url }).catch((error) => `Couldn't start an agent on ${refText(start.target, task.owner, task.repo)}: ${errorMessage(error)}`);
+      emit(task.id, "system", line);
+      log.info("Related-issue start", { task: task.id, target: `${start.target.owner}/${start.target.repo}#${start.target.number}`, result: line });
     }
   } catch (error) {
     const message = errorMessage(error);

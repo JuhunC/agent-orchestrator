@@ -145,6 +145,30 @@ test("board fields (start/end dates, estimate) are validated", () => {
   assert.deepEqual(parseBoardRules({ columns, fields: { start: 3 } }).errors, ['fields.start: give the name of a field in the project, e.g. "Start date"']);
 });
 
+test("board related_agents settings are validated, and related issues are found by relation", async () => {
+  const columns = { Backlog: {}, Ready: {}, Done: {} };
+  assert.deepEqual(parseBoardRules({ columns }).relatedAgents, { columns: null });
+  assert.deepEqual(parseBoardRules({ columns, related_agents: { columns: "all" } }).relatedAgents, { columns: null });
+  assert.deepEqual(parseBoardRules({ columns, related_agents: { columns: ["Ready", "Ready"] } }).relatedAgents, { columns: ["Ready"] });
+  assert.deepEqual(parseBoardRules({ columns, related_agents: { columns: [] } }).relatedAgents, { columns: [] });
+  assert.deepEqual(parseBoardRules({ columns, related_agents: { columns: ["Later"], when: "always" } }).errors, [
+    'related_agents: unknown setting "when" (use columns)',
+    'related_agents.columns: "Later" isn\'t listed under columns',
+  ]);
+  assert.deepEqual(parseBoardRules({ columns, related_agents: ["Ready"] }).errors, ['"related_agents" must be a map with "columns"']);
+
+  const { relationOf } = await import("../src/runtime/related-agents.ts");
+  const ref = (number: number, repo = "widgets") => toIssueRef({ id: number, number, title: `#${number}`, state: "open", html_url: "", repository_url: `https://api.github.com/repos/acme/${repo}` });
+  const relations = { parent: ref(1), subIssues: [ref(2), ref(3, "other")], blockedBy: [ref(4)], blocking: [ref(5)] };
+  assert.equal(relationOf(relations, "acme", "widgets", 1)?.relation, "parent");
+  assert.equal(relationOf(relations, "acme", "widgets", 2)?.relation, "sub_issue");
+  assert.equal(relationOf(relations, "acme", "other", 3)?.relation, "sub_issue");
+  assert.equal(relationOf(relations, "acme", "widgets", 3), null, "same number, other repository");
+  assert.equal(relationOf(relations, "acme", "widgets", 4)?.relation, "blocked_by");
+  assert.equal(relationOf(relations, "ACME", "Widgets", 5)?.relation, "blocks");
+  assert.equal(relationOf(NO_RELATIONS, "acme", "widgets", 1), null);
+});
+
 test("a sub-issue's branch is its parent's, unless the agent turns it off or the parent doesn't qualify", () => {
   const issue = (number: number, extra: Record<string, unknown> = {}) =>
     toIssueRef({ id: 1000 + number, number, title: `#${number}`, state: "open", html_url: `https://github.com/acme/widgets/issues/${number}`, repository_url: "https://api.github.com/repos/acme/widgets", ...extra });

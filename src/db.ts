@@ -113,6 +113,7 @@ addColumn("tasks", "board_column", "TEXT");
 addColumn("tasks", "board_item_id", "TEXT");
 addColumn("tasks", "board_round", "TEXT");
 addColumn("tasks", "usage", "TEXT");
+addColumn("tasks", "started_by_task", "INTEGER");
 db.exec(`
 CREATE TABLE IF NOT EXISTS board_items (
   board TEXT NOT NULL,
@@ -212,6 +213,7 @@ function toTask(row: Row): Task {
     boardColumn: (row.board_column as string | null) ?? null,
     boardItemId: (row.board_item_id as string | null) ?? null,
     boardRound: (row.board_round as string | null) ?? null,
+    startedByTask: row.started_by_task === null || row.started_by_task === undefined ? null : Number(row.started_by_task),
   };
 }
 
@@ -233,14 +235,15 @@ export interface NewTask {
   boardColumn?: string | null;
   boardItemId?: string | null;
   boardRound?: string | null;
+  startedByTask?: number | null;
 }
 
 export function createTask(input: NewTask): Task {
   const result = db
     .prepare(
       `INSERT INTO tasks (agent, installation_id, owner, repo, thread_kind, thread_number, thread_title, thread_url,
-         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?)`,
+         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.agent,
@@ -261,6 +264,7 @@ export function createTask(input: NewTask): Task {
       input.boardColumn ?? null,
       input.boardItemId ?? null,
       input.boardRound ?? null,
+      input.startedByTask ?? null,
     );
   return getTask(Number(result.lastInsertRowid))!;
 }
@@ -299,6 +303,7 @@ const TASK_COLUMNS: Record<string, string> = {
   boardColumn: "board_column",
   boardItemId: "board_item_id",
   boardRound: "board_round",
+  startedByTask: "started_by_task",
 };
 
 export function updateTask(id: number, patch: Partial<Task>): Task {

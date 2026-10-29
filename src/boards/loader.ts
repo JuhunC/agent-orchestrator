@@ -4,7 +4,7 @@ import { parse } from "yaml";
 import { config } from "../config.ts";
 import { expandAgents, loadProfiles, parseEffort } from "../profiles/loader.ts";
 import type { Effort, ProfileSet } from "../profiles/types.ts";
-import { forbids, NO_RULES, parseBoardRules, type CardFieldSettings, type ColumnRules, type SubIssueSettings, type WorkType } from "./rules.ts";
+import { forbids, NO_RULES, parseBoardRules, type CardFieldSettings, type ColumnRules, type RelatedAgentSettings, type SubIssueSettings, type WorkType } from "./rules.ts";
 
 /** What happens when a card lands in one column of a project board. */
 export type ColumnMode = "pool" | "all" | "label";
@@ -54,6 +54,8 @@ export interface Board {
   subIssues: SubIssueSettings;
   /** Project fields tracked per card: start/end dates and estimate. */
   fields: CardFieldSettings;
+  /** Columns whose agents an agent on a related issue may start. */
+  relatedAgents: RelatedAgentSettings;
   errors: string[];
 }
 
@@ -142,6 +144,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
     workTypes: rules.workTypes,
     subIssues: rules.subIssues,
     fields: rules.fields,
+    relatedAgents: rules.relatedAgents,
     errors,
   };
 }

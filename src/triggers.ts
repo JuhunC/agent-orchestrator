@@ -1,5 +1,5 @@
 import { bus } from "./bus.ts";
-import { config } from "./config.ts";
+import { config, repoAllowed } from "./config.ts";
 import { createTask, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
 import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
 import type { Profile } from "./profiles/types.ts";
@@ -160,11 +160,7 @@ export function intentsFor(event: string, payload: Payload): Intent[] {
   return intents;
 }
 
-export function repoAllowed(fullName: string): boolean {
-  if (!config.allowedRepos.length) return true;
-  const [owner] = fullName.toLowerCase().split("/");
-  return config.allowedRepos.some((pattern) => pattern === fullName.toLowerCase() || pattern === `${owner}/*`);
-}
+export { repoAllowed };
 
 function record(deliveryId: string, event: string, payload: Payload, decision: Delivery["decision"], detail: string): void {
   const delivery = recordDelivery({

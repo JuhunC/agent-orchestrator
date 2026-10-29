@@ -3,7 +3,7 @@ import type { ThreadContext } from "../github/threads.ts";
 import type { GithubPermissions } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
 
-type Agent = { name: string; handle: string; github?: Pick<GithubPermissions, "subIssues" | "relations" | "mergeIntoParent"> };
+type Agent = { name: string; handle: string; github?: Pick<GithubPermissions, "subIssues" | "relations" | "mergeIntoParent"> & Partial<Pick<GithubPermissions, "startRelated">> };
 
 export interface WorkspaceInfo {
   branch: string;
@@ -83,6 +83,16 @@ function relatedSection(task: Task, thread: ThreadContext, workspace: WorkspaceI
   }
   if (thread.relations.subIssues.length && github && github.subIssues !== "none") {
     lines.push("", `Sub-issues merge their work into this issue's branch \`${workspace.branch}\`. Check it all arrived with list_sub_issues: each sub-issue's branch head must be an ancestor of this branch.`);
+  }
+  const startable = (github?.startRelated ?? []).filter((relation) =>
+    relation === "parent" ? Boolean(parent) : relation === "sub_issue" ? thread.relations.subIssues.length > 0 : relation === "blocked_by" ? thread.relations.blockedBy.length > 0 : thread.relations.blocking.length > 0,
+  );
+  if (startable.length) {
+    const which = startable.map((relation) => ({ parent: "the parent", sub_issue: "a sub-issue", blocked_by: "an issue blocking this one", blocks: "an issue this one blocks" })[relation]).join(", ");
+    lines.push(
+      "",
+      `When ${which} needs its agent to act on what you did (for example: your work is merged into the parent's branch, or a blocker is done), start that agent with start_related_agent and say what you did and what it should do. It starts when you finish. Don't start agents just to report progress.`,
+    );
   }
   return ["## Related issues", ...lines].join("\n");
 }

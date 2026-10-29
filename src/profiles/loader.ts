@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { parse } from "yaml";
 import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
+import { RELATIONS, type Relation } from "../github/relations.ts";
 import { normaliseMcpServers } from "./mcp.ts";
 import { EFFORTS, type Effort, type Group, type Library, type Profile, type ProfileSet, type Role, type SkillInfo } from "./types.ts";
 
@@ -117,7 +118,21 @@ export const GITHUB_DEFAULTS = {
   relations: false,
   merge_into_parent: false,
   parent_branch: true,
+  start_related: false,
 } as const;
+
+/** false | true (every relation) | a list of relations (start_related). */
+function parseRelations(value: unknown, field: string, errors: string[]): Relation[] {
+  if (value === undefined || value === null || value === false) return [];
+  if (value === true) return [...RELATIONS];
+  const relations: Relation[] = [];
+  for (const item of Array.isArray(value) ? value.map(String) : [String(value)]) {
+    if ((RELATIONS as readonly string[]).includes(item)) {
+      if (!relations.includes(item as Relation)) relations.push(item as Relation);
+    } else errors.push(`github.${field}: "${item}" isn't one of ${RELATIONS.join(", ")} (or use true or false)`);
+  }
+  return relations;
+}
 
 /** true | false | read | write | none (wiki, sub_issues) */
 function parseAccess(value: unknown, field: string, errors: string[]): "none" | "read" | "write" {
@@ -244,6 +259,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
       relations: github.relations === true,
       mergeIntoParent: github.merge_into_parent === true,
       parentBranch: github.parent_branch !== false,
+      startRelated: parseRelations(github.start_related, "start_related", errors),
     },
     maxTurns: number("max_turns"),
     maxBudgetUsd: number("max_budget_usd"),
