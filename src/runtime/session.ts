@@ -1,7 +1,8 @@
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { detectUsageLimit, type DetectedLimit } from "../runner/limits.ts";
-import type { EventKind } from "../types.ts";
+import type { EventKind, TaskUsage } from "../types.ts";
 import { describeTool, makeRelative, short } from "./describe.ts";
+import { saveTotals, savedTotals, toTotals, turnUsage, type SessionTotals } from "./usage.ts";
 
 export type EventSink = (kind: EventKind, message: string) => void;
 
@@ -9,7 +10,9 @@ export interface TurnOutcome {
   /** The agent's final reply. */
   result: string;
   sessionId: string | null;
+  /** What this turn cost and the tokens it used (not the session's running totals). */
   costUsd: number | null;
+  usage: TaskUsage | null;
   isError: boolean;
   /** Why it failed, for the person reading the GitHub comment. */
   error: string | null;
@@ -86,6 +89,8 @@ export class AgentSession {
   private current: CurrentTurn | null = null;
   private rejectedUntil: number | null = null;
   private done = false;
+  /** The session's running totals after the previous turn (from an earlier run, when resumed). */
+  private totals: SessionTotals | null;
   private readonly rel: (path: unknown) => string;
   sessionId: string | null;
   readonly resumed: boolean;
@@ -95,6 +100,7 @@ export class AgentSession {
   constructor(options: Options) {
     this.sessionId = options.resume ?? null;
     this.resumed = Boolean(options.resume);
+    this.totals = options.resume ? savedTotals(options.resume) : null;
     this.rel = makeRelative(options.cwd ?? "");
     this.q = query({
       prompt: this.queue,
@@ -179,7 +185,11 @@ export class AgentSession {
             : message.subtype === "error_max_budget_usd"
               ? "Stopped at the spending limit (max_budget_usd)."
               : errors.join("\n") || "The agent stopped with an error.";
-        turn.finish({ result: text, costUsd: message.total_cost_usd, isError: !success || message.is_error, error });
+        const totals = toTotals(message.total_cost_usd, message.modelUsage);
+        const used = turnUsage(this.totals, totals);
+        this.totals = totals;
+        if (this.sessionId) saveTotals(this.sessionId, totals);
+        turn.finish({ result: text, costUsd: used.costUsd, usage: used.usage, isError: !success || message.is_error, error });
         return;
       }
       default:
@@ -244,6 +254,7 @@ export class AgentSession {
       result: partial.result ?? "",
       sessionId: this.sessionId,
       costUsd: partial.costUsd ?? null,
+      usage: partial.usage ?? null,
       isError,
       error: partial.error ?? null,
       cancelled: partial.cancelled ?? false,

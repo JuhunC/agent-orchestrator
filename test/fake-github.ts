@@ -36,6 +36,9 @@ export class FakeGitHub {
   issues = new Map<number, FakeIssue>();
   permissions = new Map<string, string>();
   labels: string[] = [];
+  /** How the OAuth sign-in endpoints behave, and who signs in. */
+  oauth: "ok" | "drop" | "bad_code" = "ok";
+  oauthUser = "alice";
   /** The App's Homepage and webhook URLs on GitHub (PUBLIC_URL when it was created; the tests' default). */
   appHomepage = "http://localhost:3000";
   appWebhookUrl = "http://localhost:3000/api/github/webhooks";
@@ -85,6 +88,11 @@ export class FakeGitHub {
 
   constructor() {
     this.server = createServer((req, res) => {
+      // Like a server whose network can't reach GitHub: the connection just ends.
+      if (this.oauth === "drop" && (req.url ?? "").startsWith("/login/oauth/access_token")) {
+        req.socket.destroy();
+        return;
+      }
       void this.handle(req).then(
         ({ status, body }) => {
           res.writeHead(status, { "content-type": "application/json" });
@@ -171,6 +179,11 @@ export class FakeGitHub {
     if (method === "POST" && (match = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/))) {
       return { status: 201, body: { token: "ghs_faketoken", expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: {}, repository_selection: "all" } };
     }
+    if (method === "POST" && path === "/login/oauth/access_token") {
+      if (this.oauth === "bad_code") return { status: 200, body: { error: "bad_verification_code", error_description: "The code passed is incorrect or expired." } };
+      return { status: 200, body: { access_token: `gho_${body.code}`, token_type: "bearer" } };
+    }
+    if (method === "GET" && path === "/user") return { status: 200, body: { login: this.oauthUser, id: 1 } };
     if (method === "GET" && path === "/app") {
       return { status: 200, body: { slug: "test-orchestrator", html_url: `${this.url}/apps/test-orchestrator`, external_url: this.appHomepage, owner: { login: "acme", type: "Organization" } } };
     }

@@ -3,6 +3,7 @@ import { api, useApi, type AgentsResponse, type GithubPermissions, type ModelInf
 import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
+import { AgentUsage } from "../components/Usage.tsx";
 import { Empty, Panel, Pill } from "../components/ui.tsx";
 import { href, navigate } from "../router.ts";
 import { Chips } from "./Agents.tsx";
@@ -162,6 +163,8 @@ export function AgentDetail({ name }: { name: string }) {
           </div>
         </Panel>
       </div>
+
+      <AgentUsage agent={agent.name} />
 
       <Panel title="Model and effort">
         <ModelPicker agent={agent.name} model={agent.model} effort={agent.effort} defaultModel={modelInfo?.model ?? null} onSaved={() => void reload()} />

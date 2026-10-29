@@ -29,6 +29,8 @@
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 1px 3px rgba(16, 24, 40, 0.06);
   --radius: 10px;
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  /* Chart series colour (validated against the light and dark surfaces). */
+  --viz-1: #2a78d6;
   color-scheme: light;
 }
 
@@ -61,6 +63,7 @@
     --accent-border: rgba(140, 134, 255, 0.25);
     --failed-border: rgba(255, 138, 138, 0.3);
     --shadow: none;
+    --viz-1: #3987e5;
     color-scheme: dark;
   }
 }
@@ -1086,4 +1089,92 @@ blockquote {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+
+/* ---------- token usage ---------- */
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+}
+.segmented button.active {
+  background: var(--accent-soft);
+  border-color: var(--accent-border);
+  color: var(--accent);
+}
+.usage-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.usage-readout {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.usage-readout b {
+  color: var(--text);
+}
+.usage-plot {
+  width: 100%;
+}
+.usage-plot svg {
+  display: block;
+}
+.usage-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.usage-axis {
+  fill: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-bar {
+  fill: var(--viz-1);
+}
+.usage-bar.hover {
+  opacity: 0.75;
+}
+.usage-table summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.usage-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.usage-agent {
+  display: grid;
+  grid-template-columns: minmax(80px, 160px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+.usage-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-track {
+  height: 12px;
+}
+.usage-fill {
+  height: 100%;
+  min-width: 2px;
+  background: var(--viz-1);
+  border-radius: 0 4px 4px 0;
+}
+.usage-value {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .usage-agent {
+    grid-template-columns: minmax(70px, 110px) minmax(0, 1fr);
+  }
+  .usage-value {
+    grid-column: 1 / -1;
+  }
 }

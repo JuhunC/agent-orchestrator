@@ -201,6 +201,27 @@ export interface BoardsResponse {
   roles: string[];
 }
 
+/** Spend and tokens over a set of tasks (Claude Code's estimates). */
+export interface UsageTotals {
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  tasks: number;
+}
+
+/** /api/usage: the last `days` days, for every agent or one. */
+export interface UsageReport {
+  days: number;
+  since: string;
+  totals: UsageTotals;
+  agents: (UsageTotals & { agent: string })[];
+  daily: { day: string; costUsd: number; tokens: number; byAgent: Record<string, number> }[];
+  models: (Omit<UsageTotals, "tasks"> & { model: string })[];
+  topTasks: { id: number; agent: string; owner: string; repo: string; threadKind: ThreadKind; threadNumber: number; threadTitle: string; status: TaskStatus; at: string; costUsd: number; tokens: number }[];
+}
+
 /** One option of a profile file, from /api/profiles/reference. */
 export interface ConfigOption {
   key: string;

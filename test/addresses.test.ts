@@ -6,7 +6,7 @@ import { startHarness } from "./harness.ts";
 // while PUBLIC_URL was still the localhost default.
 const h = await startHarness(
   { "agents/coder/agent.md": "---\nhandle: aorch-coder\ndescription: coder\n---\nYou are coder.\n" },
-  { PUBLIC_URL: "http://203.0.113.7:3000", AUTH_DISABLED: "false", ADMIN_TOKEN: "test-admin-token", GITHUB_CLIENT_ID: "Iv1.test", GITHUB_CLIENT_SECRET: "secret" },
+  { PUBLIC_URL: "http://203.0.113.7:3000", AUTH_DISABLED: "false", ADMIN_TOKEN: "test-admin-token", ADMIN_USERS: "alice", GITHUB_CLIENT_ID: "Iv1.test", GITHUB_CLIENT_SECRET: "secret" },
 );
 after(() => h.stop());
 const { app, fake } = h;
@@ -38,4 +38,35 @@ test("a GitHub App created for another PUBLIC_URL is caught before sign-in fails
   const after = (await app.inject({ method: "POST", url: "/api/setup/webhook-url", headers: admin })).json(); // re-reads the App's settings
   assert.equal(after.callbackProblem, null);
   assert.equal((await app.inject({ method: "GET", url: "/api/auth/me" })).json().signInProblem, null);
+});
+
+/** Goes through GitHub sign-in as the browser would: start, then come back with GitHub's code. */
+async function signIn(query = "code=abc", withCookie = true) {
+  const start = await app.inject({ method: "GET", url: "/api/auth/github" });
+  const state = new URL(String(start.headers.location)).searchParams.get("state")!;
+  const cookie = [start.headers["set-cookie"]].flat().find((value) => value?.startsWith("ao_oauth_state="))!.split(";")[0]!;
+  const back = await app.inject({ method: "GET", url: `/api/auth/github/callback?${query}&state=${state}`, headers: withCookie ? { cookie } : {} });
+  return { location: decodeURIComponent(String(back.headers.location)), cookies: [back.headers["set-cookie"]].flat().join("; ") };
+}
+
+test("GitHub sign-in says why it failed instead of hanging", async () => {
+  const ok = await signIn();
+  assert.equal(ok.location, "/#/");
+  assert.match(ok.cookies, /ao_session=/);
+
+  fake.oauthUser = "mallory";
+  assert.match((await signIn()).location, /@mallory is not an admin\. Add them to ADMIN_USERS/);
+  fake.oauthUser = "alice";
+
+  fake.oauth = "bad_code";
+  assert.match((await signIn()).location, /GitHub didn't accept the sign-in: The code passed is incorrect or expired\./);
+
+  // The server can't reach GitHub: a clear reason on the sign-in page, not a bare "fetch failed".
+  fake.oauth = "drop";
+  const dropped = (await signIn()).location;
+  assert.match(dropped, /The orchestrator couldn't reach 127\.0\.0\.1:\d+ to finish signing you in \(.+\)\. Check that this server can make HTTPS requests/);
+  fake.oauth = "ok";
+
+  assert.match((await signIn("code=abc", false)).location, /Sign-in expired, or it was started at another address than PUBLIC_URL \(http:\/\/203\.0\.113\.7:3000\)/);
+  assert.match((await signIn("error=access_denied&error_description=The+user+has+denied+your+application+access.")).location, /GitHub said: The user has denied your application access\./);
 });

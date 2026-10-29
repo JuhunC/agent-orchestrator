@@ -3,6 +3,7 @@ import { ago, api, duration, useApi, useNow, useStream, type Agent, type Overvie
 import { RunAgentDialog } from "../components/RunAgentDialog.tsx";
 import { Empty, Panel, Pill, StatusPill, StepText, Switch, ThreadCell, who } from "../components/ui.tsx";
 import { href, navigate } from "../router.ts";
+import { UsageSummary } from "../components/Usage.tsx";
 
 function AgentCard({ agent, running, onRun, onToggle }: { agent: Agent; running: number; onRun: () => void; onToggle: (enabled: boolean) => void }) {
   const stats = agent.stats;
@@ -186,6 +187,8 @@ export function Dashboard() {
           </div>
         )}
       </Panel>
+
+      <UsageSummary />
 
       <div className="grid-2">
         <Panel title="Working now" hint={data.running.length ? "live" : undefined} tight>

@@ -44,6 +44,7 @@ import { boardStatus, forgetProjectCache, syncBoard } from "../boards/engine.ts"
 import { loadBoards } from "../boards/loader.ts";
 import { clearLimit, getLimit } from "../runner/limit-store.ts";
 import { startManualTask } from "../triggers.ts";
+import { usageReport } from "../runner/usage-report.ts";
 import type { ThreadKind, ThreadRef } from "../types.ts";
 
 const KINDS: ThreadKind[] = ["issue", "pull", "discussion"];
@@ -338,6 +339,11 @@ export function registerApi(app: FastifyInstance): void {
       return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
     }
   });
+
+  // Spend and tokens per agent, day and model (Claude Code's estimates).
+  app.get<{ Querystring: { days?: string; agent?: string } }>("/api/usage", async (request) =>
+    usageReport(Number(request.query.days ?? 30) || 30, request.query.agent ? String(request.query.agent) : undefined),
+  );
 
   app.get("/api/profiles/files", async () => listProfileFiles());
 

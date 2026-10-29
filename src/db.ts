@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { config } from "./config.ts";
-import type { Delivery, EventKind, Task, TaskEvent, TaskStatus, ThreadKind, ThreadRef } from "./types.ts";
+import type { Delivery, EventKind, Task, TaskEvent, TaskStatus, TaskUsage, ThreadKind, ThreadRef } from "./types.ts";
 
 mkdirSync(config.dataDir, { recursive: true });
 
@@ -112,6 +112,7 @@ addColumn("tasks", "board", "TEXT");
 addColumn("tasks", "board_column", "TEXT");
 addColumn("tasks", "board_item_id", "TEXT");
 addColumn("tasks", "board_round", "TEXT");
+addColumn("tasks", "usage", "TEXT");
 db.exec(`
 CREATE TABLE IF NOT EXISTS board_items (
   board TEXT NOT NULL,
@@ -199,6 +200,7 @@ function toTask(row: Row): Task {
     exitCode: row.exit_code === null ? null : Number(row.exit_code),
     sessionId: (row.session_id as string | null) ?? null,
     costUsd: row.cost_usd === null ? null : Number(row.cost_usd),
+    usage: json<TaskUsage | null>(row.usage, null),
     commits: row.commits === null ? null : Number(row.commits),
     retryOf: row.retry_of === null ? null : Number(row.retry_of),
     forgotten: Boolean(row.forgotten),
@@ -283,6 +285,7 @@ const TASK_COLUMNS: Record<string, string> = {
   exitCode: "exit_code",
   sessionId: "session_id",
   costUsd: "cost_usd",
+  usage: "usage",
   commits: "commits",
   threadTitle: "thread_title",
   threadUrl: "thread_url",
@@ -305,7 +308,7 @@ export function updateTask(id: number, patch: Partial<Task>): Task {
     const column = TASK_COLUMNS[key];
     if (!column) continue;
     sets.push(`${column} = ?`);
-    values.push(typeof value === "boolean" ? (value ? 1 : 0) : ((value ?? null) as SQLInputValue));
+    values.push(typeof value === "boolean" ? (value ? 1 : 0) : value && typeof value === "object" ? JSON.stringify(value) : ((value ?? null) as SQLInputValue));
   }
   if (sets.length) db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).run(...values, id);
   return getTask(id)!;
@@ -671,6 +674,46 @@ export function listHandoffs(board: string, itemId: string): Handoff[] {
     toColumn: String(row.to_column),
     note: String(row.note),
     ts: String(row.ts),
+  }));
+}
+
+/** One task's spend, for usage reports. */
+export interface UsageRow {
+  id: number;
+  agent: string;
+  owner: string;
+  repo: string;
+  threadKind: ThreadKind;
+  threadNumber: number;
+  threadTitle: string;
+  status: TaskStatus;
+  /** When it ran (finished, or started if it hasn't finished). */
+  at: string;
+  costUsd: number;
+  usage: TaskUsage | null;
+}
+
+/** Tasks that ran since `since` (ISO time), for one agent or all. */
+export function usageRows(since: string, agent?: string): UsageRow[] {
+  const rows = db
+    .prepare(
+      `SELECT id, agent, owner, repo, thread_kind, thread_number, thread_title, status, COALESCE(finished_at, started_at, created_at) AS at, cost_usd, usage
+       FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? ${agent ? "AND agent = ?" : ""} AND (cost_usd IS NOT NULL OR usage IS NOT NULL)
+       ORDER BY at`,
+    )
+    .all(...(agent ? [since, agent] : [since])) as Row[];
+  return rows.map((row) => ({
+    id: Number(row.id),
+    agent: String(row.agent),
+    owner: String(row.owner),
+    repo: String(row.repo),
+    threadKind: String(row.thread_kind) as ThreadKind,
+    threadNumber: Number(row.thread_number),
+    threadTitle: String(row.thread_title),
+    status: String(row.status) as TaskStatus,
+    at: String(row.at),
+    costUsd: row.cost_usd === null ? 0 : Number(row.cost_usd),
+    usage: json<TaskUsage | null>(row.usage, null),
   }));
 }
 

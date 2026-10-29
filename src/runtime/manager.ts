@@ -273,6 +273,7 @@ class Sessions {
         result: "",
         sessionId: entry.session.sessionId,
         costUsd: null,
+        usage: null,
         isError: true,
         error: errorMessage(error),
         cancelled: false,

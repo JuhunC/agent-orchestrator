@@ -33,7 +33,9 @@ export interface Task {
   error: string | null;
   exitCode: number | null;
   sessionId: string | null;
+  /** What this task cost (Claude Code's estimate), and its tokens. */
   costUsd: number | null;
+  usage: TaskUsage | null;
   commits: number | null;
   retryOf: number | null;
   forgotten: boolean;
@@ -50,6 +52,20 @@ export interface Task {
   boardItemId: string | null;
   /** Set when several agents work the same card at once ("all" columns). */
   boardRound: string | null;
+}
+
+/** Tokens one model used. */
+export interface ModelTokens {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costUsd: number;
+}
+
+/** A task's token usage: totals, and per model (main loop, subagents and compaction together). */
+export interface TaskUsage extends Omit<ModelTokens, "costUsd"> {
+  models: Record<string, ModelTokens>;
 }
 
 export interface TaskEvent {

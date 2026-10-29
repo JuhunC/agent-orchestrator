@@ -53,6 +53,30 @@ function startSession(reply: FastifyReply, login: string): void {
   });
 }
 
+const GITHUB_TIMEOUT_MS = 15_000;
+
+/**
+ * A JSON request to GitHub from the server, with a time limit and an error that says what failed
+ * (without one, a server that can't reach GitHub leaves the browser waiting for minutes).
+ */
+async function githubJson<T>(url: string, init: RequestInit, what: string): Promise<T> {
+  const host = new URL(url).host;
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, signal: AbortSignal.timeout(GITHUB_TIMEOUT_MS) });
+  } catch (error) {
+    const cause = (error as { cause?: { code?: string; message?: string } }).cause;
+    const reason = (error as Error).name === "TimeoutError" ? `no answer within ${GITHUB_TIMEOUT_MS / 1000} seconds` : (cause?.code ?? cause?.message ?? errorMessage(error));
+    throw new Error(`The orchestrator couldn't reach ${host} to ${what} (${reason}). Check that this server can make HTTPS requests to ${host}: its firewall, DNS, or a proxy.`);
+  }
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new Error(`${host} answered ${response.status} with something other than JSON while trying to ${what}: ${text.slice(0, 120)}`);
+  }
+}
+
 /** Who may sign in with GitHub: ADMIN_USERS, plus the account that created the app via setup. */
 function allowedLogins(): string[] {
   const credentials = getCredentials();
@@ -111,32 +135,49 @@ export function registerAuth(app: FastifyInstance): void {
     return reply.redirect(url.toString());
   });
 
-  app.get<{ Querystring: { code?: string; state?: string } }>("/api/auth/github/callback", async (request, reply) => {
-    const fail = (reason: string) => reply.redirect(`/#/login?error=${encodeURIComponent(reason)}`);
+  app.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>("/api/auth/github/callback", async (request, reply) => {
+    const fail = (reason: string) => {
+      log.warn("GitHub sign-in failed", { reason });
+      return reply.redirect(`/#/login?error=${encodeURIComponent(reason)}`);
+    };
     const raw = request.cookies[STATE_COOKIE];
     const expected = raw ? request.unsignCookie(raw) : null;
     reply.clearCookie(STATE_COOKIE, { path: "/" });
-    if (!request.query.code || !expected?.valid || expected.value !== request.query.state) return fail("Sign-in expired. Try again.");
+    // GitHub sends people back with ?error= when they cancel or the App is misconfigured.
+    if (request.query.error) return fail(`GitHub said: ${request.query.error_description ?? request.query.error}`);
+    if (!request.query.code || !expected?.valid || expected.value !== request.query.state) {
+      return fail(`Sign-in expired, or it was started at another address than PUBLIC_URL (${config.publicUrl}). Open ${config.publicUrl} and sign in from there.`);
+    }
     const credentials = getCredentials();
     if (!credentials?.clientId || !credentials.clientSecret) return fail("GitHub sign-in is not configured");
     try {
-      const response = await fetch(`${config.github.url}/login/oauth/access_token`, {
-        method: "POST",
-        headers: { accept: "application/json", "content-type": "application/json" },
-        body: JSON.stringify({ client_id: credentials.clientId, client_secret: credentials.clientSecret, code: request.query.code }),
-      });
-      const tokenData = (await response.json()) as { access_token?: string; error_description?: string };
-      if (!tokenData.access_token) return fail(tokenData.error_description ?? "GitHub did not return a token");
-      const userResponse = await fetch(`${config.github.apiUrl}/user`, {
-        headers: { authorization: `Bearer ${tokenData.access_token}`, accept: "application/vnd.github+json", "user-agent": "agent-orchestrator" },
-      });
-      const user = (await userResponse.json()) as { login?: string };
+      const tokenData = await githubJson<{ access_token?: string; error?: string; error_description?: string }>(
+        `${config.github.url}/login/oauth/access_token`,
+        {
+          method: "POST",
+          headers: { accept: "application/json", "content-type": "application/json", "user-agent": "agent-orchestrator" },
+          body: JSON.stringify({ client_id: credentials.clientId, client_secret: credentials.clientSecret, code: request.query.code }),
+        },
+        "finish signing you in",
+      );
+      if (!tokenData.access_token) {
+        const why = tokenData.error_description ?? tokenData.error ?? "it didn't return a token";
+        const hint = tokenData.error === "incorrect_client_credentials" ? " The App's client secret here doesn't match GitHub's (GITHUB_CLIENT_SECRET, or recreate the App)." : "";
+        return fail(`GitHub didn't accept the sign-in: ${why}.${hint}`);
+      }
+      const user = await githubJson<{ login?: string; message?: string }>(
+        `${config.github.apiUrl}/user`,
+        { headers: { authorization: `Bearer ${tokenData.access_token}`, accept: "application/vnd.github+json", "user-agent": "agent-orchestrator" } },
+        "look up who you are",
+      );
       const login = user.login ?? "";
+      if (!login) return fail(`GitHub didn't say who you are${user.message ? `: ${user.message}` : ""}.`);
       if (!allowedLogins().includes(login.toLowerCase())) {
         log.warn("Rejected admin sign-in", { login });
         return fail(`@${login} is not an admin. Add them to ADMIN_USERS.`);
       }
       startSession(reply, login);
+      log.info("Signed in with GitHub", { login });
       return reply.redirect("/#/");
     } catch (error) {
       return fail(errorMessage(error));

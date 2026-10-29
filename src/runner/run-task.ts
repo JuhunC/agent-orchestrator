@@ -13,6 +13,7 @@ import { commitAndPush, openOrUpdatePullRequest, PullRequestLimitError, type Boa
 import { sessions } from "../runtime/manager.ts";
 import { cardMoveProblems, cardWorkType, moveProblems } from "../runtime/evidence.ts";
 import { agentEnv, taskEnv } from "../runtime/options.ts";
+import { addUsage } from "../runtime/usage.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
 import type { EventKind, Task, ThreadRef } from "../types.ts";
 import { git } from "./git.ts";
@@ -178,6 +179,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     };
     let outcome = await sessions.run(runOptions);
     let costUsd = outcome.costUsd ?? 0;
+    let usage = outcome.usage;
     // The model service failed to answer even after Claude Code's own retries: wait and continue
     // the same session (the working copy is untouched), up to MODEL_ERROR_RETRIES times.
     let retries = 0;
@@ -195,11 +197,14 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         prompts: { full: prompts.full, followUp: RETRY_PROMPT },
       });
       costUsd += outcome.costUsd ?? 0;
+      usage = addUsage(usage, outcome.usage);
     }
     task = patch(task.id, {
       prompt: outcome.prompt,
       sessionId: outcome.sessionId,
-      costUsd: costUsd || outcome.costUsd,
+      // Add to earlier attempts (a usage-limit pause resumes the same task).
+      costUsd: (task.costUsd ?? 0) + costUsd,
+      usage: addUsage(task.usage, usage),
       resultText: outcome.result,
       live: outcome.live,
       exitCode: outcome.isError ? 1 : 0,
