@@ -26,6 +26,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      # In the image, agents run as their own user and must not reach the orchestrator's data.
+      - run: docker build -t ao-test .
+      - run: docker run --rm -v "$PWD/test:/app/test:ro" ao-test node --disable-warning=ExperimentalWarning --test test/docker/isolation.docker-test.ts
 
   image:
     name: Publish image to ghcr.io

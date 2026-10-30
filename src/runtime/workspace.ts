@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { config } from "../config.ts";
 import { errorMessage, log } from "../log.ts";
 import { commitIdentityFor, gitTokenFor } from "../github/accounts.ts";
+import { makeSharedDir, shareWritten } from "./isolation.ts";
 import { repoRemoteUrl } from "../github/app.ts";
 import { issueBranch, sameRepo } from "../github/relations.ts";
 import type { ThreadContext } from "../github/threads.ts";
@@ -30,8 +31,9 @@ export function excludeFromGit(dir: string, pattern: string): void {
   const file = join(dir, ".git", "info", "exclude");
   const current = existsSync(file) ? readFileSync(file, "utf8") : "";
   if (current.split("\n").includes(pattern)) return;
-  mkdirSync(dirname(file), { recursive: true });
+  makeSharedDir(dirname(file));
   appendFileSync(file, `${current && !current.endsWith("\n") ? "\n" : ""}${pattern}\n`);
+  shareWritten(file);
 }
 
 /** Was this checkout cloned with a filter (objects fetched from GitHub on demand)? */
@@ -63,7 +65,7 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   // A full clone: the agent's shell has no GitHub credentials, so git must never need to fetch
   // missing objects on its own (a blob-less partial clone does, for checkout, diff, log -p, merge…).
   if (!existsSync(join(dir, ".git"))) {
-    mkdirSync(dirname(dir), { recursive: true });
+    makeSharedDir(dirname(dir));
     await git(dirname(dir), ["clone", "--no-checkout", remote, dir], { token });
   } else {
     await git(dir, ["remote", "set-url", "origin", remote]);

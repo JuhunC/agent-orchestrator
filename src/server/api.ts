@@ -24,6 +24,7 @@ import { addressCheck, appAddresses, ensureAppDetails, findInstallation, getApp,
 import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount, removeAccount, repositoryAccess } from "../github/accounts.ts";
 import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
+import { isolationStatus } from "../runtime/isolation.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import { configReference } from "../profiles/reference.ts";
@@ -85,6 +86,7 @@ function settingsView() {
     liveIdleMinutes: sessions.idleMinutes,
     maxLiveSessions: sessions.maxLive,
     usageLimitRetries: config.usageLimitRetries,
+    isolation: isolationStatus(),
   };
 }
 

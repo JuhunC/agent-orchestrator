@@ -37,6 +37,7 @@ import {
 } from "../github/relations.ts";
 import { cardMoveProblems, cardWorkType, moveProblems, type ReviewRecord, type TestRun } from "./evidence.ts";
 import { chainProblem, describePlan, MAX_RELATED_STARTS_PER_TASK, planStart, RELATION_NAME, relationOf, type RelatedStart } from "./related-agents.ts";
+import { makeSharedDir } from "./isolation.ts";
 import { checkSubIssues, describeSubIssueWork, fetchBranch, isAncestor } from "./sub-issues.ts";
 import { ensureBaseBranch, excludeFromGit, parentBranchFor, type Workspace } from "./workspace.ts";
 
@@ -538,7 +539,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
               await git(target, ["fetch", "--depth", "1", "origin", args.ref ?? "HEAD"], { token });
               await git(target, ["checkout", "--force", "FETCH_HEAD"]);
             } else {
-              mkdirSync(join(ctx.workspace.dir, ".deps", owner), { recursive: true });
+              makeSharedDir(join(ctx.workspace.dir, ".deps", owner));
               const clone = ["clone", "--depth", "1", ...(args.ref ? ["--branch", args.ref] : []), repoRemoteUrl(owner, name), target];
               await git(ctx.workspace.dir, clone, { token });
             }

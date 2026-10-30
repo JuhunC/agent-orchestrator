@@ -7,11 +7,13 @@ import { loadBoards } from "./boards/loader.ts";
 import { loadProfiles } from "./profiles/loader.ts";
 import { seedProfiles } from "./profiles/seed.ts";
 import { scheduler } from "./runner/scheduler.ts";
+import { setupIsolation } from "./runtime/isolation.ts";
 import { sessions } from "./runtime/manager.ts";
 import { buildServer } from "./server/http.ts";
 
 async function main(): Promise<void> {
   mkdirSync(config.agentHome, { recursive: true });
+  await setupIsolation();
   if (config.defaultProfilesDir) {
     try {
       seedProfiles();

@@ -261,8 +261,10 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MAX_PULL_REQUESTS_PER_ISSUE` | `0` (no limit) | Most pull requests agents may open for one issue, counting closed ones. Past it, agents still push their branch and can update their open PR, but no new PR is opened |
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |
+| `AGENT_USER` | `agent` in the image | The OS user agents run as, which can't read the orchestrator's data (see [Security](#security)) |
+| `AGENT_ISOLATION` | `auto` | `auto`: isolate agents when it works, warn in Settings when not. `required`: don't run agents unless they're isolated. `off`: run them as the orchestrator's user |
 
-Agents see only the model settings, `AGENT_ENV_PASSTHROUGH` and their profile's `env`. The GitHub App key, webhook secret and admin token never reach them.
+Agents see only the model settings, `AGENT_ENV_PASSTHROUGH` and their profile's `env` in their environment. In the Docker image they also run as a separate user that can't read the orchestrator's files or processes (see [Security](#security)).
 
 ## Deploying
 
@@ -276,7 +278,8 @@ The image includes git, Python and common CLI tools. For project toolchains, bui
 
 ## Security
 
-- Agents run with permission prompts off (`bypassPermissions`); the container is the sandbox. Use a machine where that's acceptable.
+- Agents run with permission prompts off (`bypassPermissions`), and what they read on GitHub can be a prompt injection, so their shell is treated as untrusted. **In the Docker image they run as their own user, `agent`**, which can't read the orchestrator's data or processes: the GitHub App key, admin token, database, `data-key`, agents' GitHub tokens and the orchestrator's environment variables. They share only their workspaces, their home (`DATA_DIR/agent-home`) and their skills with it, through the `agent` group; the rest of `DATA_DIR` is private to the orchestrator. **Settings** says whether this works. It needs `sudo` in the container, so don't run it with `no-new-privileges`. Outside Docker, create a user and group for agents, add the orchestrator's user to that group, allow it with a sudoers rule like `orchestrator ALL=(agent) NOPASSWD:SETENV: ALL`, and set `AGENT_USER=agent` (or run the orchestrator as root, which switches user itself). Set `AGENT_ISOLATION=required` to refuse to run agents that aren't isolated.
+- All agents share one OS user, so one agent could change another's workspace. Agents still have network access; restrict outbound traffic at the container or network level if your repositories are sensitive.
 - Thread content is untrusted input: only write-access users can start agents, but anyone can comment on public repos. Use `ALLOWED_REPOS`.
 - GitHub credentials stay in the orchestrator, including agents' account tokens; agents act on GitHub only through its tools, on agent branches. The only merge an agent can make is `merge_into_parent` (off by default), which merges a sub-issue into its parent issue's `ao/issue-<n>` branch, never into the default branch.
 

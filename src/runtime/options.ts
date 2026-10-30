@@ -1,6 +1,7 @@
 import { cpSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentDefinition, McpServerConfig, Options } from "@anthropic-ai/claude-agent-sdk";
+import { makeSharedDir, shareWritten } from "./isolation.ts";
 import { config } from "../config.ts";
 import { expandMcpServers, expandVars } from "../profiles/mcp.ts";
 import type { Effort, Library, McpServers, Profile } from "../profiles/types.ts";
@@ -58,7 +59,7 @@ function toSdkMcp(servers: McpServers): Record<string, McpServerConfig> {
  */
 export function buildSkillsPlugin(profile: Profile, library: Library, dir: string): string {
   rmSync(dir, { recursive: true, force: true });
-  mkdirSync(join(dir, ".claude-plugin"), { recursive: true });
+  makeSharedDir(join(dir, ".claude-plugin"));
   writeFileSync(
     join(dir, ".claude-plugin", "plugin.json"),
     JSON.stringify({ name: `ao-${profile.name}`, version: "1.0.0", description: `Skills for the ${profile.name} agent` }, null, 2),
@@ -68,6 +69,7 @@ export function buildSkillsPlugin(profile: Profile, library: Library, dir: strin
   const names = [...new Set([...profile.skills, ...roleSkills])];
   const skills = [...names.map((name) => library.skills[name]).filter((skill) => skill !== undefined), ...profile.ownSkills];
   for (const skill of skills) cpSync(skill.dir, join(dir, "skills", skill.name), { recursive: true });
+  shareWritten(dir); // the agent user reads it, but can't change another agent's skills
   return dir;
 }
 

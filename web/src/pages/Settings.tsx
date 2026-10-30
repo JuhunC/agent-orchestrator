@@ -181,6 +181,18 @@ export function Settings() {
 
       {setup.app && (setup.callbackProblem || setup.webhookProblem) && <AddressProblems setup={setup} onFixed={() => void reload()} />}
 
+      {data.isolation.problem ? (
+        <div className="banner error">
+          <span>
+            <b>{data.isolation.required ? "Agents won't run: they can't be isolated." : "Agents can read the orchestrator's secrets."}</b> {data.isolation.problem}
+          </span>
+        </div>
+      ) : data.isolation.mode !== "off" ? (
+        <div className="banner info">
+          Agents run as the separate user <code>{data.isolation.user}</code>, which can't read the orchestrator's keys, tokens or database.
+        </div>
+      ) : null}
+
       <Panel title="GitHub App" hint={setup.app ? (setup.app.source === "env" ? "from environment variables" : "created here") : "not connected"}>
         {setup.app ? (
           <div className="stack" style={{ gap: 16 }}>

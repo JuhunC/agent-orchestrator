@@ -132,12 +132,22 @@ export const config = {
   // a task started that way may start another only while the chain is shorter than this. 0 = never.
   maxAgentChain: Math.max(0, int("MAX_AGENT_CHAIN", 3)),
 
+  // Run agents as this OS user, which can't read the orchestrator's data (keys, tokens, database).
+  // AGENT_ISOLATION: auto (isolate when it works, warn when not), required (refuse to run agents
+  // unisolated), off (run agents as the orchestrator's own user).
+  agentUser: env("AGENT_USER"),
+  agentIsolation: (["auto", "required", "off"].includes(env("AGENT_ISOLATION", "auto").toLowerCase()) ? env("AGENT_ISOLATION", "auto").toLowerCase() : "auto") as "auto" | "required" | "off",
+
   webhookProxyUrl: env("WEBHOOK_PROXY_URL"),
   // Testing hook: clone from `file:///…/{owner}/{repo}.git` instead of GITHUB_URL.
   gitRemoteTemplate: env("GIT_REMOTE_TEMPLATE"),
 };
 
 export type Config = typeof config;
+
+// With a separate agent user, what the orchestrator writes is private unless shared on purpose
+// (workspaces, the agent's home, skills): set before the database file is created.
+if (config.agentUser && config.agentIsolation !== "off") process.umask(0o077);
 
 /** Is owner/repo in ALLOWED_REPOS (or is every repository allowed)? */
 export function repoAllowed(fullName: string): boolean {

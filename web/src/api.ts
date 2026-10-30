@@ -298,6 +298,8 @@ export interface Settings {
   liveIdleMinutes: number;
   maxLiveSessions: number;
   usageLimitRetries: number;
+  /** Whether agents run as a separate OS user that can't read the orchestrator's data. */
+  isolation: { mode: "off" | "sudo" | "direct"; user: string | null; required: boolean; problem: string | null };
 }
 
 export interface Setup {

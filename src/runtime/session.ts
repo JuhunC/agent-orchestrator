@@ -1,7 +1,8 @@
-import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import { query, type Options, type Query, type SDKMessage, type SDKUserMessage, type SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import { detectUsageLimit, type DetectedLimit } from "../runner/limits.ts";
 import type { EventKind, TaskUsage } from "../types.ts";
 import { describeTool, makeRelative, short } from "./describe.ts";
+import { isolated, spawnAsAgent } from "./isolation.ts";
 import { saveTotals, savedTotals, toTotals, turnUsage, type SessionTotals } from "./usage.ts";
 
 export type EventSink = (kind: EventKind, message: string) => void;
@@ -102,16 +103,19 @@ export class AgentSession {
     this.resumed = Boolean(options.resume);
     this.totals = options.resume ? savedTotals(options.resume) : null;
     this.rel = makeRelative(options.cwd ?? "");
+    const onStderr = (data: string) => {
+      for (const line of data.split("\n").filter((item) => item.trim())) {
+        this.stderrTail.push(line.slice(0, 500));
+        if (this.stderrTail.length > 30) this.stderrTail.shift();
+      }
+    };
     this.q = query({
       prompt: this.queue,
       options: {
         ...options,
-        stderr: (data: string) => {
-          for (const line of data.split("\n").filter((item) => item.trim())) {
-            this.stderrTail.push(line.slice(0, 500));
-            if (this.stderrTail.length > 30) this.stderrTail.shift();
-          }
-        },
+        stderr: onStderr,
+        // As the separate agent user, when the orchestrator has one (see isolation.ts).
+        ...(isolated() ? { spawnClaudeCodeProcess: (spawnOptions: SpawnOptions) => spawnAsAgent(spawnOptions, onStderr) } : {}),
       },
     });
     void this.pump();

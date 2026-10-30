@@ -15,6 +15,7 @@ import { commitAndPush, openOrUpdatePullRequest, PullRequestLimitError, type Boa
 import { sessions } from "../runtime/manager.ts";
 import { cardMoveProblems, cardWorkType, moveProblems } from "../runtime/evidence.ts";
 import { agentEnv, taskEnv } from "../runtime/options.ts";
+import { isolationStatus } from "../runtime/isolation.ts";
 import { RELATION_NAME, runRelatedStart } from "../runtime/related-agents.ts";
 import { addUsage } from "../runtime/usage.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
@@ -98,6 +99,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
   try {
     if (!profile) throw new Error(`Agent "${task.agent}" no longer exists`);
     if (profile.errors.length) throw new Error(`The ${profile.name} profile has errors: ${profile.errors.join("; ")}`);
+    const isolation = isolationStatus();
+    if (isolation.required && isolation.mode === "off") throw new Error(`AGENT_ISOLATION is required, but agents can't run as a separate user: ${isolation.problem}`);
     if (task.board) {
       const board = getBoard(task.board);
       const column = board && task.boardColumn ? board.columns[task.boardColumn] : undefined;

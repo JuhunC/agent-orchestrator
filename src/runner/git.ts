@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { inWorkspaces } from "../runtime/isolation.ts";
 
 export class GitError extends Error {
   stderr: string;
@@ -21,7 +22,9 @@ export function git(cwd: string, args: string[], options: { token?: string; time
     env.GIT_CONFIG_VALUE_0 = `Authorization: Basic ${basic}`;
   }
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, env, timeout: options.timeoutMs ?? 10 * 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+    // In workspaces shared with the agent user, keep what git writes group-writable.
+    const [command, argv] = inWorkspaces(cwd) ? ["/bin/sh", ["-c", 'umask 002; exec git "$@"', "git", ...args]] : ["git", args];
+    execFile(command, argv, { cwd, env, timeout: options.timeoutMs ?? 10 * 60_000, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
       if (error) {
         const scrubbed = String(stderr || error.message).replace(/x-access-token:[^@\s]+/g, "x-access-token:***");
         reject(new GitError(`git ${args[0]} failed: ${scrubbed.trim().split("\n").slice(-3).join(" ")}`, scrubbed));
