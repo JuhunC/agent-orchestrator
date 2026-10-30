@@ -152,6 +152,11 @@ export const config = {
   // that has waited this long goes first. 0 = strictly that order.
   queueAgingMinutes: Math.max(0, int("QUEUE_AGING_MINUTES", 30)),
   workspaceRetentionDays: Math.max(0, int("WORKSPACE_RETENTION_DAYS", 14)),
+  // Checkouts of closed issues and pull requests go sooner: after this many days unused.
+  workspaceClosedRetentionDays: Math.max(0, int("WORKSPACE_CLOSED_RETENTION_DAYS", 2)),
+  // New checkouts borrow history from one shared copy per repository (DATA_DIR/mirrors), so each
+  // holds little more than its files. off: every checkout is a full clone, as before.
+  gitSharedObjects: env("GIT_SHARED_OBJECTS", "on").toLowerCase() !== "off",
   spendLimitDailyUsd: Number(env("SPEND_LIMIT_DAILY_USD", "0")) || 0,
   spendLimitMonthlyUsd: Number(env("SPEND_LIMIT_MONTHLY_USD", "0")) || 0,
   // How many times in a row agents may start each other on related issues (start_related_agent):

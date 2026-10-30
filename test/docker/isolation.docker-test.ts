@@ -20,6 +20,7 @@ const probe = [
   'cat "$D/orchestrator.db" > /dev/null 2>&1 && echo DB_READABLE || echo DB_BLOCKED',
   'for p in $(pgrep -u node); do cat /proc/$p/environ > /dev/null 2>&1 && echo READ_ENV_OF_$p; done; echo ENV_PROBE_DONE',
   'echo hi > made-by-agent.txt && mkdir -p sub && echo x > sub/y.txt && echo WROTE_OK',
+  'git log --oneline -1 > /dev/null && git status --short > /dev/null && echo GIT_OK',
 ].join("; ");
 h.model.script = (request) => {
   const steps = request.prompt.includes("again")
@@ -55,6 +56,7 @@ test("agents run as the agent user and can't read the orchestrator's data", asyn
   assert.match(out, /DB_BLOCKED/);
   assert.doesNotMatch(out, /READ_ENV_OF_/);
   assert.match(out, /WROTE_OK/);
+  assert.match(out, /GIT_OK/, "the agent's git reads history from the shared copy");
   assert.equal(h.showRemote("agent/coder/issue-1:made-by-agent.txt"), "hi");
   assert.equal(h.showRemote("agent/coder/issue-1:sub/y.txt"), "x");
   const again = await h.waitForTask((await h.commentMention(1, "@aorch-coder again")).id);

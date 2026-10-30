@@ -8,6 +8,7 @@ import { getSetting, setSetting, tasksForThread } from "../db.ts";
 import { errorMessage, log } from "../log.ts";
 import { git } from "../runner/git.ts";
 import type { ThreadKind } from "../types.ts";
+import { findInstallation, installationClient } from "../github/app.ts";
 import { sessions, sessionKey } from "./manager.ts";
 
 /**
@@ -84,12 +85,31 @@ function prune(path: string, root: string): void {
 
 let running: Promise<CleanupReport> | null = null;
 
-export function cleanUpWorkspaces(options: { now?: number; days?: number } = {}): Promise<CleanupReport> {
+/** Is the checkout's issue or pull request closed? Asked of GitHub (a few per cleanup); unknown counts as open. */
+async function closedOnGitHub(checkout: { owner: string; repo: string; kind: ThreadKind; number: number }, cache: Map<string, boolean>): Promise<boolean> {
+  if (checkout.kind === "discussion") return false;
+  const key = `${checkout.owner}/${checkout.repo}#${checkout.number}`.toLowerCase();
+  if (cache.has(key)) return cache.get(key)!;
+  if (cache.size >= 100) return false;
+  let closed = false;
+  try {
+    const gh = await installationClient(await findInstallation(checkout.owner, checkout.repo));
+    const { data } = await gh.rest.issues.get({ owner: checkout.owner, repo: checkout.repo, issue_number: checkout.number });
+    closed = data.state === "closed";
+  } catch {
+    closed = false;
+  }
+  cache.set(key, closed);
+  return closed;
+}
+
+export function cleanUpWorkspaces(options: { now?: number; days?: number; closedDays?: number } = {}): Promise<CleanupReport> {
   running ??= clean(options).finally(() => (running = null));
   return running;
 }
 
-async function clean({ now = Date.now(), days = config.workspaceRetentionDays }: { now?: number; days?: number }): Promise<CleanupReport> {
+async function clean({ now = Date.now(), days = config.workspaceRetentionDays, closedDays = config.workspaceClosedRetentionDays }: { now?: number; days?: number; closedDays?: number }): Promise<CleanupReport> {
+  const closedCache = new Map<string, boolean>();
   const root = join(config.dataDir, "workspaces");
   const report: CleanupReport = { at: new Date(now).toISOString(), retentionDays: days, removed: [], kept: [], freedKb: 0, remaining: 0, remainingKb: null };
   const open = new Set(sessions.list().map((session) => session.key));
@@ -100,7 +120,8 @@ async function clean({ now = Date.now(), days = config.workspaceRetentionDays }:
     const last = Math.max(0, ...tasks.map((task) => Date.parse(task.finishedAt ?? task.startedAt ?? task.createdAt)));
     const used = last || statSync(checkout.path).mtimeMs;
     const idleDays = Math.floor((now - used) / DAY);
-    if (now - used < days * DAY) continue;
+    // Unused for the retention period, or (sooner) for a closed issue or pull request.
+    if (now - used < days * DAY && !(now - used >= closedDays * DAY && (await closedOnGitHub(checkout, closedCache)))) continue;
     const reason = await unpublished(checkout.path);
     const where = checkout.path.slice(root.length + 1);
     if (reason) {

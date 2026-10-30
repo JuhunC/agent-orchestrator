@@ -4,6 +4,7 @@ import { config } from "../config.ts";
 import { errorMessage, log } from "../log.ts";
 import { commitIdentityFor, gitTokenFor, noteOwnWrite } from "../github/accounts.ts";
 import { makeSharedDir, shareWritten } from "./isolation.ts";
+import { updateMirror } from "./mirrors.ts";
 import { repoRemoteUrl } from "../github/app.ts";
 import { issueBranch, sameRepo } from "../github/relations.ts";
 import type { ThreadContext } from "../github/threads.ts";
@@ -67,7 +68,9 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   // missing objects on its own (a blob-less partial clone does, for checkout, diff, log -p, merge…).
   if (!existsSync(join(dir, ".git"))) {
     makeSharedDir(dirname(dir));
-    await git(dirname(dir), ["clone", "--no-checkout", remote, dir], { token });
+    // Borrow history from the repository's shared copy: only the files and new objects are this checkout's.
+    const mirror = await updateMirror(task.owner, task.repo, token);
+    await git(dirname(dir), ["clone", "--no-checkout", ...(mirror ? ["--reference-if-able", mirror] : []), remote, dir], { token });
   } else {
     await git(dir, ["remote", "set-url", "origin", remote]);
     if (await isPartialClone(dir)) {

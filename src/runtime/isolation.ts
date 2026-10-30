@@ -30,6 +30,8 @@ export function sharedRoots(): { path: string; writable: boolean }[] {
     { path: join(config.dataDir, "workspaces"), writable: true },
     { path: config.agentHome, writable: true },
     { path: join(config.dataDir, "sessions"), writable: false },
+    // Shared history the agent's git reads through its checkout's alternates.
+    { path: join(config.dataDir, "mirrors"), writable: false },
   ];
 }
 
@@ -99,12 +101,11 @@ export function shareWritten(path: string): void {
   if (root) shareTree(path, root.writable);
 }
 
-/** Is this path inside the shared workspaces folder? (The orchestrator's git there keeps files group-writable.) */
+/** Is this path in a folder shared with the agent user (workspaces, mirrors)? The orchestrator's git there keeps files group-readable and writable. */
 export function inWorkspaces(path: string): boolean {
   if (!config.agentUser || config.agentIsolation === "off") return false;
-  const root = join(config.dataDir, "workspaces");
   const target = resolve(path);
-  return target === root || target.startsWith(root + sep);
+  return [join(config.dataDir, "workspaces"), join(config.dataDir, "mirrors")].some((root) => target === root || target.startsWith(root + sep));
 }
 
 /** Makes DATA_DIR private to the orchestrator, apart from the shared folders. */
