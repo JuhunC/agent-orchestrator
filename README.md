@@ -268,6 +268,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MODEL_ERROR_RETRIES` | `3` | When the model API fails to answer (5xx, overloaded, dropped connection): each request is retried this many times, then a task that still fails is retried this many times, continuing its session |
 | `MODEL_ERROR_RETRY_DELAY_SECONDS` | `20` | First wait before a task retry; doubles each time |
 | `CLAUDE_CODE_EXECUTABLE` | bundled | A Claude Code-compatible executable agents run instead of the SDK's own (see [The model service](#the-model-service)) |
+| `BACKUP_KEEP`, `BACKUP_DIR` | `7`, `DATA_DIR/backups` | Daily snapshots of the database and key files: how many to keep (`0` turns them off) and where (see [Backups](#backups)) |
 | `QUEUE_AGING_MINUTES` | `30` | Queued tasks start in this order: people's requests (mentions, assignments, runs from the admin UI), then work agents started for each other, then board stages; a task that has waited this long goes first. Boards can also cap their running cards with `limits.max_running` |
 | `WORKSPACE_RETENTION_DAYS` | `14` | Agents' checkouts (a full clone per agent and thread) nobody has used for this long are removed, hourly; ones with uncommitted or unpushed work are kept. The next task clones again. `0` keeps them. **Settings → Workspaces** shows the last cleanup and can run one |
 | `SPEND_LIMIT_DAILY_USD`, `SPEND_LIMIT_MONTHLY_USD` | none | Spending limits for all agents together (UTC days and months, Claude Code's estimates). When one is reached, new tasks wait until the next day or month; running ones finish. The Dashboard warns at 80%. **Settings** can change them |
@@ -298,6 +299,14 @@ scrape_configs:
     static_configs: [{ targets: ["orchestrator.example.com"] }]
     scheme: https
 ```
+
+## Backups
+
+`DATA_DIR` holds what can't be rebuilt: the database (tasks, history, settings, agents' encrypted GitHub tokens) and key files: `github-app.json` (the App's key, when it was created in Settings), `data-key` (decrypts the agents' tokens: without it they must be registered again), `session-secret` and `admin-token`. Workspaces, sessions and wikis are clones and caches; the profiles folder is its own git repository (back it up, or push it somewhere).
+
+- Once a day (and from **Settings → Backups** on demand) the orchestrator takes a consistent snapshot of the database and copies the key files into `DATA_DIR/backups/<time>/`, keeping the last `BACKUP_KEEP` (default 7). `BACKUP_DIR` puts them elsewhere, e.g. a mounted folder on another disk. A failed backup shows under **Recent problems**.
+- Copy them off the server regularly, e.g. `docker compose cp orchestrator:/data/backups ./backups`. They hold secrets: keep them private.
+- **Restore:** stop the orchestrator (`docker compose stop orchestrator`), copy a snapshot's `orchestrator.db` and key files into `DATA_DIR` (remove any `orchestrator.db-wal` and `orchestrator.db-shm` there first), and start it again. Running tasks at the time of the snapshot show as interrupted.
 
 ## Deploying
 

@@ -139,6 +139,10 @@ export const config = {
   // months). When one is reached, new tasks wait until the next day or month. Settings can change them.
   // Agents' checkouts nobody has used for this many days are removed (unless they hold work that
   // isn't on GitHub). 0 keeps them forever.
+  // Daily snapshots of the database and key files (see backup.ts): how many to keep (0 = none),
+  // and where (default DATA_DIR/backups; a separate disk or mounted folder is better).
+  backupKeep: Math.max(0, int("BACKUP_KEEP", 7)),
+  backupDir: env("BACKUP_DIR") ? resolve(env("BACKUP_DIR")) : "",
   // Queued tasks start people's requests first, then agent-started work, then board stages; one
   // that has waited this long goes first. 0 = strictly that order.
   queueAgingMinutes: Math.max(0, int("QUEUE_AGING_MINUTES", 30)),

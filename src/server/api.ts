@@ -26,6 +26,7 @@ import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount,
 import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import { cleanUpWorkspaces, lastCleanup } from "../runtime/cleanup.ts";
+import { backUp, backupDir, listBackups } from "../runtime/backup.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { queueOrder } from "../runner/queue-order.ts";
@@ -634,6 +635,16 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   app.post("/api/workspaces/cleanup", async () => cleanUpWorkspaces());
+
+  app.get("/api/backups", async () => ({ dir: backupDir(), keep: config.backupKeep, backups: listBackups().map(({ path: _path, ...backup }) => backup) }));
+  app.post("/api/backups", async (_request, reply) => {
+    try {
+      const { path: _path, ...backup } = backUp();
+      return backup;
+    } catch (error) {
+      return reply.code(500).send({ error: `The backup failed: ${errorMessage(error)}` });
+    }
+  });
 
   /** Every limit that stops agents running away, with what each is set to, and recent trips. */
   app.get("/api/guards", async () => {
