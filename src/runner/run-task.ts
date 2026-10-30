@@ -28,6 +28,7 @@ import { progressEditAllowed, ProgressThrottle, renderProgress, renderResult, ty
 import { recordIncident } from "./incidents.ts";
 import { scheduler } from "./scheduler.ts";
 import { profileCommit, profileVersion } from "../profiles/version.ts";
+import { scheduleRunInfo } from "../schedules/runner.ts";
 
 function patch(taskId: number, changes: Partial<Task>): Task {
   const task = updateTask(taskId, changes);
@@ -176,9 +177,10 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
             peers: task.boardRound ? tasksInRound(task.boardRound).map((peer) => peer.agent).filter((name) => name !== profile.name) : [],
           }
         : null;
+    const schedule = scheduleRunInfo(task, profile);
     const prompts = {
-      full: buildPrompt({ agent: profile, task, thread, history, workspace, board: stage }),
-      followUp: buildFollowUpPrompt({ agent: profile, task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0 || task.restarts > 0, board: stage }),
+      full: buildPrompt({ agent: profile, task, thread, history, workspace, board: stage, schedule }),
+      followUp: buildFollowUpPrompt({ agent: profile, task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0 || task.restarts > 0, board: stage, schedule }),
     };
 
     const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0, board: boardContext };

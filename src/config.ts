@@ -178,6 +178,14 @@ export const config = {
   // a task started that way may start another only while the chain is shorter than this. 0 = never.
   maxAgentChain: Math.max(0, int("MAX_AGENT_CHAIN", 3)),
 
+  // Schedules (agents run again and again on a timetable): the time zone a schedule uses when it
+  // names none, the shortest time allowed between two runs, how many one agent may have (file
+  // schedules included), and how many failed runs in a row pause a schedule (0 = never).
+  scheduleTimezone: env("SCHEDULE_TIMEZONE", "UTC"),
+  scheduleMinMinutes: Math.max(1, int("SCHEDULE_MIN_MINUTES", 15)),
+  schedulesPerAgent: Math.max(0, int("SCHEDULES_PER_AGENT", 20)),
+  schedulePauseAfterFailures: Math.max(0, int("SCHEDULE_PAUSE_AFTER_FAILURES", 3)),
+
   // Run agents as this OS user, which can't read the orchestrator's data (keys, tokens, database).
   // AGENT_ISOLATION: auto (isolate when it works, warn when not), required (refuse to run agents
   // unisolated), off (run agents as the orchestrator's own user).

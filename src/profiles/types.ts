@@ -63,6 +63,21 @@ export interface GithubPermissions {
   accountMentions: boolean;
 }
 
+/** A schedule listed under schedules: in agent.md (kept in step with the database; see schedules/runner.ts). */
+export interface FileSchedule {
+  name: string;
+  /** A cron expression, @daily-style shortcut or "every 6h" interval. */
+  when: string;
+  timezone: string | null;
+  /** owner/name */
+  repo: string;
+  /** The issue or pull request each run works on; null: the first run opens an issue. */
+  issue: number | null;
+  prompt: string;
+  maxRuns: number | null;
+  endsAt: string | null;
+}
+
 /** One agent: profiles/agents/<name>/agent.md plus its own skills/ and mcp.json. */
 export interface Profile {
   name: string;
@@ -96,6 +111,10 @@ export interface Profile {
   effortFrom: "agent" | "group" | null;
   /** Identical copies of this agent: how many cards it may work at once. Null means no limit. */
   replicas: number | null;
+  /** create_schedule and friends: the agent may set up its own repeating runs when asked. */
+  canSchedule: boolean;
+  /** Schedules written in agent.md. */
+  schedules: FileSchedule[];
   ownSkills: SkillInfo[];
   ownMcp: McpServers;
   dir: string;

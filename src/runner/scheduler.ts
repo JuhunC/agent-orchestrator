@@ -24,7 +24,7 @@ class Scheduler {
   private draining: Promise<void>[] = [];
   private wakeTimer: NodeJS.Timeout | null = null;
   /** Set while shutting down: nothing new starts. */
-  private stopping = false;
+  stopping = false;
   /** After the model service rate-limits a task, fewer tasks run for a while (see noteRateLimit). */
   private rateCap: number | null = null;
   private rateCapAt = 0;

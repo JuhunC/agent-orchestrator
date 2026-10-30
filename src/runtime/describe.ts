@@ -41,6 +41,10 @@ const GITHUB_TOOL_LABELS: Record<string, string> = {
   move_sub_issue: "Moving a sub-issue's card",
   link_issue: "Linking issues",
   merge_into_parent: "Merging into the parent issue's branch",
+  create_schedule: "Creating a schedule",
+  list_schedules: "Listing schedules",
+  update_schedule: "Changing a schedule",
+  delete_schedule: "Deleting a schedule",
 };
 
 /** A one-line, human description of a Claude Code tool call, for progress comments and the UI. */

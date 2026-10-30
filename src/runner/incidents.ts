@@ -20,7 +20,8 @@ export type IncidentKind =
   | "webhook_signature"
   | "account_token"
   | "backup"
-  | "github_rate_limit";
+  | "github_rate_limit"
+  | "schedule";
 
 const RANK = { info: 0, warning: 1, critical: 2 } as const;
 /** The same problem isn't posted again within this long. */

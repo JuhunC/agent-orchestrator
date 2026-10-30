@@ -57,6 +57,7 @@ import { loadBoards } from "../boards/loader.ts";
 import { clearLimit, getLimit } from "../runner/limit-store.ts";
 import { startManualTask } from "../triggers.ts";
 import { usageReport } from "../runner/usage-report.ts";
+import { registerScheduleRoutes } from "./schedules-api.ts";
 import type { Task, ThreadKind, ThreadRef } from "../types.ts";
 
 const KINDS: ThreadKind[] = ["issue", "pull", "discussion"];
@@ -206,6 +207,7 @@ function appManifest(name: string) {
 }
 
 export function registerApi(app: FastifyInstance): void {
+  registerScheduleRoutes(app);
   // ---------- live stream ----------
   app.get("/api/stream", (request, reply) => {
     reply.hijack();
@@ -666,6 +668,9 @@ export function registerApi(app: FastifyInstance): void {
         { name: "Sub-issues per task", setting: "built in", value: String(MAX_SUB_ISSUES_PER_TASK), what: "create_sub_issue calls per task" },
         { name: "Task timeout", setting: "TASK_TIMEOUT_MINUTES", value: `${config.defaultTimeoutMinutes} min`, what: "a task is stopped after this long (agents can set their own timeout_minutes)" },
         { name: "Agents at once", setting: "MAX_CONCURRENT_TASKS", value: String(scheduler.maxConcurrent), what: "tasks running at the same time" },
+        { name: "Time between scheduled runs", setting: "SCHEDULE_MIN_MINUTES", value: `${config.scheduleMinMinutes} min`, what: "the shortest gap a schedule may have between two runs" },
+        { name: "Schedules per agent", setting: "SCHEDULES_PER_AGENT", value: config.schedulesPerAgent ? String(config.schedulesPerAgent) : "no limit", what: "schedules one agent may have, its agent.md ones included" },
+        { name: "Failed runs before a schedule pauses", setting: "SCHEDULE_PAUSE_AFTER_FAILURES", value: config.schedulePauseAfterFailures ? String(config.schedulePauseAfterFailures) : "never", what: "a schedule whose runs fail this many times in a row is paused until someone switches it back on" },
       ],
       boards: loadBoards(profiles).boards.map((board) => ({
         name: board.name,
@@ -676,7 +681,7 @@ export function registerApi(app: FastifyInstance): void {
         needsHuman: board.needsHuman,
       })),
       agents: profiles.agents.map((agent) => ({ name: agent.name, maxBudgetUsd: agent.maxBudgetUsd, maxTurns: agent.maxTurns, timeoutMinutes: agent.timeoutMinutes, replicas: agent.replicas })),
-      recent: [...listIncidents(200, "loop_guard"), ...listIncidents(50, "spend_limit")].sort((a, b) => b.id - a.id).slice(0, 30),
+      recent: [...listIncidents(200, "loop_guard"), ...listIncidents(50, "spend_limit"), ...listIncidents(50, "schedule")].sort((a, b) => b.id - a.id).slice(0, 30),
     };
   });
 

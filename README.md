@@ -154,6 +154,7 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 | `link_issue` | `relations: true`: add or remove `blocked_by`, `blocks`, `parent` or `sub_issue` links to another issue |
 | `merge_into_parent` | `merge_into_parent: true`: merge this sub-issue's pushed work into the parent's branch with a merge commit, and close the sub-issue |
 | `start_related_agent` | `start_related`: when this task finishes, start the agent responsible for a related issue (parent, sub-issue, blocker, or an issue this one blocks) with a message |
+| `create_schedule`, `list_schedules`, `update_schedule`, `delete_schedule` | `can_schedule` (on by default): run itself again and again on a timetable, on this thread or another issue (see [Schedules](#schedules)) |
 
 **Wikis** have no REST API: each is a git repository (`<repo>.wiki.git`), so the orchestrator keeps a checkout under `DATA_DIR/wikis` and pushes page changes with the installation token (the App's `contents: write` permission covers it). GitHub creates a wiki's repository only when its first page is saved, so turn on Wikis in the repository settings and create the first page in the web UI once. If someone edits the wiki at the same moment, the write is redone on top of their version.
 
@@ -191,6 +192,32 @@ An agent can hand work over to a related issue: a sub-issue that merged its work
 - **When.** When the asking task finishes, and only if it succeeds: after its card moves and after its issue is closed, so the other agent sees the finished work. An agent already working on the related issue gets the message instead, and one already queued there gets it added to its request.
 - **Loops.** A task started this way records which task started it, and so does a board stage an agent's card move started. Once `MAX_AGENT_CHAIN` (default 3) agents have started each other in a row, counting through board moves in between, the last one can't start another. Each task can start at most 5.
 - Only issues related on GitHub count; link others first with `link_issue`. A task's page shows its **Chain**: the tasks that led to it and the ones it started, across issues and board stages. The related issue gets the usual progress comment.
+
+### Schedules
+
+An agent can run again and again on a timetable: a daily report, a weekly dependency check, a reminder until a pull request is merged. Each run starts the agent on the same issue or pull request with the same request, and it replies there like any other task. It sees its earlier runs, so it can report only what's changed.
+
+There are three ways to make one:
+
+- **Ask the agent.** "@coder every Monday at 9 Seoul time, check for outdated dependencies." The agent sets it up with `create_schedule`, on that thread. It can also list, change, pause and delete its own schedules, and a run can delete its schedule once the job is done. `can_schedule: false` in agent.md takes these tools away. A scheduled run can't make more schedules.
+- **In the admin UI.** **Schedules** in the sidebar, or the agent's page. Pick the agent, a timing (with a preview of the next runs), the repository, and optionally an issue or pull request number. Leave the number out and the first run opens an issue for the schedule.
+- **In agent.md**, under `schedules:`. These are kept in step with the file. The admin UI can pause them and run them now, but changes go in the file.
+
+```yaml
+schedules:
+  - name: Weekly dependency check
+    when: "0 9 * * 1"          # cron (minute hour day month weekday), @daily, or "every 6h"
+    timezone: Asia/Seoul       # default SCHEDULE_TIMEZONE (UTC)
+    repo: acme/widgets
+    issue: 12                  # optional: left out, the first run opens an issue
+    prompt: Check for outdated dependencies and open one pull request updating the safe ones.
+    max_runs: 10               # optional
+    ends_at: 2026-12-31        # optional
+```
+
+- **Timing.** Cron times are wall-clock times in the schedule's time zone, so a daylight-saving change doesn't move them (a time the clock skips is skipped that day, and one it repeats runs once). Intervals count from when the schedule was made. Schedules may run at most every `SCHEDULE_MIN_MINUTES` (15).
+- **Guards.** A run is skipped while the schedule's last run is still queued or running. A schedule missed while the server was down runs once when it's back. After `SCHEDULE_PAUSE_AFTER_FAILURES` (3) failed runs in a row it pauses itself and records an incident. Each agent may have `SCHEDULES_PER_AGENT` (20). Scheduled runs queue after people's requests, alongside work agents started for each other, and count towards the spending limits.
+- **Run now** starts an extra run without moving the timetable. Operators may run and pause schedules; making, changing and deleting them is for admins. Progress comments say "requested by schedule …", so nobody is pinged on every run.
 
 ## Project boards
 
@@ -278,12 +305,16 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `PROGRESS_COMMENTS` | `edit` | `minimal`: post the progress comment when a task starts and complete it when it ends, with no edits in between (for many agents at once) |
 | `RESTART_RESUMES` | `2` | A task running when the orchestrator restarts (a deploy, a crash) is queued again and resumes its own session, with its uncommitted work, up to this many times; then it fails as before |
 | `SHUTDOWN_WAIT_SECONDS` | `20` | On shutdown, nothing new starts and running tasks get this long to finish before they're stopped (and resumed after the restart). Keep it below Docker's `stop_grace_period` (30 s in the compose files) |
-| `QUEUE_AGING_MINUTES` | `30` | Queued tasks start in this order: people's requests (mentions, assignments, runs from the admin UI), then work agents started for each other, then board stages; a task that has waited this long goes first. Boards can also cap their running cards with `limits.max_running` |
+| `QUEUE_AGING_MINUTES` | `30` | Queued tasks start in this order: people's requests (mentions, assignments, runs from the admin UI), then work agents started for each other and scheduled runs, then board stages; a task that has waited this long goes first. Boards can also cap their running cards with `limits.max_running` |
 | `GIT_SHARED_OBJECTS` | `on` | New checkouts borrow history from one shared copy of each repository (`DATA_DIR/mirrors`, never pruned), so each holds little more than its files and is quick to make. `off`: a full clone each |
 | `WORKSPACE_CLOSED_RETENTION_DAYS` | `2` | Checkouts of closed issues and pull requests are removed after this many days unused |
 | `WORKSPACE_RETENTION_DAYS` | `14` | Agents' checkouts (a full clone per agent and thread) nobody has used for this long are removed, hourly; ones with uncommitted or unpushed work are kept. The next task clones again. `0` keeps them. **Settings → Workspaces** shows the last cleanup and can run one |
 | `SPEND_LIMIT_DAILY_USD`, `SPEND_LIMIT_MONTHLY_USD` | none | Spending limits for all agents together (UTC days and months, Claude Code's estimates). When one is reached, new tasks wait until the next day or month; running ones finish. The Dashboard warns at 80%. **Settings** can change them |
 | `MAX_AGENT_CHAIN` | `3` | How many agents in a row may start each other on related issues with `start_related_agent`; `0` turns it off |
+| `SCHEDULE_TIMEZONE` | `UTC` | The time zone of schedules that don't name one (see [Schedules](#schedules)) |
+| `SCHEDULE_MIN_MINUTES` | `15` | The shortest time allowed between two runs of a schedule |
+| `SCHEDULES_PER_AGENT` | `20` | Most schedules one agent may have, its agent.md ones included; `0` for no limit |
+| `SCHEDULE_PAUSE_AFTER_FAILURES` | `3` | A schedule whose runs fail this many times in a row pauses itself until someone switches it back on; `0` never |
 | `MAX_OPEN_AGENT_PRS_PER_REPO` | `0` (no limit) | Once a repository has this many open pull requests from agents, board stages and agent-started work that would open another one wait until some are merged or closed, so reviews keep up. People's own requests still run |
 | `REBASE_CONFLICTED_PRS` | `on` | When an agent's open pull request conflicts with its base (checked hourly), the agent that opened it is started to merge the base in and push, at most once a day per pull request |
 | `AGENT_BRANCH_CLEANUP_DAYS` | `1` | Days after an agent's pull request is merged or closed before its branch (`agent/…`, `ao/issue-…`) is deleted on GitHub, hourly. Kept while an open pull request still targets it. `0` keeps them |
@@ -301,7 +332,7 @@ Agents see only the model settings (with a per-session stand-in for the key), `A
 
 **Audit log:** every change made in the admin UI (and every change someone's role didn't allow) is recorded with who made it and what they sent, secrets left out. **Settings → Audit log** shows the latest; `GET /api/audit` has the last 5000. Profile edits are also commits in the profiles folder's git history.
 
-Problems an administrator should hear about are recorded as incidents: failed tasks, loop guards that stopped agents (board guards, `MAX_AGENT_CHAIN`, `MAX_PULL_REQUESTS_PER_ISSUE`), spending limits reached or near, the model service's usage limits, agents that aren't isolated, and webhooks with a bad signature. The Dashboard lists the last 7 days under **Recent problems** (`GET /api/incidents` has the last 1000).
+Problems an administrator should hear about are recorded as incidents: failed tasks, loop guards that stopped agents (board guards, `MAX_AGENT_CHAIN`, `MAX_PULL_REQUESTS_PER_ISSUE`), spending limits reached or near, schedules that paused after failing, the model service's usage limits, agents that aren't isolated, and webhooks with a bad signature. The Dashboard lists the last 7 days under **Recent problems** (`GET /api/incidents` has the last 1000).
 
 - **GitHub's rate limits:** when GitHub says to slow down (its hourly quota, or its secondary limit on writing too fast), requests wait as long as it asks and are retried twice, progress edits pause, and a `github_rate_limit` incident is recorded (once per 10 minutes).
 - **Alerts:** set `ALERT_WEBHOOK_URL` to a Slack or Discord incoming webhook (or any URL that takes JSON) and each one is posted there, at most once per 10 minutes for the same problem. The JSON has `text` (Slack), `content` (Discord), and `kind`, `severity`, `message`, `url`, `task` and `at`. `ALERT_MIN_SEVERITY` (`info`, `warning` (default) or `critical`) sets the least severe that's posted.

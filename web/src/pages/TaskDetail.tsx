@@ -28,7 +28,7 @@ function ChainRow({ node, depth, current }: { node: ChainNode; depth: number; cu
         {node.threadTitle ? ` "${node.threadTitle}"` : ""}
         <span className="meta">
           {" "}
-          · {node.triggerKind === "agent" ? "started by an agent" : node.triggerKind === "board" ? `board stage${node.boardColumn ? ` (${node.boardColumn})` : ""}` : node.triggerKind}
+          · {node.triggerKind === "agent" ? "started by an agent" : node.triggerKind === "schedule" ? "scheduled run" : node.triggerKind === "board" ? `board stage${node.boardColumn ? ` (${node.boardColumn})` : ""}` : node.triggerKind}
         </span>
       </div>
       {node.started?.map((child) => <ChainRow key={child.id} node={child} depth={depth + 1} />)}
@@ -182,6 +182,12 @@ export function TaskDetail({ id }: { id: number }) {
                   <code>{task.profileVersion}</code>
                   {task.profileCommit ? ` (commit ${task.profileCommit})` : ""}
                 </span>
+              )}
+              {task.scheduleId && (
+                <>
+                  {" · "}
+                  <a href={href(`/schedules`)}>schedule #{task.scheduleId}</a>
+                </>
               )}
               {task.startedByTask && (
                 <>

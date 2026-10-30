@@ -13,6 +13,34 @@ export interface WorkspaceInfo {
   willPush: boolean;
 }
 
+/** A run one of the agent's schedules started. */
+export interface ScheduleRun {
+  id: number;
+  name: string;
+  /** When it runs, in words ("every weekday at 09:00 UTC"). */
+  description: string;
+  /** Which run this is (1 = the first). */
+  run: number;
+  /** Who set it up, in words ("@alice in the admin UI", "your agent.md"). */
+  setUpBy: string;
+  /** The agent may change or delete it (its schedule tools, and not from agent.md). */
+  canChange: boolean;
+  /** When the run before this one started. */
+  previousRunAt: string | null;
+}
+
+function scheduleSection(schedule: ScheduleRun): string {
+  const since = schedule.previousRunAt ? `the last run (${schedule.previousRunAt.slice(0, 16).replace("T", " ")} UTC)` : "it was set up";
+  return [
+    "## This schedule",
+    `"${schedule.name}" (schedule #${schedule.id}) runs ${schedule.description}, and this is run ${schedule.run}. It was set up by ${schedule.setUpBy}.`,
+    `The request is the same on every run. Look at the thread and your earlier runs for what has changed since ${since}, and don't redo work that's done. If there's nothing new worth reporting, say so in a line or two.`,
+    schedule.canChange
+      ? `If the job this schedule exists for is finished for good, delete it with delete_schedule (id ${schedule.id}); to change its timing or request, use update_schedule.`
+      : "Only a person can change or stop this schedule (in the admin UI, under Schedules).",
+  ].join("\n");
+}
+
 const MAX_PROMPT = 100_000;
 const KIND_LABEL = { issue: "issue", pull: "pull request", discussion: "discussion" } as const;
 
@@ -192,6 +220,7 @@ export function buildFollowUpPrompt(input: {
   /** The previous attempt stopped at a usage limit. */
   interrupted: boolean;
   board?: BoardStage | null;
+  schedule?: ScheduleRun | null;
 }): string {
   const { task, thread, workspace, since, interrupted } = input;
   const kind = KIND_LABEL[thread.kind];
@@ -200,10 +229,13 @@ export function buildFollowUpPrompt(input: {
   const sections = [
     interrupted
       ? `You were interrupted while working on this (a usage limit, or the orchestrator restarted). Your uncommitted changes are still in the working copy. Continue where you left off.`
-      : `@${task.requestedBy} has a new request for you on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
+      : input.schedule
+        ? `It's time for a scheduled run of "${input.schedule.name}" on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`
+        : `@${task.requestedBy} has a new request for you on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
     "",
-    "## Request",
+    input.schedule ? "## What to do on each run" : "## Request",
     quote(clip(task.requestText, 20_000)),
+    ...(input.schedule ? ["", scheduleSection(input.schedule)] : []),
   ];
   if (fresh.length) {
     sections.push(
@@ -233,6 +265,7 @@ export function buildPrompt(input: {
   history: Task[];
   workspace: WorkspaceInfo;
   board?: BoardStage | null;
+  schedule?: ScheduleRun | null;
 }): string {
   const { agent, task, thread, history, workspace } = input;
   const kind = KIND_LABEL[thread.kind];
@@ -250,10 +283,13 @@ export function buildPrompt(input: {
 
   const sections = [
     `You are "${agent.name}" (GitHub handle @${agent.handle}), an AI agent working on the GitHub repository ${repo}.`,
-    `@${task.requestedBy} asked you for help on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
+    input.schedule
+      ? `It's time for a scheduled run of "${input.schedule.name}" on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`
+      : `@${task.requestedBy} asked you for help on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
     "",
-    "## Request",
+    input.schedule ? "## What to do on each run" : "## Request",
     quote(clip(task.requestText, 20_000)),
+    ...(input.schedule ? ["", scheduleSection(input.schedule)] : []),
     "",
     "## Working copy",
     workspaceText,

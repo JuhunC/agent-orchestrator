@@ -116,6 +116,21 @@ const AGENT: FileDoc = {
     { key: "timeout_minutes", type: "number", default: "DEFAULT_TIMEOUT_MINUTES", description: "Stop a task after this long.", example: "timeout_minutes: 45" },
     { key: "live", type: "boolean", default: "true", description: "Keep its session open between tasks on the same thread (faster follow-ups). false starts a new process per task.", example: "live: false" },
     { key: "replicas", type: "number", default: "no limit", description: "How many cards it may work at once on boards (pool columns pick the least busy agent).", example: "replicas: 2" },
+    {
+      key: "can_schedule",
+      type: "boolean",
+      default: "true",
+      description: "create_schedule, list_schedules, update_schedule, delete_schedule: when someone asks for repeating work (\"every Monday, check the dependencies\"), the agent sets up its own schedule. Each run starts it on the thread with the same request. People can pause, change or delete these in the admin UI (Schedules). A scheduled run can't make more schedules.",
+      example: "can_schedule: false",
+    },
+    {
+      key: "schedules",
+      type: "list",
+      default: "[]",
+      description:
+        "Runs on a timetable, written in the file. Each has a name, when (a cron expression like \"0 9 * * 1-5\", a shortcut like @daily, or an interval like \"every 6h\"), repo (owner/name), prompt (what to do each run), and optionally timezone (default SCHEDULE_TIMEZONE), issue (the issue or pull request each run works on; left out, the first run opens an issue for it), max_runs and ends_at. They show in the admin UI under Schedules, where they can be paused or run now; change them here.",
+      example: 'schedules:\n  - name: Weekly dependency check\n    when: "0 9 * * 1"\n    timezone: Asia/Seoul\n    repo: acme/widgets\n    prompt: Check for outdated dependencies and open one pull request updating the safe ones.',
+    },
     { key: "env", type: "map", default: "{}", description: "Extra environment variables for its tools and MCP servers.", example: "env:\n  NODE_ENV: test" },
     { key: "enabled", type: "boolean", default: "true", description: "false turns the agent off (the admin UI can also turn it off).", example: "enabled: false" },
   ],

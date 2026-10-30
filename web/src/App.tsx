@@ -9,6 +9,7 @@ import { Dashboard } from "./pages/Dashboard.tsx";
 import { Deliveries } from "./pages/Deliveries.tsx";
 import { History, ThreadDetail } from "./pages/History.tsx";
 import { Login } from "./pages/Login.tsx";
+import { Schedules } from "./pages/Schedules.tsx";
 import { Settings as SettingsPage } from "./pages/Settings.tsx";
 import { TaskDetail } from "./pages/TaskDetail.tsx";
 import { Tasks } from "./pages/Tasks.tsx";
@@ -64,6 +65,9 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
   } else if (section === "groups") {
     title = "Groups";
     page = <Groups />;
+  } else if (section === "schedules") {
+    title = "Schedules";
+    page = <Schedules />;
   } else if (section === "library") {
     title = "Library";
     page = <Library />;
@@ -88,6 +92,7 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
     { path: "/groups", key: "groups", label: "Groups", count: null },
     { path: "/library", key: "library", label: "Library", count: null },
     { path: "/boards", key: "boards", label: "Boards", count: null },
+    { path: "/schedules", key: "schedules", label: "Schedules", count: null },
     { path: "/history", key: "history", label: "History", count: null },
     { path: "/deliveries", key: "deliveries", label: "Webhooks", count: null },
     { path: "/settings", key: "settings", label: "Settings", count: null },

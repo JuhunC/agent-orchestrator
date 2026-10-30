@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { config } from "./config.ts";
-import type { Delivery, EventKind, Task, TaskEvent, TaskStatus, TaskUsage, ThreadKind, ThreadRef } from "./types.ts";
+import type { Delivery, EventKind, Schedule, Task, TaskEvent, TaskStatus, TaskUsage, ThreadKind, ThreadRef } from "./types.ts";
 
 mkdirSync(config.dataDir, { recursive: true });
 
@@ -119,6 +119,9 @@ addColumn("tasks", "dry_run", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "restarts", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "profile_version", "TEXT");
 addColumn("tasks", "profile_commit", "TEXT");
+// Set for runs a schedule started (see schedules/runner.ts).
+addColumn("tasks", "schedule_id", "INTEGER");
+db.exec("CREATE INDEX IF NOT EXISTS tasks_schedule ON tasks (schedule_id, id)");
 db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
 // Time-range queries (spending, usage, outcomes) use exactly this expression, so it's indexed.
 db.exec("CREATE INDEX IF NOT EXISTS tasks_ended ON tasks (COALESCE(finished_at, started_at, created_at))");
@@ -236,6 +239,7 @@ function toTask(row: Row): Task {
     restarts: Number(row.restarts ?? 0),
     profileVersion: (row.profile_version as string | null) ?? null,
     profileCommit: (row.profile_commit as string | null) ?? null,
+    scheduleId: row.schedule_id === null || row.schedule_id === undefined ? null : Number(row.schedule_id),
   };
 }
 
@@ -259,14 +263,15 @@ export interface NewTask {
   boardRound?: string | null;
   startedByTask?: number | null;
   dryRun?: boolean;
+  scheduleId?: number | null;
 }
 
 export function createTask(input: NewTask): Task {
   const result = db
     .prepare(
       `INSERT INTO tasks (agent, installation_id, owner, repo, thread_kind, thread_number, thread_title, thread_url,
-         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task, dry_run)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
+         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task, dry_run, schedule_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.agent,
@@ -289,6 +294,7 @@ export function createTask(input: NewTask): Task {
       input.boardRound ?? null,
       input.startedByTask ?? null,
       input.dryRun ? 1 : 0,
+      input.scheduleId ?? null,
     );
   return getTask(Number(result.lastInsertRowid))!;
 }
@@ -1110,4 +1116,153 @@ export function activeTaskCounts(): Record<string, number> {
 export function lastTaskIds(): Record<string, number> {
   const rows = db.prepare("SELECT agent, MAX(id) AS id FROM tasks GROUP BY agent").all() as Row[];
   return Object.fromEntries(rows.map((row) => [String(row.agent), Number(row.id)]));
+}
+
+// ---------- schedules: agents that run again and again on a timetable ----------
+
+db.exec(`CREATE TABLE IF NOT EXISTS schedules (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  agent TEXT NOT NULL,
+  name TEXT NOT NULL,
+  spec TEXT NOT NULL,
+  timezone TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  repo TEXT NOT NULL,
+  installation_id INTEGER,
+  thread_kind TEXT,
+  thread_number INTEGER,
+  prompt TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL,
+  file_key TEXT UNIQUE,
+  created_by TEXT NOT NULL,
+  created_by_task INTEGER,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  next_run_at TEXT,
+  last_run_at TEXT,
+  last_task_id INTEGER,
+  runs INTEGER NOT NULL DEFAULT 0,
+  max_runs INTEGER,
+  ends_at TEXT,
+  note TEXT
+)`);
+db.exec("CREATE INDEX IF NOT EXISTS schedules_due ON schedules (enabled, next_run_at)");
+
+function toSchedule(row: Row): Schedule {
+  const number = (value: SQLInputValue) => (value === null || value === undefined ? null : Number(value));
+  return {
+    id: Number(row.id),
+    agent: String(row.agent),
+    name: String(row.name),
+    when: String(row.spec),
+    timezone: String(row.timezone),
+    owner: String(row.owner),
+    repo: String(row.repo),
+    installationId: number(row.installation_id),
+    threadKind: (row.thread_kind as ThreadKind | null) ?? null,
+    threadNumber: number(row.thread_number),
+    prompt: String(row.prompt),
+    enabled: Boolean(row.enabled),
+    source: String(row.source) as Schedule["source"],
+    fileKey: (row.file_key as string | null) ?? null,
+    createdBy: String(row.created_by),
+    createdByTask: number(row.created_by_task),
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    nextRunAt: (row.next_run_at as string | null) ?? null,
+    lastRunAt: (row.last_run_at as string | null) ?? null,
+    lastTaskId: number(row.last_task_id),
+    runs: Number(row.runs ?? 0),
+    maxRuns: number(row.max_runs),
+    endsAt: (row.ends_at as string | null) ?? null,
+    note: (row.note as string | null) ?? null,
+  };
+}
+
+const SCHEDULE_COLUMNS: Record<string, string> = {
+  agent: "agent",
+  name: "name",
+  when: "spec",
+  timezone: "timezone",
+  owner: "owner",
+  repo: "repo",
+  installationId: "installation_id",
+  threadKind: "thread_kind",
+  threadNumber: "thread_number",
+  prompt: "prompt",
+  enabled: "enabled",
+  source: "source",
+  fileKey: "file_key",
+  createdBy: "created_by",
+  createdByTask: "created_by_task",
+  nextRunAt: "next_run_at",
+  lastRunAt: "last_run_at",
+  lastTaskId: "last_task_id",
+  runs: "runs",
+  maxRuns: "max_runs",
+  endsAt: "ends_at",
+  note: "note",
+};
+
+export type NewSchedule = Omit<Schedule, "id" | "createdAt" | "updatedAt" | "lastRunAt" | "lastTaskId" | "runs">;
+
+export function createSchedule(input: NewSchedule): Schedule {
+  const fields = Object.entries(input).filter(([key]) => SCHEDULE_COLUMNS[key]);
+  const at = now();
+  const result = db
+    .prepare(`INSERT INTO schedules (${fields.map(([key]) => SCHEDULE_COLUMNS[key]).join(", ")}, created_at, updated_at) VALUES (${fields.map(() => "?").join(", ")}, ?, ?)`)
+    .run(...fields.map(([, value]) => (typeof value === "boolean" ? (value ? 1 : 0) : ((value ?? null) as SQLInputValue))), at, at);
+  return getSchedule(Number(result.lastInsertRowid))!;
+}
+
+export function getSchedule(id: number): Schedule | null {
+  const row = db.prepare("SELECT * FROM schedules WHERE id = ?").get(id) as Row | undefined;
+  return row ? toSchedule(row) : null;
+}
+
+export function updateSchedule(id: number, patch: Partial<Schedule>): Schedule {
+  const sets: string[] = [];
+  const values: SQLInputValue[] = [];
+  for (const [key, value] of Object.entries(patch)) {
+    const column = SCHEDULE_COLUMNS[key];
+    if (!column) continue;
+    sets.push(`${column} = ?`);
+    values.push(typeof value === "boolean" ? (value ? 1 : 0) : ((value ?? null) as SQLInputValue));
+  }
+  if (sets.length) db.prepare(`UPDATE schedules SET ${sets.join(", ")}, updated_at = ? WHERE id = ?`).run(...values, now(), id);
+  return getSchedule(id)!;
+}
+
+export function deleteSchedule(id: number): void {
+  db.prepare("DELETE FROM schedules WHERE id = ?").run(id);
+}
+
+export function listSchedules(filter: { agent?: string; owner?: string; repo?: string } = {}): Schedule[] {
+  const where: string[] = [];
+  const values: SQLInputValue[] = [];
+  if (filter.agent) (where.push("agent = ?"), values.push(filter.agent));
+  if (filter.owner) (where.push("owner = ? COLLATE NOCASE"), values.push(filter.owner));
+  if (filter.repo) (where.push("repo = ? COLLATE NOCASE"), values.push(filter.repo));
+  return (db.prepare(`SELECT * FROM schedules ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY agent, id`).all(...values) as Row[]).map(toSchedule);
+}
+
+/** Switched-on schedules whose next run is at or before `at`. */
+export function dueSchedules(at: string): Schedule[] {
+  return (db.prepare("SELECT * FROM schedules WHERE enabled = 1 AND next_run_at IS NOT NULL AND next_run_at <= ? ORDER BY next_run_at, id").all(at) as Row[]).map(toSchedule);
+}
+
+export function scheduleCount(agent: string): number {
+  return Number((db.prepare("SELECT COUNT(*) AS n FROM schedules WHERE agent = ?").get(agent) as Row).n);
+}
+
+/** A schedule's latest runs, newest first. */
+export function scheduleTasks(scheduleId: number, limit = 10): Task[] {
+  return (db.prepare("SELECT * FROM tasks WHERE schedule_id = ? ORDER BY id DESC LIMIT ?").all(scheduleId, limit) as Row[]).map(toTask);
+}
+
+/** How many runs a schedule started before this task, and when the latest of them was made. */
+export function scheduleRunsBefore(scheduleId: number, taskId: number): { count: number; lastAt: string | null } {
+  const row = db.prepare("SELECT COUNT(*) AS n, MAX(created_at) AS last FROM tasks WHERE schedule_id = ? AND id < ?").get(scheduleId, taskId) as Row;
+  return { count: Number(row.n), lastAt: (row.last as string | null) ?? null };
 }

@@ -2,7 +2,8 @@ export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 /** "agent": another issue's agent started it (start_related_agent). */
 /** "maintenance": the orchestrator started it itself (e.g. to fix a pull request that conflicts with its base). */
-export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance";
+/** "schedule": one of the agent's schedules came round (see schedules/runner.ts). */
+export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance" | "schedule";
 /** "github": something a person did on the thread while the agent was working. */
 export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error" | "github";
 
@@ -63,6 +64,46 @@ export interface Task {
   /** Fingerprint of the agent's profile that ran it, and the profiles folder's commit (see profiles/version.ts). */
   profileVersion: string | null;
   profileCommit: string | null;
+  /** The schedule that started this run, if one did. */
+  scheduleId: number | null;
+}
+
+/**
+ * A timetable an agent runs on: "ui" made in the admin UI, "agent" made by the agent itself
+ * (create_schedule), "file" listed under schedules: in its agent.md.
+ */
+export interface Schedule {
+  id: number;
+  agent: string;
+  name: string;
+  /** A cron expression, a shortcut (@daily) or an interval ("every 6h"); see schedules/when.ts. */
+  when: string;
+  timezone: string;
+  owner: string;
+  repo: string;
+  installationId: number | null;
+  /** The issue, pull request or discussion each run works on; null until the first run opens an issue for it. */
+  threadKind: ThreadKind | null;
+  threadNumber: number | null;
+  /** What to do on each run. */
+  prompt: string;
+  enabled: boolean;
+  source: "ui" | "agent" | "file";
+  /** For file schedules: "<agent>/<name>", to match the file on reload. */
+  fileKey: string | null;
+  createdBy: string;
+  createdByTask: number | null;
+  createdAt: string;
+  updatedAt: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastTaskId: number | null;
+  runs: number;
+  /** Stop after this many runs, or after this time (null: keep going). */
+  maxRuns: number | null;
+  endsAt: string | null;
+  /** Why it's paused or finished, or what happened to the last run. */
+  note: string | null;
 }
 
 /** Tokens one model used. */

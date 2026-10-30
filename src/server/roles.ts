@@ -40,6 +40,7 @@ const OPERATOR_WRITES: [string, RegExp][] = [
   ["DELETE", /^\/api\/sessions\/[^/]+$/],
   ["DELETE", /^\/api\/limit$/],
   ["POST", /^\/api\/workspaces\/cleanup$/],
+  ["POST", /^\/api\/schedules\/\d+\/run$/],
 ];
 
 const READS = new Set(["GET", "HEAD", "OPTIONS"]);
@@ -51,7 +52,9 @@ export function refusal(role: Role, method: string, path: string, body: unknown)
   if (OPERATOR_WRITES.some(([verb, pattern]) => verb === method && pattern.test(path))) return null;
   // Operators may pause and resume the queue, nothing else in Settings.
   if (method === "PUT" && path === "/api/settings" && body && typeof body === "object" && Object.keys(body).every((key) => key === "paused")) return null;
-  return "Operators can run, stop and retry agents and pause the queue, but not change configuration. Ask an admin.";
+  // ... and pause and resume schedules.
+  if (method === "PATCH" && /^\/api\/schedules\/\d+$/.test(path) && body && typeof body === "object" && Object.keys(body).every((key) => key === "enabled")) return null;
+  return "Operators can run, stop and retry agents, pause the queue and pause schedules, but not change configuration. Ask an admin.";
 }
 
 const SECRET = /token|secret|password|private|key$/i;

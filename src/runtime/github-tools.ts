@@ -41,6 +41,7 @@ import { makeSharedDir } from "./isolation.ts";
 import { checkSubIssues, describeSubIssueWork, fetchBranch, isAncestor } from "./sub-issues.ts";
 import { ensureBaseBranch, excludeFromGit, parentBranchFor, type Workspace } from "./workspace.ts";
 import { recordIncident } from "../runner/incidents.ts";
+import { scheduleTools } from "../schedules/tools.ts";
 
 /** Set when the task came from a project board column. */
 export interface BoardContext {
@@ -917,6 +918,8 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
     );
   }
 
+  tools.push(...scheduleTools(profile, current));
+
   // In a dry run, tools that would change GitHub only say what they'd have done.
   const guarded = tools.map((definition) =>
     WRITE_TOOLS.has(definition.name)
@@ -953,4 +956,7 @@ const WRITE_TOOLS = new Set([
   "start_related_agent",
   "write_wiki_page",
   "delete_wiki_page",
+  "create_schedule",
+  "update_schedule",
+  "delete_schedule",
 ]);

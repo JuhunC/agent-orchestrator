@@ -34,5 +34,6 @@ Checking what a tool returned: read the `tool_result` blocks in `request.body.me
 - Tasks go through the scheduler: `db.createTask(...)` then `h.scheduler.kick()`; `h.scheduler.shutdown(0)` / `start()` to simulate a restart.
 - Wait for all agents: loop until no queued/running task, then `await h.scheduler.idle()` (`quiet()` in test/sub-issues.test.ts).
 - Task log: `GET /api/tasks/:id` → `events[].message`.
+- Schedules: don't wait for real time; call `runDueSchedules(new Date(nextRunAt + 1 s))` from `src/schedules/runner.ts` (it also syncs agent.md schedules). Any due schedule runs, so keep other schedules' timings out of the window (test/schedules.test.ts). An agent.md with an error (a bad schedule too) doesn't run at all.
 - Signed-in calls (AUTH_DISABLED "false"): `db.createSession(id, login, 1)` and cookie `ao_session=${app.signCookie(id)}` (test/roles.test.ts).
 - Inside the Docker image only: `test/docker/isolation.docker-test.ts` (`docker build -t ao-test . && docker run --rm -v "$PWD/test:/app/test:ro" ao-test node --test test/docker/isolation.docker-test.ts`).

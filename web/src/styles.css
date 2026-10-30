@@ -1227,3 +1227,76 @@ blockquote {
 .chain-row {
   overflow-wrap: anywhere;
 }
+
+/* ---------- schedules ---------- */
+
+.warn-text {
+  color: var(--queued);
+  font-size: 12.5px;
+}
+button.link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+button.link:hover {
+  text-decoration: underline;
+}
+.schedule-banners {
+  padding: 12px 14px 0;
+}
+.schedule-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 20px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.schedule-item:last-child {
+  border-bottom: none;
+}
+.schedule-main {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.schedule-main .title {
+  font-weight: 600;
+}
+.schedule-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+}
+.run-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--cancelled);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.run-dot.succeeded {
+  background: var(--succeeded);
+}
+.run-dot.failed {
+  background: var(--failed);
+}
+.run-dot.running {
+  background: var(--running);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+.run-dot.queued {
+  background: var(--queued);
+}
+@media (max-width: 640px) {
+  .schedule-side {
+    align-items: flex-start;
+  }
+}

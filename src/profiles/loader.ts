@@ -5,7 +5,8 @@ import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
 import { RELATIONS, type Relation } from "../github/relations.ts";
 import { normaliseMcpServers } from "./mcp.ts";
-import { EFFORTS, type Effort, type Group, type Library, type Profile, type ProfileSet, type Role, type SkillInfo } from "./types.ts";
+import { checkTimezone, parseWhen, shortestGapMinutes } from "../schedules/when.ts";
+import { EFFORTS, type Effort, type FileSchedule, type Group, type Library, type Profile, type ProfileSet, type Role, type SkillInfo } from "./types.ts";
 
 const HANDLE = /^[a-z\d](?:[a-z\d]|-(?=[a-z\d])){0,38}$/i;
 const NAME = /^[a-z\d][a-z\d_-]{0,39}$/i;
@@ -157,6 +158,47 @@ function parseAccess(value: unknown, field: string, errors: string[]): "none" | 
   return "none";
 }
 
+/** schedules: in agent.md, checked; entries with problems are left out and reported. */
+function parseSchedules(value: unknown, errors: string[]): FileSchedule[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    errors.push("schedules must be a list (each with name, when, repo and prompt)");
+    return [];
+  }
+  const schedules: FileSchedule[] = [];
+  value.forEach((item, index) => {
+    const entry = (item ?? {}) as Record<string, unknown>;
+    const name = String(entry.name ?? "").trim();
+    const where = `schedules[${index}]${name ? ` (${name})` : ""}`;
+    const problems: string[] = [];
+    if (!name) problems.push("needs a name");
+    else if (schedules.some((other) => other.name === name)) problems.push("has the same name as another schedule");
+    const when = String(entry.when ?? "").trim();
+    const timezone = entry.timezone ? String(entry.timezone).trim() : null;
+    try {
+      const parsed = parseWhen(when);
+      if (timezone) checkTimezone(timezone);
+      const gap = shortestGapMinutes(parsed, timezone ?? config.scheduleTimezone);
+      if (gap < config.scheduleMinMinutes) problems.push(`runs every ${gap} minutes; the shortest allowed is ${config.scheduleMinMinutes} (SCHEDULE_MIN_MINUTES)`);
+    } catch (error) {
+      problems.push(when ? (error as Error).message : 'needs "when" (a cron expression like "0 9 * * 1-5", @daily, or "every 6h")');
+    }
+    const repo = String(entry.repo ?? "").trim();
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) problems.push('needs "repo" as owner/name');
+    const issue = entry.issue === undefined || entry.issue === null ? null : Number(entry.issue);
+    if (issue !== null && (!Number.isInteger(issue) || issue < 1)) problems.push('"issue" must be an issue or pull request number');
+    const prompt = String(entry.prompt ?? "").trim();
+    if (!prompt) problems.push('needs "prompt": what to do on each run');
+    const maxRuns = entry.max_runs === undefined || entry.max_runs === null ? null : Number(entry.max_runs);
+    if (maxRuns !== null && (!Number.isInteger(maxRuns) || maxRuns < 1)) problems.push('"max_runs" must be a whole number, 1 or more');
+    const endsAt = entry.ends_at === undefined || entry.ends_at === null ? null : String(entry.ends_at instanceof Date ? entry.ends_at.toISOString() : entry.ends_at);
+    if (endsAt && Number.isNaN(Date.parse(endsAt))) problems.push('"ends_at" must be a date like 2026-12-31');
+    if (problems.length) errors.push(`${where} ${problems.join("; ")}`);
+    else schedules.push({ name, when, timezone, repo, issue, prompt, maxRuns, endsAt: endsAt && /^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/.test(endsAt) && entry.ends_at instanceof Date ? endsAt.slice(0, 10) : endsAt });
+  });
+  return schedules;
+}
+
 export function parseEffort(value: unknown, errors: string[], field = "effort"): Effort | null {
   if (value === undefined || value === null || value === "") return null;
   if (EFFORTS.includes(String(value) as Effort)) return String(value) as Effort;
@@ -255,6 +297,8 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
     effortFrom: data.effort ? "agent" : groupEffort ? "group" : null,
     groups: memberOf.map((group) => group.name),
     replicas: number("replicas"),
+    canSchedule: data.can_schedule !== false,
+    schedules: parseSchedules(data.schedules, errors),
     prompt: body,
     toolsAllow: tools.allow === undefined ? null : list(tools.allow, "tools.allow"),
     toolsDeny: list(tools.deny, "tools.deny"),

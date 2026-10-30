@@ -75,6 +75,8 @@ export interface Agent {
   errors: string[];
   groups: string[];
   replicas: number | null;
+  /** It may set up its own schedules when asked (can_schedule). */
+  canSchedule?: boolean;
   modelFrom: "agent" | "group" | null;
   effortFrom: "agent" | "group" | null;
   stats?: AgentStats | null;
@@ -136,7 +138,7 @@ export interface Task {
   threadNumber: number;
   threadTitle: string;
   threadUrl: string;
-  triggerKind: "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance";
+  triggerKind: "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance" | "schedule";
   requestedBy: string;
   requestText: string;
   requestUrl: string;
@@ -170,6 +172,50 @@ export interface Task {
   /** Fingerprint of the agent's profile that ran it, and the profiles folder's commit. */
   profileVersion?: string | null;
   profileCommit?: string | null;
+  /** The schedule that started this run. */
+  scheduleId?: number | null;
+}
+
+/** A timetable an agent runs on (see the Schedules page). */
+export interface ScheduleView {
+  id: number;
+  agent: string;
+  name: string;
+  /** Cron expression, @daily-style shortcut or "every 6h". */
+  when: string;
+  timezone: string;
+  owner: string;
+  repo: string;
+  threadKind: ThreadKind | null;
+  threadNumber: number | null;
+  prompt: string;
+  enabled: boolean;
+  /** ui: made here; agent: the agent made it when asked; file: in its agent.md. */
+  source: "ui" | "agent" | "file";
+  createdBy: string;
+  createdByTask: number | null;
+  createdAt: string;
+  nextRunAt: string | null;
+  lastRunAt: string | null;
+  lastTaskId: number | null;
+  runs: number;
+  maxRuns: number | null;
+  endsAt: string | null;
+  note: string | null;
+  /** When it runs, in words. */
+  description: string;
+  upcoming: string[];
+  error: string | null;
+  agentMissing: boolean;
+  recent: { id: number; status: TaskStatus; createdAt: string; finishedAt: string | null; costUsd: number | null }[];
+}
+
+export interface SchedulesResponse {
+  timezone: string;
+  minMinutes: number;
+  perAgent: number;
+  pauseAfterFailures: number;
+  schedules: ScheduleView[];
 }
 
 export interface BoardColumnInfo {
@@ -447,7 +493,8 @@ export type BusMessage =
   | { type: "sessions" }
   | { type: "limits" }
   | { type: "boards" }
-  | { type: "incidents" };
+  | { type: "incidents" }
+  | { type: "schedules" };
 
 export class ApiError extends Error {
   status: number;
