@@ -162,6 +162,8 @@ export interface Task {
   boardItemId: string | null;
   /** The task whose agent started this one from a related issue. */
   startedByTask: number | null;
+  /** A replay that changed nothing on GitHub. */
+  dryRun?: boolean;
 }
 
 export interface BoardColumnInfo {

@@ -32,7 +32,7 @@ export function roleOf(login: string | null, special: string[] = []): Role | nul
 /** Changes operators may make: running the queue, not configuring it. */
 const OPERATOR_WRITES: [string, RegExp][] = [
   ["POST", /^\/api\/tasks$/],
-  ["POST", /^\/api\/tasks\/\d+\/(cancel|retry|run-now)$/],
+  ["POST", /^\/api\/tasks\/\d+\/(cancel|retry|run-now|replay)$/],
   ["POST", /^\/api\/tasks\/cancel-all$/],
   ["POST", /^\/api\/agents\/[^/]+\/enabled$/],
   ["POST", /^\/api\/agents\/[^/]+\/github-account\/check$/],

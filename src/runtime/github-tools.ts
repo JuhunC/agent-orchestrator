@@ -916,5 +916,40 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
     );
   }
 
-  return createSdkMcpServer({ name: "github", version: "1.0.0", tools, alwaysLoad: true });
+  // In a dry run, tools that would change GitHub only say what they'd have done.
+  const guarded = tools.map((definition) =>
+    WRITE_TOOLS.has(definition.name)
+      ? {
+          ...definition,
+          handler: async (args: Record<string, unknown>, extra: unknown) => {
+            const ctx = current();
+            if (!ctx?.task.dryRun) return definition.handler(args, extra);
+            const summary = Object.entries(args ?? {})
+              .map(([key, value]) => `${key}: ${typeof value === "string" ? (value.length > 120 ? `${JSON.stringify(value.slice(0, 120))}…` : JSON.stringify(value)) : JSON.stringify(value)}`)
+              .join(", ");
+            ctx.onEvent("tool", `Dry run: would ${definition.name.replace(/_/g, " ")} (${summary.slice(0, 400)})`);
+            return ok(`Dry run: ${definition.name} wasn't carried out, because nothing changes on GitHub in a dry run. Carry on as if it had worked.`);
+          },
+        }
+      : definition,
+  );
+  return createSdkMcpServer({ name: "github", version: "1.0.0", tools: guarded, alwaysLoad: true });
 }
+
+/** Tools that change something on GitHub (or the board): a dry run only reports them. */
+const WRITE_TOOLS = new Set([
+  "post_comment",
+  "update_issue",
+  "set_card_fields",
+  "submit_review",
+  "commit_and_push",
+  "open_pull_request",
+  "move_to_column",
+  "create_sub_issue",
+  "move_sub_issue",
+  "link_issue",
+  "merge_into_parent",
+  "start_related_agent",
+  "write_wiki_page",
+  "delete_wiki_page",
+]);

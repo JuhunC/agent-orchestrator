@@ -133,6 +133,7 @@ export function planStart(start: Pick<RelatedStart, "target" | "agent">): StartP
   // Otherwise: the agent that worked on the issue last.
   const ref = { owner: target.owner, repo: target.repo, kind: "issue" as const, number: target.number };
   const last = tasksForThread(ref)
+    .filter((task) => !task.dryRun)
     .reverse()
     .map((task) => agents.find((agent) => agent.name === task.agent))
     .find((agent): agent is Profile => Boolean(agent));

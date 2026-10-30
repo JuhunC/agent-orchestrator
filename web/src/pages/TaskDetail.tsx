@@ -46,6 +46,10 @@ export function TaskDetail({ id }: { id: number }) {
     const created = await api.post<Task>(`/api/tasks/${task.id}/retry`);
     navigate(`/tasks/${created.id}`);
   };
+  const replay = async () => {
+    const created = await api.post<Task>(`/api/tasks/${task.id}/replay`);
+    navigate(`/tasks/${created.id}`);
+  };
   const stderrCount = events.filter((event) => event.kind === "stderr").length;
 
   return (
@@ -61,9 +65,24 @@ export function TaskDetail({ id }: { id: number }) {
             {task.status === "queued" ? "Remove from queue" : "Stop agent"}
           </button>
         ) : (
-          <button onClick={retry}>Run again</button>
+          <>
+            <button onClick={retry}>Run again</button>
+            {!task.dryRun && (
+              <button onClick={() => void replay()} title="Run the same request with the agent's current profile, without changing anything on GitHub">
+                Dry run
+              </button>
+            )}
+          </>
         )}
       </div>
+
+      {task.dryRun && (
+        <div className="banner info">
+          <span className="grow">
+            <b>Dry run{task.retryOf ? <> of <a href={href(`/tasks/${task.retryOf}`)}>task #{task.retryOf}</a></> : null}.</b> The agent worked with its current profile in a checkout of its own, and nothing was changed on GitHub: what it would have posted, pushed or moved is in the log as "Dry run: would …". Compare its reply with the original's to judge a profile change.
+          </span>
+        </div>
+      )}
 
       {task.error && task.status !== "succeeded" && <div className="banner error">{task.error}</div>}
       {task.status === "queued" && task.retryAt && (
@@ -101,7 +120,7 @@ export function TaskDetail({ id }: { id: number }) {
               )}
               {task.retryOf && (
                 <>
-                  {" · retry of "}
+                  {task.dryRun ? " · dry run of " : " · retry of "}
                   <a href={href(`/tasks/${task.retryOf}`)}>#{task.retryOf}</a>
                 </>
               )}

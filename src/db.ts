@@ -114,6 +114,8 @@ addColumn("tasks", "board_item_id", "TEXT");
 addColumn("tasks", "board_round", "TEXT");
 addColumn("tasks", "usage", "TEXT");
 addColumn("tasks", "started_by_task", "INTEGER");
+// Dry runs replay a task without changing anything on GitHub (see run-task.ts).
+addColumn("tasks", "dry_run", "INTEGER NOT NULL DEFAULT 0");
 db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
 db.exec(`CREATE TABLE IF NOT EXISTS incidents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -224,6 +226,7 @@ function toTask(row: Row): Task {
     boardItemId: (row.board_item_id as string | null) ?? null,
     boardRound: (row.board_round as string | null) ?? null,
     startedByTask: row.started_by_task === null || row.started_by_task === undefined ? null : Number(row.started_by_task),
+    dryRun: Boolean(row.dry_run),
   };
 }
 
@@ -246,14 +249,15 @@ export interface NewTask {
   boardItemId?: string | null;
   boardRound?: string | null;
   startedByTask?: number | null;
+  dryRun?: boolean;
 }
 
 export function createTask(input: NewTask): Task {
   const result = db
     .prepare(
       `INSERT INTO tasks (agent, installation_id, owner, repo, thread_kind, thread_number, thread_title, thread_url,
-         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?)`,
+         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task, dry_run)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.agent,
@@ -275,6 +279,7 @@ export function createTask(input: NewTask): Task {
       input.boardItemId ?? null,
       input.boardRound ?? null,
       input.startedByTask ?? null,
+      input.dryRun ? 1 : 0,
     );
   return getTask(Number(result.lastInsertRowid))!;
 }
@@ -379,7 +384,7 @@ export function threadHistory(ref: ThreadRef, agent: string, excludeTaskId?: num
   const rows = db
     .prepare(
       `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND agent = ?
-         AND (${clauses}) AND status IN ('succeeded', 'failed', 'cancelled') AND forgotten = 0 AND id != ?
+         AND (${clauses}) AND status IN ('succeeded', 'failed', 'cancelled') AND forgotten = 0 AND dry_run = 0 AND id != ?
        ORDER BY id DESC LIMIT ?`,
     )
     .all(...values, excludeTaskId ?? -1, config.historyLimit) as Row[];
@@ -391,7 +396,7 @@ export function recentTaskForThread(ref: ThreadRef, agent: string, withinSeconds
   const row = db
     .prepare(
       `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND thread_kind = ?
-         AND thread_number = ? AND agent = ? AND created_at >= ? ORDER BY id DESC LIMIT 1`,
+         AND thread_number = ? AND agent = ? AND created_at >= ? AND dry_run = 0 ORDER BY id DESC LIMIT 1`,
     )
     .get(ref.owner, ref.repo, ref.kind, ref.number, agent, since) as Row | undefined;
   return row ? toTask(row) : null;
@@ -401,7 +406,7 @@ export function queuedTaskForThread(ref: ThreadRef, agent: string): Task | null 
   const row = db
     .prepare(
       `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND thread_kind = ?
-         AND thread_number = ? AND agent = ? AND status = 'queued' LIMIT 1`,
+         AND thread_number = ? AND agent = ? AND status = 'queued' AND dry_run = 0 LIMIT 1`,
     )
     .get(ref.owner, ref.repo, ref.kind, ref.number, agent) as Row | undefined;
   return row ? toTask(row) : null;
@@ -411,7 +416,7 @@ export function queuedTaskForThread(ref: ThreadRef, agent: string): Task | null 
 export function runningTasksForThread(ref: ThreadRef): Task[] {
   const rows = db
     .prepare(
-      `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND status = 'running'
+      `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND status = 'running' AND dry_run = 0
          AND ((thread_kind = ? AND thread_number = ?) OR (? = 'pull' AND pr_number = ?)) ORDER BY id`,
     )
     .all(ref.owner, ref.repo, ref.kind, ref.number, ref.kind, ref.number) as Row[];
@@ -422,7 +427,7 @@ export function lastSessionId(ref: ThreadRef, agent: string): string | null {
   const row = db
     .prepare(
       `SELECT session_id FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND thread_kind = ?
-         AND thread_number = ? AND agent = ? AND session_id IS NOT NULL AND forgotten = 0
+         AND thread_number = ? AND agent = ? AND session_id IS NOT NULL AND forgotten = 0 AND dry_run = 0
          AND status IN ('succeeded', 'failed') ORDER BY id DESC LIMIT 1`,
     )
     .get(ref.owner, ref.repo, ref.kind, ref.number, agent) as Row | undefined;
@@ -806,7 +811,7 @@ export function taskOutcomes(since: string, agent?: string): { agent: string; st
   const rows = db
     .prepare(
       `SELECT agent, status, COUNT(*) AS count, COALESCE(SUM((julianday(finished_at) - julianday(started_at)) * 1440), 0) AS minutes
-       FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? AND status IN ('succeeded', 'failed', 'cancelled') ${agent ? "AND agent = ?" : ""} GROUP BY agent, status`,
+       FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? AND status IN ('succeeded', 'failed', 'cancelled') AND dry_run = 0 ${agent ? "AND agent = ?" : ""} GROUP BY agent, status`,
     )
     .all(...(agent ? [since, agent] : [since])) as Row[];
   return rows.map((row) => ({ agent: String(row.agent), status: String(row.status), count: Number(row.count), minutes: Number(row.minutes) }));
@@ -952,12 +957,12 @@ export function usageRows(since: string, agent?: string): UsageRow[] {
 
 /** Money spent by agents on one board card. */
 export function boardItemCost(board: string, itemId: string): number {
-  const row = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM tasks WHERE board = ? AND board_item_id = ?").get(board, itemId) as Row;
+  const row = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM tasks WHERE board = ? AND board_item_id = ? AND dry_run = 0").get(board, itemId) as Row;
   return Number(row.total);
 }
 
 export function activeBoardTasks(board: string, itemId: string): Task[] {
-  return (db.prepare("SELECT * FROM tasks WHERE board = ? AND board_item_id = ? AND status IN ('queued', 'running') ORDER BY id").all(board, itemId) as Row[]).map(toTask);
+  return (db.prepare("SELECT * FROM tasks WHERE board = ? AND board_item_id = ? AND status IN ('queued', 'running') AND dry_run = 0 ORDER BY id").all(board, itemId) as Row[]).map(toTask);
 }
 
 // ---------- "all" columns: several agents work one card, then vote where it goes ----------

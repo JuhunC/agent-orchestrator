@@ -240,6 +240,39 @@ export function registerApi(app: FastifyInstance): void {
       requestText: original.requestText,
       requestUrl: original.requestUrl,
       retryOf: original.id,
+      dryRun: original.dryRun,
+    });
+    bus.publish({ type: "task", task });
+    scheduler.kick();
+    return task;
+  });
+
+  /**
+   * Replays a task as a dry run with the agent's current profile: the same thread and request,
+   * in its own checkout and session, with nothing changed on GitHub. For trying a prompt change.
+   */
+  app.post<{ Params: { id: string } }>("/api/tasks/:id/replay", async (request, reply) => {
+    const original = getTask(Number(request.params.id));
+    if (!original) return reply.code(404).send({ error: "Task not found" });
+    if (!loadProfiles().agents.some((agent) => agent.name === original.agent)) return reply.code(400).send({ error: `${original.agent} no longer exists` });
+    const task = createTask({
+      agent: original.agent,
+      installationId: original.installationId,
+      owner: original.owner,
+      repo: original.repo,
+      threadKind: original.threadKind,
+      threadNumber: original.threadNumber,
+      threadTitle: original.threadTitle,
+      threadUrl: original.threadUrl,
+      triggerKind: "manual",
+      requestedBy: request.adminLogin ?? original.requestedBy,
+      requestText: original.requestText,
+      requestUrl: original.requestUrl,
+      retryOf: original.id,
+      board: original.board,
+      boardColumn: original.boardColumn,
+      boardItemId: original.boardItemId,
+      dryRun: true,
     });
     bus.publish({ type: "task", task });
     scheduler.kick();

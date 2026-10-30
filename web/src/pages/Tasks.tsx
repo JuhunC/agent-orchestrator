@@ -86,7 +86,10 @@ export function Tasks() {
                     </td>
                     <td>
                       {who(task.requestedBy)}
-                      <div className="meta">{task.triggerKind}</div>
+                      <div className="meta">
+                        {task.triggerKind}
+                        {task.dryRun ? " · dry run" : ""}
+                      </div>
                     </td>
                     <td className="num">{duration(task.startedAt, task.finishedAt, now)}</td>
                     <td className="num meta">{ago(task.createdAt, now)}</td>

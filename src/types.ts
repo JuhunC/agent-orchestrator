@@ -55,6 +55,8 @@ export interface Task {
   boardRound: string | null;
   /** The task whose agent started this one from a related issue (start_related_agent). */
   startedByTask: number | null;
+  /** A replay that changes nothing on GitHub: write tools only say what they would do. */
+  dryRun: boolean;
 }
 
 /** Tokens one model used. */

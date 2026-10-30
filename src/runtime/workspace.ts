@@ -22,8 +22,9 @@ export interface Workspace {
   startSha: string;
 }
 
-export function workspaceDir(task: Pick<Task, "owner" | "repo" | "agent" | "threadKind" | "threadNumber">): string {
-  return join(config.dataDir, "workspaces", task.owner, task.repo, task.agent, `${task.threadKind}-${task.threadNumber}`);
+export function workspaceDir(task: Pick<Task, "owner" | "repo" | "agent" | "threadKind" | "threadNumber"> & { dryRun?: boolean }): string {
+  // Dry runs get their own checkout, so they never touch the real one.
+  return join(config.dataDir, "workspaces", task.owner, task.repo, task.dryRun ? `${task.agent}~dry-run` : task.agent, `${task.threadKind}-${task.threadNumber}`);
 }
 
 /** Keeps a path out of commits without touching the repo's .gitignore. */

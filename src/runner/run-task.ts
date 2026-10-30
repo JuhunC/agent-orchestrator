@@ -117,7 +117,9 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     thread = await fetchThread(gh, task.owner, task.repo, task.threadKind, task.threadNumber);
     task = patch(task.id, { threadTitle: thread.title, threadUrl: thread.url });
 
-    if (task.progressCommentId) {
+    if (task.dryRun) {
+      onEvent("system", `Dry run${task.retryOf ? ` of task #${task.retryOf}` : ""} with ${profile.name}'s current profile: nothing is changed on GitHub`);
+    } else if (task.progressCommentId) {
       // Resuming after a usage-limit pause: keep updating the same comment.
       await editComment(gh, target(), task.progressCommentId, renderProgress(profile, task, state)).catch(() => undefined);
     } else {
@@ -127,7 +129,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     throttle.start();
 
     const column = boardContext ? boardContext.board.columns[boardContext.column]! : null;
-    if (boardContext && column?.onStart && getBoardItem(boardContext.board.name, boardContext.itemId)?.status === column.name) {
+    if (!task.dryRun && boardContext && column?.onStart && getBoardItem(boardContext.board.name, boardContext.itemId)?.status === column.name) {
       await moveCard(boardContext.board, boardContext.itemId, column.onStart, { agentMove: false, trigger: false, excludeTaskId: task.id });
       onEvent("system", `Moved the card to ${column.onStart}`);
     }
@@ -183,7 +185,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       library: profiles.library,
       workspace,
       env: agentEnv(profile, taskEnv(task, workspace)),
-      resumeSessionId: lastSessionId(ref, profile.name),
+      // A dry run starts afresh (the thread's history is in its prompt), so it can't change the real session.
+      resumeSessionId: task.dryRun ? null : lastSessionId(ref, profile.name),
       prompts,
       context,
       model: startModel,
@@ -259,7 +262,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
 
     // Safety net: publish work the agent left behind, if its profile allows it.
-    if (workspace.willPush) {
+    if (workspace.willPush && !task.dryRun) {
       const left = await unpublishedWork(workspace);
       if ((left.dirty || left.unpushed) && profile.github.finalize) {
         state.phase = "publishing";
@@ -333,6 +336,11 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     const relatedStarts = context.relatedStarts ?? [];
     for (const start of relatedStarts) subLines.push(`**Asked the agent of ${refText(start.target, task.owner, task.repo)} to pick it up** (${RELATION_NAME[start.relation]}).`);
     details = [own, ...subLines, details].filter(Boolean).join("\n\n");
+    if (task.dryRun) {
+      // Nothing from a dry run reaches GitHub or the board.
+      await finish("succeeded", outcome.result, "", "", commits);
+      return;
+    }
     if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
     await finish("succeeded", outcome.result, "", details, commits);
     if (boardContext && move && !task.boardRound) {
@@ -423,13 +431,13 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     state.finishedAt = Date.now();
     state.note = status === "succeeded" ? "" : reason;
     task = patch(task.id, { status, finishedAt: new Date(state.finishedAt).toISOString(), error: status === "succeeded" ? null : reason, resultText: text || task.resultText });
-    if (status === "failed") recordIncident("task_failed", "warning", `${task.agent} failed on ${task.owner}/${task.repo}#${task.threadNumber}: ${reason.split("\n")[0]!.slice(0, 300)}`, { taskId: task.id });
+    if (status === "failed" && !task.dryRun) recordIncident("task_failed", "warning", `${task.agent} failed on ${task.owner}/${task.repo}#${task.threadNumber}: ${reason.split("\n")[0]!.slice(0, 300)}`, { taskId: task.id });
     // Mentions that arrived too late for the agent to see become a follow-up run.
     settleInbox(task, status !== "cancelled");
     emit(task.id, "status", status === "succeeded" ? "Finished" : status === "cancelled" ? "Cancelled" : `Failed: ${reason}`);
     await throttle.flush(true);
     await throttle.stop();
-    if (!gh || !profile) return;
+    if (!gh || !profile || task.dryRun) return;
     if (status === "cancelled" && !task.progressCommentId) return;
     const body = renderResult(profile, task, {
       ok: status === "succeeded",

@@ -103,8 +103,8 @@ function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex").slice(0, 16);
 }
 
-export function sessionKey(task: Pick<Task, "agent" | "owner" | "repo" | "threadKind" | "threadNumber">): string {
-  return `${task.agent}|${task.owner}/${task.repo}|${task.threadKind}#${task.threadNumber}`.toLowerCase();
+export function sessionKey(task: Pick<Task, "agent" | "owner" | "repo" | "threadKind" | "threadNumber"> & { dryRun?: boolean }): string {
+  return `${task.agent}${task.dryRun ? "~dry-run" : ""}|${task.owner}/${task.repo}|${task.threadKind}#${task.threadNumber}`.toLowerCase();
 }
 
 /** Runs agent turns, keeping live sessions open between tasks on the same thread. */
