@@ -9,6 +9,7 @@ import { seedProfiles } from "./profiles/seed.ts";
 import { scheduler } from "./runner/scheduler.ts";
 import { startWorkspaceCleanup } from "./runtime/cleanup.ts";
 import { startOutcomeChecks } from "./runner/outcomes.ts";
+import { startAccountChecks } from "./github/accounts.ts";
 import { setupIsolation } from "./runtime/isolation.ts";
 import { sessions } from "./runtime/manager.ts";
 import { buildServer } from "./server/http.ts";
@@ -59,6 +60,7 @@ async function main(): Promise<void> {
   startBoards();
   startWorkspaceCleanup();
   startOutcomeChecks();
+  startAccountChecks();
 
   let stopping = false;
   const stop = async (signal: string) => {

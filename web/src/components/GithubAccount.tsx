@@ -64,6 +64,7 @@ export function GithubAccount({ agent, onChanged }: { agent: Agent; onChanged: (
                   <>Registered here{account.savedAt ? ` on ${new Date(account.savedAt).toLocaleDateString()}` : ""}</>
                 )}
                 {account.scopes !== null && <> · scopes: {account.scopes || "none"}</>}
+                {account.expiresAt ? <> · expires {new Date(account.expiresAt).toLocaleDateString()}</> : account.login ? <> · doesn't expire</> : null}
               </div>
             </div>
             {account.source === "ui" && (
@@ -78,6 +79,9 @@ export function GithubAccount({ agent, onChanged }: { agent: Agent; onChanged: (
           </p>
         )}
         {account?.problem && <div className="banner error">{account.problem}</div>}
+        {account?.expiresAt && !account.problem && Date.parse(account.expiresAt) - Date.now() < 14 * 86_400_000 && (
+          <div className="banner">The token expires on {new Date(account.expiresAt).toLocaleDateString()}. Make a new one and register it, or {agent.name}'s tasks will fail.</div>
+        )}
         {warning && <div className="banner">{warning}</div>}
         {error && <div className="banner error">{error}</div>}
 

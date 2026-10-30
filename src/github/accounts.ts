@@ -2,6 +2,7 @@ import { deleteSetting, getSetting, setSetting } from "../db.ts";
 import { errorMessage } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import type { Profile } from "../profiles/types.ts";
+import { recordIncident } from "../runner/incidents.ts";
 import { seal, unseal } from "../server/secrets.ts";
 import { getBotIdentity, GitHubOctokit, installationClient, installationToken, noreplyEmail, type GitHubClient } from "./app.ts";
 
@@ -19,6 +20,8 @@ export interface AccountInfo {
   avatarUrl: string;
   /** Scopes of a classic token (x-oauth-scopes); null for fine-grained tokens. */
   scopes: string | null;
+  /** When the token expires (GitHub says so in a response header), or null when it doesn't. */
+  expiresAt?: string | null;
 }
 
 export interface AgentAccount extends AccountInfo {
@@ -46,8 +49,12 @@ export async function lookUpToken(token: string): Promise<AccountInfo> {
     const response = await gh.request("GET /user");
     const data = response.data as { login: string; id: number; name?: string | null; avatar_url?: string; type?: string };
     if (data.type && data.type !== "User") throw new AccountError(`The token belongs to ${data.login}, a ${data.type}; use a user account's token.`);
-    const scopes = (response.headers as Record<string, string | undefined>)["x-oauth-scopes"];
-    return { login: data.login, id: data.id, name: data.name ?? null, avatarUrl: data.avatar_url ?? "", scopes: scopes === undefined ? null : scopes };
+    const headers = response.headers as Record<string, string | undefined>;
+    const scopes = headers["x-oauth-scopes"];
+    // e.g. "2026-12-01 00:00:00 UTC"
+    const expiry = headers["github-authentication-token-expiration"];
+    const expiresAt = expiry ? new Date(expiry.replace(/ UTC$/, "Z").replace(" ", "T")).toISOString() : null;
+    return { login: data.login, id: data.id, name: data.name ?? null, avatarUrl: data.avatar_url ?? "", scopes: scopes === undefined ? null : scopes, expiresAt };
   } catch (error) {
     if (error instanceof AccountError) throw error;
     const status = Number((error as { status?: number }).status ?? 0);
@@ -105,6 +112,15 @@ function profileOf(agent: string | Profile): Profile | null {
   return typeof agent === "string" ? (loadProfiles().agents.find((profile) => profile.name === agent) ?? null) : agent;
 }
 
+/** Like accountToken, but null instead of an error when the account's token is missing. */
+export function accountTokenOrNull(agent: string | Profile): string | null {
+  try {
+    return accountToken(agent);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The token the agent acts with on GitHub, or null when it uses the App. agent.md's variable wins.
  * Throws when the agent has an account whose token is missing: it never falls back to the App.
@@ -140,11 +156,43 @@ export async function agentAccount(agent: string | Profile): Promise<(AgentAccou
       );
       envInfo.set(token, known);
     }
-    return { ...(known.info ?? empty), agent: name, source: "env", envVar, savedAt: null, problem: known.error };
+    return { ...(known.info ?? empty), agent: name, source: "env", envVar, savedAt: null, problem: known.error ?? (known.info ? expired(known.info) : null) };
   }
   const saved = stored(name);
   if (!saved) return null;
-  return { ...saved.info, agent: name, source: "ui", envVar: null, problem: saved.token ? null : UNREADABLE };
+  return { ...saved.info, agent: name, source: "ui", envVar: null, problem: saved.token ? expired(saved.info) : UNREADABLE };
+}
+
+function expired(info: AccountInfo): string | null {
+  return info.expiresAt && Date.parse(info.expiresAt) <= Date.now() ? `The token expired on ${info.expiresAt.slice(0, 10)}. Make a new one and register it again.` : null;
+}
+
+const warned = new Map<string, string>();
+
+/** Warns (Recent problems, alerts) about agents' tokens that expire within two weeks, once a day each. */
+export async function checkTokenExpiry(now = Date.now()): Promise<void> {
+  for (const profile of loadProfiles().agents) {
+    if (!profile.github.accountTokenEnv && !getSetting(KEY(profile.name))) continue;
+    const account = await agentAccount(profile).catch(() => null);
+    if (!account?.expiresAt) continue;
+    const days = Math.floor((Date.parse(account.expiresAt) - now) / 86_400_000);
+    if (days > 14) continue;
+    const day = new Date(now).toISOString().slice(0, 10);
+    if (warned.get(profile.name) === day) continue;
+    warned.set(profile.name, day);
+    const when = account.expiresAt.slice(0, 10);
+    recordIncident(
+      "account_token",
+      days < 0 ? "critical" : "warning",
+      days < 0 ? `${profile.name}'s GitHub token (@${account.login}) expired on ${when}: its tasks fail until a new one is registered.` : `${profile.name}'s GitHub token (@${account.login}) expires on ${when}, in ${days} day${days === 1 ? "" : "s"}. Register a new one on the agent's page.`,
+    );
+  }
+}
+
+export function startAccountChecks(): void {
+  const tick = () => void checkTokenExpiry().catch(() => undefined);
+  setTimeout(tick, 30_000).unref();
+  setInterval(tick, 60 * 60_000).unref();
 }
 
 type Who = { agent: string; installationId: number };

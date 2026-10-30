@@ -34,7 +34,7 @@ export class FakeGitHub {
   port = 0;
   requests: { method: string; path: string; body: any; actor: string }[] = [];
   /** Personal access tokens: who each belongs to. Requests with one act as that user. */
-  userTokens = new Map<string, { login: string; id: number; name?: string; push?: boolean }>();
+  userTokens = new Map<string, { login: string; id: number; name?: string; push?: boolean; expires?: string }>();
   /** Who added each 👀 reaction. */
   reactionsBy: string[] = [];
   issues = new Map<number, FakeIssue>();
@@ -98,8 +98,8 @@ export class FakeGitHub {
         return;
       }
       void this.handle(req).then(
-        ({ status, body }) => {
-          res.writeHead(status, { "content-type": "application/json" });
+        ({ status, body, headers }) => {
+          res.writeHead(status, { "content-type": "application/json", ...headers });
           res.end(JSON.stringify(body));
         },
         (error) => {
@@ -172,7 +172,7 @@ export class FakeGitHub {
     };
   }
 
-  private async handle(req: IncomingMessage): Promise<{ status: number; body: unknown }> {
+  private async handle(req: IncomingMessage): Promise<{ status: number; body: unknown; headers?: Record<string, string> }> {
     const url = new URL(req.url ?? "/", this.url);
     const path = url.pathname.replace(/^\/api\/v3/, "").replace(/^\/api\/graphql$/, "/graphql");
     const body = await this.readBody(req);
@@ -193,7 +193,13 @@ export class FakeGitHub {
       return { status: 200, body: { access_token: `gho_${body.code}`, token_type: "bearer" } };
     }
     if (method === "GET" && path === "/user") {
-      if (user) return { status: 200, body: { login: user.login, id: user.id, name: user.name ?? null, avatar_url: `${this.url}/avatars/${user.login}`, type: "User" } };
+      if (user) {
+        return {
+          status: 200,
+          body: { login: user.login, id: user.id, name: user.name ?? null, avatar_url: `${this.url}/avatars/${user.login}`, type: "User" },
+          headers: { "x-oauth-scopes": "repo, project", ...(user.expires ? { "github-authentication-token-expiration": user.expires } : {}) },
+        };
+      }
       return { status: 200, body: { login: this.oauthUser, id: 1 } };
     }
     if (method === "GET" && path === "/app") {

@@ -346,7 +346,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     if (boardContext && move && !task.boardRound) {
       // After the reply is posted: hand the card to the next column (and its agent).
       addHandoff(boardContext.board.name, boardContext.itemId, { taskId: task.id, agent: profile.name, fromColumn: boardContext.column, toColumn: move.to, note: move.note });
-      const landed = await moveCard(boardContext.board, boardContext.itemId, move.to, { agentMove: true, excludeTaskId: task.id, startedBy: task.id }).catch((error) => {
+      const landed = await moveCard(boardContext.board, boardContext.itemId, move.to, { agentMove: true, excludeTaskId: task.id, startedBy: task.id, actor: task }).catch((error) => {
         log.warn("Could not move the card", { task: task.id, error: errorMessage(error) });
         return null;
       });
@@ -387,7 +387,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       try {
         if (subMove.itemId) {
           handoff(subMove.itemId, subMove);
-          await moveCard(board, subMove.itemId, subMove.to, { agentMove: true, startedBy: task.id });
+          await moveCard(board, subMove.itemId, subMove.to, { agentMove: true, startedBy: task.id, actor: task });
         } else {
           const itemId = await addIssueToBoard(board, subMove.issue, subMove.to, { trigger: false, fields: context.subIssueFields[subMove.issue.number] });
           handoff(itemId, subMove);

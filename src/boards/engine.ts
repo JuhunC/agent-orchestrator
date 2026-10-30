@@ -41,6 +41,7 @@ import { loadBoards, type Board, type BoardColumn } from "./loader.ts";
 import { hasCardFields } from "./rules.ts";
 import { recordIncident } from "../runner/incidents.ts";
 import { config } from "../config.ts";
+import { accountTokenOrNull, clientFor } from "../github/accounts.ts";
 
 /** Live state of each board, for the admin UI. */
 export interface BoardStatus {
@@ -327,7 +328,12 @@ export async function boardTaskSettled(taskId: number): Promise<void> {
 }
 
 /** Moves a card for an agent (or a guard), then reacts to the new column like any other move. */
-export async function moveCard(board: Board, itemId: string, to: string, options: { excludeTaskId?: number; agentMove: boolean; trigger?: boolean; startedBy?: number }): Promise<string> {
+export async function moveCard(
+  board: Board,
+  itemId: string,
+  to: string,
+  options: { excludeTaskId?: number; agentMove: boolean; trigger?: boolean; startedBy?: number; actor?: { agent: string; installationId: number } },
+): Promise<string> {
   const row = getBoardItem(board.name, itemId);
   if (!row) throw new Error("This card isn't known to the board");
   let target = to;
@@ -339,7 +345,16 @@ export async function moveCard(board: Board, itemId: string, to: string, options
   // Record first, so the webhook GitHub sends for our own move is recognised as already handled.
   saveBoardItem({ ...row, status: target, moves: row.moves + (options.agentMove ? 1 : 0) });
   try {
-    await setItemStatus(gh, info, itemId, target);
+    // An agent with its own GitHub account moves cards as it, when the account can reach the project.
+    const account = options.actor ? await clientFor(options.actor).catch(() => null) : null;
+    const asAccount = account && options.actor && accountTokenOrNull(options.actor.agent) ? account : null;
+    try {
+      await setItemStatus(asAccount ?? gh, info, itemId, target);
+    } catch (error) {
+      if (!asAccount) throw error;
+      log.warn("Couldn't move the card as the agent's GitHub account; moved it with the board's access", { board: board.name, agent: options.actor!.agent, error: errorMessage(error) });
+      await setItemStatus(gh, info, itemId, target);
+    }
   } catch (error) {
     saveBoardItem(row);
     throw error;

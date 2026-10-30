@@ -16,7 +16,8 @@ export type IncidentKind =
   | "spend_warning"
   | "usage_limit"
   | "isolation"
-  | "webhook_signature";
+  | "webhook_signature"
+  | "account_token";
 
 const RANK = { info: 0, warning: 1, critical: 2 } as const;
 /** The same problem isn't posted again within this long. */

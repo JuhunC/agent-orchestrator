@@ -42,6 +42,7 @@ export interface AgentAccount {
   name: string | null;
   avatarUrl: string;
   scopes: string | null;
+  expiresAt?: string | null;
   source: "ui" | "env";
   envVar: string | null;
   savedAt: string | null;
