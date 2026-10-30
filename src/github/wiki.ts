@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, unl
 import { dirname, extname, join, relative } from "node:path";
 import { config } from "../config.ts";
 import { git, GitError } from "../runner/git.ts";
-import { getBotIdentity, installationToken, repoRemoteUrl } from "./app.ts";
+import { commitIdentityFor, gitTokenFor } from "./accounts.ts";
+import { repoRemoteUrl } from "./app.ts";
 
 /**
  * GitHub wikis have no REST API: each is a git repository (<repo>.wiki.git). The orchestrator
@@ -67,9 +68,12 @@ interface Checkout {
 }
 
 /** Clones the wiki, or brings the checkout up to date with GitHub. */
-async function sync(installationId: number, owner: string, repo: string): Promise<Checkout> {
+/** Whose credentials wiki git commands use: the agent's GitHub account, or the App installation. */
+type Who = { agent: string; installationId: number };
+
+async function sync(who: Who, owner: string, repo: string): Promise<Checkout> {
   const dir = join(config.dataDir, "wikis", owner.toLowerCase(), repo.toLowerCase());
-  const token = await installationToken(installationId);
+  const token = await gitTokenFor(who);
   if (!existsSync(join(dir, ".git"))) {
     rmSync(dir, { recursive: true, force: true });
     mkdirSync(dirname(dir), { recursive: true });
@@ -102,9 +106,9 @@ function findPage(dir: string, name: string): string | null {
   return walk(dir).find((file) => file.split("/").pop()!.replace(/\.[^.]+$/, "").toLowerCase() === wanted) ?? null;
 }
 
-export function listWikiPages(installationId: number, owner: string, repo: string): Promise<WikiPage[]> {
+export function listWikiPages(who: Who, owner: string, repo: string): Promise<WikiPage[]> {
   return locked(`${owner}/${repo}`.toLowerCase(), async () => {
-    const { dir } = await sync(installationId, owner, repo);
+    const { dir } = await sync(who, owner, repo);
     return walk(dir).map((file) => ({
       title: titleOf(file),
       file,
@@ -114,9 +118,9 @@ export function listWikiPages(installationId: number, owner: string, repo: strin
   });
 }
 
-export function readWikiPage(installationId: number, owner: string, repo: string, name: string): Promise<{ page: WikiPage; content: string; truncated: boolean }> {
+export function readWikiPage(who: Who, owner: string, repo: string, name: string): Promise<{ page: WikiPage; content: string; truncated: boolean }> {
   return locked(`${owner}/${repo}`.toLowerCase(), async () => {
-    const { dir } = await sync(installationId, owner, repo);
+    const { dir } = await sync(who, owner, repo);
     const file = findPage(dir, name);
     if (!file) throw new WikiError(`No page called "${name}" in the ${owner}/${repo} wiki. Use list_wiki_pages to see what's there.`);
     const content = readFileSync(join(dir, file), "utf8");
@@ -142,7 +146,7 @@ export interface WikiWrite {
  * changed the wiki meanwhile, it starts again from their version once.
  */
 export function writeWikiPage(
-  installationId: number,
+  who: Who,
   owner: string,
   repo: string,
   name: string,
@@ -150,9 +154,9 @@ export function writeWikiPage(
   message: string,
 ): Promise<WikiWrite> {
   return locked(`${owner}/${repo}`.toLowerCase(), async () => {
-    const identity = await getBotIdentity(installationId);
+    const identity = await commitIdentityFor(who);
     for (let attempt = 1; ; attempt++) {
-      const { dir, branch, token } = await sync(installationId, owner, repo);
+      const { dir, branch, token } = await sync(who, owner, repo);
       const existing = findPage(dir, name);
       if (content === null && !existing) throw new WikiError(`No page called "${name}" in the ${owner}/${repo} wiki.`);
       const file = existing ?? `${pageSlug(name)}.md`;

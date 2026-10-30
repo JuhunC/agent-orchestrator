@@ -133,6 +133,8 @@ export function Agents() {
                       </div>
                       <div className="meta">
                         @{agent.handle}
+                        {agent.account?.login && agent.account.login.toLowerCase() !== agent.handle.toLowerCase() && ` · acts as @${agent.account.login}`}
+                        {agent.account?.login && agent.account.login.toLowerCase() === agent.handle.toLowerCase() && " · own GitHub account"}
                         {agent.model && ` · ${agent.model}`}
                         {agent.description && ` · ${agent.description}`}
                       </div>

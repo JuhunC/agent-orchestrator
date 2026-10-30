@@ -5,7 +5,8 @@ import { describeRules, hasCardFields, hasRules } from "../boards/rules.ts";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { addEvent, addHandoff, addVote, getBoardItem, lastSessionId, listHandoffs, tasksInRound, threadHistory, updateTask } from "../db.ts";
-import { installationClient, type GitHubClient } from "../github/app.ts";
+import { agentAccount, clientFor } from "../github/accounts.ts";
+import type { GitHubClient } from "../github/app.ts";
 import { refText } from "../github/relations.ts";
 import { editComment, fetchThread, postComment, type ThreadContext } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
@@ -105,7 +106,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       boardContext = { board, column: column.name, itemId: task.boardItemId, pendingMove: null, testRuns: [], reviews: [], subMoves: [], newSubIssues: [], subIssueFields: {} };
     }
     emit(task.id, "status", `Started ${profile.name}${boardContext ? ` (${boardContext.board.name}: ${boardContext.column})` : ""}`);
-    gh = await installationClient(task.installationId);
+    gh = await clientFor(task);
     thread = await fetchThread(gh, task.owner, task.repo, task.threadKind, task.threadNumber);
     task = patch(task.id, { threadTitle: thread.title, threadUrl: thread.url });
 
@@ -332,7 +333,12 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       log.info("Related-issue start", { task: task.id, target: `${start.target.owner}/${start.target.repo}#${start.target.number}`, result: line });
     }
   } catch (error) {
-    const message = errorMessage(error);
+    let message = errorMessage(error);
+    // An agent acting as its own GitHub account fails like this when the account can't reach the repository.
+    if (/\b(401|403|404)\b|Not Found|Bad credentials|Authentication failed|Repository not found|Resource not accessible|Permission to .* denied/i.test(message)) {
+      const account = await agentAccount(task.agent).catch(() => null);
+      if (account?.login) message += ` (${task.agent} acts on GitHub as @${account.login}: check that this account can access ${task.owner}/${task.repo} and that its token is still valid, or remove the account from the agent to use the GitHub App.)`;
+    }
     log.error("Task failed", { task: task.id, error: message });
     onEvent("error", message);
     await finish("failed", task.resultText ?? "", message);
@@ -417,7 +423,7 @@ export async function markInterrupted(task: Task): Promise<void> {
   emit(task.id, "error", "Interrupted because the orchestrator restarted");
   if (!task.progressCommentId) return;
   try {
-    const gh = await installationClient(task.installationId);
+    const gh = await clientFor(task);
     const state: ProgressState = {
       phase: "failed",
       steps: [],

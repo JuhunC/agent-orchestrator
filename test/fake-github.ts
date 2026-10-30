@@ -32,7 +32,11 @@ export interface FakeIssue {
 export class FakeGitHub {
   server: Server;
   port = 0;
-  requests: { method: string; path: string; body: any }[] = [];
+  requests: { method: string; path: string; body: any; actor: string }[] = [];
+  /** Personal access tokens: who each belongs to. Requests with one act as that user. */
+  userTokens = new Map<string, { login: string; id: number; name?: string; push?: boolean }>();
+  /** Who added each 👀 reaction. */
+  reactionsBy: string[] = [];
   issues = new Map<number, FakeIssue>();
   permissions = new Map<string, string>();
   labels: string[] = [];
@@ -172,9 +176,14 @@ export class FakeGitHub {
     const url = new URL(req.url ?? "/", this.url);
     const path = url.pathname.replace(/^\/api\/v3/, "").replace(/^\/api\/graphql$/, "/graphql");
     const body = await this.readBody(req);
-    this.requests.push({ method: req.method ?? "GET", path: path + url.search, body });
+    // Like GitHub: a personal access token acts as its user; anything else here is the App.
+    const token = String(req.headers.authorization ?? "").replace(/^(token|bearer)\s+/i, "");
+    const user = this.userTokens.get(token);
+    const actor = user ? { login: user.login, type: "User" } : { login: "test-orchestrator[bot]", type: "Bot" };
+    this.requests.push({ method: req.method ?? "GET", path: path + url.search, body, actor: actor.login });
     const method = req.method ?? "GET";
     let match: RegExpMatchArray | null;
+    if (!user && /^(ghp_|github_pat_)/.test(token)) return { status: 401, body: { message: "Bad credentials" } };
 
     if (method === "POST" && (match = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/))) {
       return { status: 201, body: { token: "ghs_faketoken", expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: {}, repository_selection: "all" } };
@@ -183,7 +192,10 @@ export class FakeGitHub {
       if (this.oauth === "bad_code") return { status: 200, body: { error: "bad_verification_code", error_description: "The code passed is incorrect or expired." } };
       return { status: 200, body: { access_token: `gho_${body.code}`, token_type: "bearer" } };
     }
-    if (method === "GET" && path === "/user") return { status: 200, body: { login: this.oauthUser, id: 1 } };
+    if (method === "GET" && path === "/user") {
+      if (user) return { status: 200, body: { login: user.login, id: user.id, name: user.name ?? null, avatar_url: `${this.url}/avatars/${user.login}`, type: "User" } };
+      return { status: 200, body: { login: this.oauthUser, id: 1 } };
+    }
     if (method === "GET" && path === "/app") {
       return { status: 200, body: { slug: "test-orchestrator", html_url: `${this.url}/apps/test-orchestrator`, external_url: this.appHomepage, owner: { login: "acme", type: "Organization" } } };
     }
@@ -197,7 +209,10 @@ export class FakeGitHub {
       const permission = this.permissions.get(match[1]!) ?? "none";
       return { status: 200, body: { permission, role_name: permission, user: { login: match[1] } } };
     }
-    if (method === "GET" && /^\/repos\/[^/]+\/[^/]+$/.test(path)) return { status: 200, body: { default_branch: "main", full_name: "acme/widgets" } };
+    if (method === "GET" && /^\/repos\/[^/]+\/[^/]+$/.test(path)) {
+      if (user && !path.startsWith("/repos/acme/widgets")) return { status: 404, body: { message: "Not Found" } };
+      return { status: 200, body: { default_branch: "main", full_name: "acme/widgets", permissions: { push: user ? user.push !== false : true, pull: true, admin: false, maintain: false } } };
+    }
     if (method === "GET" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)$/))) {
       const issue = this.issues.get(Number(match[1]));
       return issue ? { status: 200, body: this.issueJson(issue) } : { status: 404, body: { message: "Not Found" } };
@@ -214,7 +229,7 @@ export class FakeGitHub {
     }
     if (method === "POST" && path === "/repos/acme/widgets/issues") {
       const number = Math.max(0, ...this.issues.keys()) + 1;
-      const issue = this.addIssue({ number, title: body.title, body: body.body ?? "", user: { login: "test-orchestrator[bot]" }, labels: body.labels ?? [] });
+      const issue = this.addIssue({ number, title: body.title, body: body.body ?? "", user: { login: actor.login }, labels: body.labels ?? [] });
       return { status: 201, body: this.issueJson(issue) };
     }
     if ((match = path.match(/^\/repos\/[^/]+\/[^/]+\/issues\/(\d+)\/(parent|sub_issues?|dependencies\/blocked_by|dependencies\/blocking)(?:\/(\d+))?$/))) {
@@ -273,7 +288,7 @@ export class FakeGitHub {
       const comment: FakeComment = {
         id: this.nextId++,
         body: body.body,
-        user: { login: "test-orchestrator[bot]", type: "Bot" },
+        user: actor,
         created_at: new Date().toISOString(),
         html_url: `${this.url}/acme/widgets/issues/${issue.number}#comment`,
         edits: 0,
@@ -308,7 +323,7 @@ export class FakeGitHub {
     }
     if (method === "POST" && path === "/repos/acme/widgets/pulls") {
       const number = Math.max(0, ...this.issues.keys()) + 1;
-      this.issues.set(number, { number, title: body.title, body: body.body, user: { login: "test-orchestrator[bot]" }, comments: [], pull: { head: body.head, base: body.base } });
+      this.issues.set(number, { number, title: body.title, body: body.body, user: { login: actor.login }, comments: [], pull: { head: body.head, base: body.base } });
       this.prOpened?.(number);
       return { status: 201, body: { number, html_url: `${this.url}/acme/widgets/pull/${number}` } };
     }
@@ -331,14 +346,17 @@ export class FakeGitHub {
     if (method === "POST" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/reviews$/))) {
       const pr = this.issues.get(Number(match[1]));
       // Like GitHub: an app can't approve or block a PR it opened itself.
-      if (pr?.user.login.endsWith("[bot]") && body.event !== "COMMENT") return { status: 422, body: { message: `Unprocessable Entity: "Can not ${body.event === "APPROVE" ? "approve" : "request changes on"} your own pull request"` } };
+      if (pr?.user.login === actor.login && body.event !== "COMMENT") return { status: 422, body: { message: `Unprocessable Entity: "Can not ${body.event === "APPROVE" ? "approve" : "request changes on"} your own pull request"` } };
       this.reviews.push({ number: Number(match[1]), event: body.event, body: body.body });
       return { status: 200, body: { id: this.nextId++ } };
     }
     if (method === "POST" && path === "/graphql") {
       const query = String(body.query);
       const vars = body.variables ?? {};
-      if (query.includes("addReaction")) this.reactions++;
+      if (query.includes("addReaction")) {
+        this.reactions++;
+        this.reactionsBy.push(actor.login);
+      }
       if (query.includes("query ResolveProject")) {
         if (vars.owner !== "acme" || vars.number !== 1) return { status: 200, body: { data: { organization: null } } };
         return { status: 200, body: { data: { organization: { projectV2: { id: this.project.id, title: this.project.title, url: `${this.url}/orgs/acme/projects/1`, field: { id: "F_status", name: vars.field, options: this.project.options } } } } } };

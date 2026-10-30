@@ -3,6 +3,7 @@ import { config, repoAllowed } from "./config.ts";
 import { createTask, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
 import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
 import type { Profile } from "./profiles/types.ts";
+import { agentForLogin as agentOfAccount, clientFor } from "./github/accounts.ts";
 import { installationClient, type GitHubClient } from "./github/app.ts";
 import { addEyesReaction, markAgentOnThread, permissionAtLeast, userPermission } from "./github/threads.ts";
 import { errorMessage, log } from "./log.ts";
@@ -191,6 +192,9 @@ export async function handleWebhook(event: string, deliveryId: string, payload: 
     const installationId = Number(payload.installation?.id ?? 0);
     if (!repoFull || !installationId) return record(deliveryId, event, payload, "ignored", "No repository or installation in payload");
     if (payload.sender?.type === "Bot") return record(deliveryId, event, payload, "ignored", "Sent by a bot");
+    // What agents do as their own GitHub accounts is their work, not a request: like the App's.
+    const ownAgent = await agentOfAccount(String(payload.sender?.login ?? ""));
+    if (ownAgent) return record(deliveryId, event, payload, "ignored", `Sent by @${payload.sender.login}, the GitHub account agent ${ownAgent} acts as`);
     if (!loadProfiles().agents.length) return record(deliveryId, event, payload, "ignored", "No agents configured");
 
     const intents = intentsFor(event, payload);
@@ -222,7 +226,8 @@ export async function handleWebhook(event: string, deliveryId: string, payload: 
     }
     for (const intent of intents) {
       if (told.has(intent.agent.name)) {
-        if (intent.reactTo) await addEyesReaction(gh, intent.reactTo).catch(() => undefined);
+        const as = await clientFor({ agent: intent.agent.name, installationId }).catch(() => null);
+        if (intent.reactTo && as) await addEyesReaction(as, intent.reactTo).catch(() => undefined);
         continue;
       }
       outcomes.push(await accept(gh, intent, { owner, repo, installationId, sender }));
@@ -252,7 +257,8 @@ async function accept(
       requestText: `${queued.requestText}\n\n---\n\n@${context.sender} also asked (${intent.requestUrl}):\n\n${intent.requestText}`,
     });
     bus.publish({ type: "task", task: merged });
-    if (intent.reactTo) await addEyesReaction(gh, intent.reactTo).catch(() => undefined);
+    const as = await clientFor({ agent: agent.name, installationId: context.installationId }).catch(() => null);
+    if (intent.reactTo && as) await addEyesReaction(as, intent.reactTo).catch(() => undefined);
     return `Queued: added to task #${queued.id} for ${agent.name}`;
   }
 
@@ -273,10 +279,13 @@ async function accept(
   bus.publish({ type: "task", task });
 
   const label = config.labelPrefix && config.labelPrefix !== "none" ? `${config.labelPrefix}${agent.name}` : null;
+  // The agent acknowledges as itself: its GitHub account if it has one, otherwise the App.
+  // (If its account's token is unusable, the task says so when it runs; nothing is done as the App.)
+  const as = await clientFor({ agent: agent.name, installationId: context.installationId }).catch(() => null);
   await Promise.all([
-    intent.reactTo ? addEyesReaction(gh, intent.reactTo).catch(() => undefined) : undefined,
-    intent.kind !== "discussion" && intent.trigger === "mention"
-      ? markAgentOnThread(gh, context.owner, context.repo, intent.number, agent.handle, label)
+    intent.reactTo && as ? addEyesReaction(as, intent.reactTo).catch(() => undefined) : undefined,
+    as && intent.kind !== "discussion" && intent.trigger === "mention"
+      ? markAgentOnThread(as, context.owner, context.repo, intent.number, agent.handle, label)
       : undefined,
   ]);
   return `Queued task #${task.id} for ${agent.name}`;

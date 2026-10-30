@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, useApi, type AgentsResponse, type GithubPermissions, type ModelInfo } from "../api.ts";
 import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
+import { GithubAccount } from "../components/GithubAccount.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
 import { AgentUsage } from "../components/Usage.tsx";
@@ -164,6 +165,8 @@ export function AgentDetail({ name }: { name: string }) {
           </div>
         </Panel>
       </div>
+
+      <GithubAccount agent={agent} onChanged={() => void reload()} />
 
       <AgentUsage agent={agent.name} />
 

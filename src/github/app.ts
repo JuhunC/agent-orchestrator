@@ -124,6 +124,12 @@ export async function findInstallation(owner: string, repo: string): Promise<num
   return data.id;
 }
 
+/** The noreply address GitHub attributes a user's commits by: <id>+<login>@users.noreply.<host>. */
+export function noreplyEmail(id: number, login: string): string {
+  const host = config.github.isDotCom ? "users.noreply.github.com" : `users.noreply.${new URL(config.github.url).hostname}`;
+  return `${id}+${login}@${host}`;
+}
+
 let botIdentity: { name: string; email: string } | null = null;
 
 /** The `name[bot]` identity commits are attributed to, so GitHub shows the app's avatar. */

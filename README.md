@@ -90,6 +90,7 @@ github:
   merge_into_parent: false     # merge_into_parent: merge a sub-issue into its parent's branch
   parent_branch: true          # a sub-issue branches from and merges into its parent's branch
   start_related: false         # start_related_agent: true, or some of [parent, sub_issue, blocked_by, blocks]
+  # account_token_env: CODER_GITHUB_TOKEN  # optional: act as this GitHub account (see below)
 max_turns: 300
 max_budget_usd: 20
 timeout_minutes: 90
@@ -155,6 +156,17 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 Each agent works in a full clone of the repository, refreshed from GitHub when a task starts, so git commands in its shell (log, diff, blame, merge) never need GitHub access. The shell has no GitHub credentials; `fetch_from_github` fetches for it. Workspaces made by older versions as blob-less clones are converted the next time they're used.
 
 Agents push only to `agent/<name>/issue-<n>` or `ao/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to or merge into the default branch.
+
+### A GitHub account per agent
+
+By default every agent acts on GitHub as the orchestrator's GitHub App (`your-app[bot]`). An agent can act as a GitHub account of its own instead: open the agent's page, and under **GitHub account** paste a personal access token of that account. The orchestrator checks it with GitHub, shows the account, and keeps the token on the server, encrypted with `DATA_DIR/data-key`. Or name an environment variable in agent.md with `github.account_token_env: CODER_GITHUB_TOKEN`, which takes precedence. Agents without one keep using the App.
+
+- **As the account:** everything the agent does on GitHub in its tasks: the progress and result comments, `post_comment`, issue edits, labels, closing issues, sub-issues and relations, pull requests, reviews, merges, wiki pages, the 👀 reaction and assignment when it's mentioned, and every git clone, fetch and push. Its commits are authored by the account (its name and `<id>+<login>@users.noreply.github.com` address), so GitHub shows them as the account's.
+- **Still the App:** webhooks, board card moves and project fields (they use the board's access), and the orchestrator's own notices on cards.
+- **The token:** a classic token with the `repo` scope (add `workflow` if the agent may change GitHub Actions files) covers everything, including wikis. A fine-grained token needs Contents, Issues and Pull requests read and write, and Commit statuses and Checks read for `get_ci_status`, on the repositories the agent works on. **Check access** on the agent's page says which repositories the account can push to.
+- **Use an account made for the agent** (a machine user). What that account does on GitHub doesn't start agents and isn't passed to them, like the App's own activity, so a person's own account would stop working as a trigger. Giving the account the same login as the agent's handle makes @-mentions autocomplete and lets people assign issues to it.
+- With accounts, one agent can approve another's pull request: GitHub doesn't let the App approve a PR it opened itself, but a reviewer agent acting as a different account can.
+- If the account's token stops working, or can't be decrypted after `DATA_DIR/data-key` changed, the agent's tasks fail and say so; they don't fall back to the App.
 
 ### Sub-issues
 
@@ -222,7 +234,7 @@ columns:
 | PR, review, inline comment | mention, assign or request review | works on the PR's branch (forks: replies only) |
 | Discussion | mention the handle | branch and PR if it changes anything |
 
-Only people with write access (`TRIGGER_MIN_PERMISSION`) can start agents; bots are ignored, so agents can't trigger each other in a loop.
+Only people with write access (`TRIGGER_MIN_PERMISSION`) can start agents; bots and the GitHub accounts agents act as are ignored, so agents can't trigger each other in a loop.
 
 **While an agent works**, what people do on its issue or PR reaches it mid-task: comments (and edits), reviews and inline comments, labels, assignees, title or description edits, pushes, closing, reopening or merging. That includes the PR it opened for an issue. The agent gets it after its current step, or just before it would finish, so it keeps going and deals with it. Mentioning an agent that's already working on the thread tells it there instead of queueing another run; if it finished before seeing the mention, a follow-up run is queued. Activity from people below `TRIGGER_MIN_PERMISSION` is marked as information, not instructions. Bots are never forwarded. The task's log shows each item, and **Deliveries** marks these webhooks *forwarded*.
 
@@ -266,7 +278,7 @@ The image includes git, Python and common CLI tools. For project toolchains, bui
 
 - Agents run with permission prompts off (`bypassPermissions`); the container is the sandbox. Use a machine where that's acceptable.
 - Thread content is untrusted input: only write-access users can start agents, but anyone can comment on public repos. Use `ALLOWED_REPOS`.
-- GitHub credentials stay in the orchestrator; agents act on GitHub only through its tools, on agent branches. The only merge an agent can make is `merge_into_parent` (off by default), which merges a sub-issue into its parent issue's `ao/issue-<n>` branch, never into the default branch.
+- GitHub credentials stay in the orchestrator, including agents' account tokens; agents act on GitHub only through its tools, on agent branches. The only merge an agent can make is `merge_into_parent` (off by default), which merges a sub-issue into its parent issue's `ao/issue-<n>` branch, never into the default branch.
 
 ## Development
 

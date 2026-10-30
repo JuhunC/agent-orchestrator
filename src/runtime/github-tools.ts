@@ -4,7 +4,8 @@ import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type Sdk
 import { z } from "zod";
 import { config, repoAllowed } from "../config.ts";
 import { getBoardItem, linkedThreads, linkThreads, listBoardItems, type CardFieldValues } from "../db.ts";
-import { installationToken, repoRemoteUrl, type GitHubClient } from "../github/app.ts";
+import { gitTokenFor } from "../github/accounts.ts";
+import { repoRemoteUrl, type GitHubClient } from "../github/app.ts";
 import { ciStatus, fetchThread, findOpenPull, openPull, postComment, updatePull, type ThreadContext } from "../github/threads.ts";
 import { errorMessage } from "../log.ts";
 import type { Profile } from "../profiles/types.ts";
@@ -137,7 +138,7 @@ export async function commitAndPush(ctx: ToolContext, message: string): Promise<
     const trailer = `\n\nRequested by ${mention(task.requestedBy)} in ${task.requestUrl || task.threadUrl}\nOrchestrator task #${task.id}`;
     await git(dir, ["commit", "--no-verify", "-m", message.trim() + trailer]);
   }
-  const token = await installationToken(task.installationId);
+  const token = await gitTokenFor(task);
   const remoteRef = `refs/remotes/origin/${workspace.branch}`;
   await git(dir, ["fetch", "origin", `+refs/heads/${workspace.branch}:${remoteRef}`], { token }).catch(() => undefined);
   const base = (await git(dir, ["rev-parse", "--verify", "--quiet", remoteRef]).catch(() => "")) || workspace.startSha;
@@ -297,7 +298,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
         (args) =>
           withContext(async (ctx) => {
             if (ctx.task.threadKind === "pull") return ok(`You're already working on pull request #${ctx.task.threadNumber}; commit_and_push updates it.`);
-            const token = await installationToken(ctx.task.installationId);
+            const token = await gitTokenFor(ctx.task);
             const remote = await git(ctx.workspace.dir, ["ls-remote", "--heads", "origin", ctx.workspace.branch], { token });
             if (!remote.trim()) return fail(`The branch ${ctx.workspace.branch} isn't on GitHub yet. Call commit_and_push first.`);
             let pr: Awaited<ReturnType<typeof openOrUpdatePullRequest>>;
@@ -496,7 +497,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
                 .map((line) => line.split(" ") as [string, string]),
             );
           const before = await refs();
-          const token = await installationToken(ctx.task.installationId);
+          const token = await gitTokenFor(ctx.task);
           try {
             if (branch) await git(dir, ["fetch", "--no-tags", "origin", `+refs/heads/${branch}:refs/remotes/origin/${branch}`], { token });
             else await git(dir, ["fetch", "--prune", "--no-tags", "origin"], { token });
@@ -532,7 +533,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
           withContext(async (ctx) => {
             const [owner, name] = args.repository.split("/") as [string, string];
             const target = join(ctx.workspace.dir, ".deps", owner, name);
-            const token = await installationToken(ctx.task.installationId);
+            const token = await gitTokenFor(ctx.task);
             if (existsSync(join(target, ".git"))) {
               await git(target, ["fetch", "--depth", "1", "origin", args.ref ?? "HEAD"], { token });
               await git(target, ["checkout", "--force", "FETCH_HEAD"]);
@@ -843,7 +844,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
       tool("list_wiki_pages", "List the pages of the repository's GitHub wiki (title, file, size, link).", { repository }, (args) =>
         withContext(async (ctx) => {
           const { owner, repo } = where(ctx, args.repository);
-          const pages = await listWikiPages(ctx.task.installationId, owner, repo);
+          const pages = await listWikiPages(ctx.task, owner, repo);
           if (!pages.length) return ok(`The ${owner}/${repo} wiki has no pages.`);
           return ok(pages.map((page) => `- ${page.title} (${page.file}, ${page.bytes} bytes) ${page.url}`).join("\n"));
         })(),
@@ -855,7 +856,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
         (args) =>
           withContext(async (ctx) => {
             const { owner, repo } = where(ctx, args.repository);
-            const { page, content, truncated } = await readWikiPage(ctx.task.installationId, owner, repo, args.page);
+            const { page, content, truncated } = await readWikiPage(ctx.task, owner, repo, args.page);
             return ok(`# ${page.title}\n${page.url} (${page.file})\n\n${content}${truncated ? "\n\n…(cut off: the page is longer)" : ""}`);
           })(),
       ),
@@ -875,7 +876,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
         (args) =>
           withContext(async (ctx) => {
             const result = await writeWikiPage(
-              ctx.task.installationId,
+              ctx.task,
               ctx.task.owner,
               ctx.task.repo,
               args.page,
@@ -894,7 +895,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
         (args) =>
           withContext(async (ctx) => {
             const result = await writeWikiPage(
-              ctx.task.installationId,
+              ctx.task,
               ctx.task.owner,
               ctx.task.repo,
               args.page,

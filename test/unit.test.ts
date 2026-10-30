@@ -191,6 +191,7 @@ test("the options reference covers every GitHub permission, evidence kind, hando
   const agentKeys = options("agent").map((option) => option.key);
   for (const key of Object.keys(GITHUB_DEFAULTS)) assert.ok(agentKeys.includes(`github.${key}`), `github.${key} is documented`);
   for (const option of options("agent").filter((candidate) => candidate.key.startsWith("github."))) {
+    if (GITHUB_DEFAULTS[option.key.slice(7) as keyof typeof GITHUB_DEFAULTS] === null) continue; // no default value, described in words
     assert.equal(option.default, String(GITHUB_DEFAULTS[option.key.slice(7) as keyof typeof GITHUB_DEFAULTS]), `${option.key}'s documented default`);
   }
   const board = options("board");

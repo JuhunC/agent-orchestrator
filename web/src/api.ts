@@ -29,6 +29,21 @@ export interface GithubPermissions {
   parentBranch: boolean;
   /** Related issues whose agents it may start (start_related_agent). */
   startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
+  /** github.account_token_env: the variable holding its GitHub account's token. */
+  accountTokenEnv: string | null;
+}
+
+/** The GitHub account an agent acts as instead of the GitHub App. */
+export interface AgentAccount {
+  login: string;
+  id: number;
+  name: string | null;
+  avatarUrl: string;
+  scopes: string | null;
+  source: "ui" | "env";
+  envVar: string | null;
+  savedAt: string | null;
+  problem: string | null;
 }
 
 /** An agent profile (profiles/agents/<name>/agent.md). */
@@ -59,6 +74,8 @@ export interface Agent {
   modelFrom: "agent" | "group" | null;
   effortFrom: "agent" | "group" | null;
   stats?: AgentStats | null;
+  /** Null: it acts as the GitHub App. */
+  account?: AgentAccount | null;
 }
 
 export interface Group {

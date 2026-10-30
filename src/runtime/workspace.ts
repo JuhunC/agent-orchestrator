@@ -2,7 +2,8 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "../config.ts";
 import { errorMessage, log } from "../log.ts";
-import { getBotIdentity, installationToken, repoRemoteUrl } from "../github/app.ts";
+import { commitIdentityFor, gitTokenFor } from "../github/accounts.ts";
+import { repoRemoteUrl } from "../github/app.ts";
 import { issueBranch, sameRepo } from "../github/relations.ts";
 import type { ThreadContext } from "../github/threads.ts";
 import type { Profile } from "../profiles/types.ts";
@@ -56,7 +57,7 @@ export function parentBranchFor(profile: Pick<Profile, "github">, thread: Thread
  */
 export async function prepareWorkspace(task: Task, profile: Profile, thread: ThreadContext): Promise<Workspace> {
   const dir = workspaceDir(task);
-  const token = await installationToken(task.installationId);
+  const token = await gitTokenFor(task);
   const remote = repoRemoteUrl(task.owner, task.repo);
 
   // A full clone: the agent's shell has no GitHub credentials, so git must never need to fetch
@@ -128,7 +129,7 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
     await git(dir, ["clean", "-fd", "-e", ".deps/"]);
   }
   excludeFromGit(dir, "/.deps/");
-  const identity = await getBotIdentity(task.installationId);
+  const identity = await commitIdentityFor(task);
   await git(dir, ["config", "user.name", identity.name]);
   await git(dir, ["config", "user.email", identity.email]);
   const startSha = keepWork && task.startSha ? task.startSha : await git(dir, ["rev-parse", "HEAD"]);
@@ -140,9 +141,9 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
  * A sub-issue's pull request goes into its parent's branch. If that branch isn't on GitHub yet,
  * create it where this branch left the default branch, so the pull request shows only this work.
  */
-export async function ensureBaseBranch(task: Pick<Task, "installationId">, workspace: Workspace, defaultBranch: string): Promise<boolean> {
+export async function ensureBaseBranch(task: Pick<Task, "installationId" | "agent">, workspace: Workspace, defaultBranch: string): Promise<boolean> {
   if (workspace.baseBranch === defaultBranch) return false;
-  const token = await installationToken(task.installationId);
+  const token = await gitTokenFor(task);
   if ((await git(workspace.dir, ["ls-remote", "--heads", "origin", workspace.baseBranch], { token })).trim()) return false;
   const fork = await git(workspace.dir, ["merge-base", "HEAD", `refs/remotes/origin/${defaultBranch}`]);
   try {

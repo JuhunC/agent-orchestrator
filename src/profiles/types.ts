@@ -57,6 +57,8 @@ export interface GithubPermissions {
   parentBranch: boolean;
   /** start_related_agent: the related issues whose agents it may start (empty = none). */
   startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
+  /** Environment variable with a token for the GitHub account it acts as; null = the admin UI's, or the App. */
+  accountTokenEnv: string | null;
 }
 
 /** One agent: profiles/agents/<name>/agent.md plus its own skills/ and mcp.json. */

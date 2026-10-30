@@ -119,7 +119,20 @@ export const GITHUB_DEFAULTS = {
   merge_into_parent: false,
   parent_branch: true,
   start_related: false,
+  account_token_env: null,
 } as const;
+
+/** The name of the variable holding the agent's GitHub account token (github.account_token_env). */
+function parseTokenEnv(value: unknown, errors: string[]): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  const name = String(value).trim().replace(/^\$\{?|\}$/g, "");
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    errors.push(`github.account_token_env must be the name of an environment variable, like CODER_GITHUB_TOKEN (got ${JSON.stringify(value)})`);
+    return null;
+  }
+  if (!process.env[name]?.trim()) errors.push(`github.account_token_env: ${name} isn't set in the orchestrator's environment, so the agent can't act as its GitHub account`);
+  return name;
+}
 
 /** false | true (every relation) | a list of relations (start_related). */
 function parseRelations(value: unknown, field: string, errors: string[]): Relation[] {
@@ -260,6 +273,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
       mergeIntoParent: github.merge_into_parent === true,
       parentBranch: github.parent_branch !== false,
       startRelated: parseRelations(github.start_related, "start_related", errors),
+      accountTokenEnv: parseTokenEnv(github.account_token_env, errors),
     },
     maxTurns: number("max_turns"),
     maxBudgetUsd: number("max_budget_usd"),

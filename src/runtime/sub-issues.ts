@@ -1,4 +1,4 @@
-import { installationToken } from "../github/app.ts";
+import { gitTokenFor } from "../github/accounts.ts";
 import { issueBranch, listSubIssues, refText, sameRepo, type IssueRef } from "../github/relations.ts";
 import { git } from "../runner/git.ts";
 import type { ToolContext } from "./github-tools.ts";
@@ -8,7 +8,7 @@ type Ctx = Pick<ToolContext, "task" | "workspace" | "gh">;
 /** Brings a branch from GitHub into refs/remotes/origin/<branch>. Its commit, or null if it isn't on GitHub. */
 export async function fetchBranch(ctx: Ctx, branch: string): Promise<string | null> {
   const { dir } = ctx.workspace;
-  const token = await installationToken(ctx.task.installationId);
+  const token = await gitTokenFor(ctx.task);
   const sha = (await git(dir, ["ls-remote", "--heads", "origin", branch], { token })).split(/\s+/)[0] || null;
   if (!sha) {
     await git(dir, ["update-ref", "-d", `refs/remotes/origin/${branch}`]).catch(() => undefined);

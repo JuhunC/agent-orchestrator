@@ -105,10 +105,10 @@ test("a page someone else changed meanwhile is written on top of their version",
   run(other, "add", ".");
   run(other, "-c", "user.name=alice", "-c", "user.email=a@a", "commit", "-q", "-m", "Team page");
   run(other, "push", "-q", "origin", "master");
-  const result = await writeWikiPage(77, "acme", "widgets", "FAQ", "Questions.", "Add FAQ");
+  const result = await writeWikiPage({ agent: "writer", installationId: 77 }, "acme", "widgets", "FAQ", "Questions.", "Add FAQ");
   assert.ok(result.created && result.changed);
   assert.equal(wiki("show", "master:Team.md"), "People.");
   assert.equal(wiki("show", "master:FAQ.md"), "Questions.");
-  const again = await writeWikiPage(77, "acme", "widgets", "faq", "Questions.\n", "No-op");
+  const again = await writeWikiPage({ agent: "writer", installationId: 77 }, "acme", "widgets", "faq", "Questions.\n", "No-op");
   assert.equal(again.changed, false);
 });

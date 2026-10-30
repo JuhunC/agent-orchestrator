@@ -21,6 +21,7 @@ import {
   listHandoffs,
 } from "../db.ts";
 import { addressCheck, appAddresses, ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials, setAppWebhookUrl } from "../github/app.ts";
+import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount, removeAccount, repositoryAccess } from "../github/accounts.ts";
 import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
@@ -267,7 +268,7 @@ export function registerApi(app: FastifyInstance): void {
     const stats = taskStats();
     const profiles = loadProfiles();
     return {
-      agents: profiles.agents.map((agent) => ({ ...agentView(agent), stats: stats[agent.name] ?? null })),
+      agents: await Promise.all(profiles.agents.map(async (agent) => ({ ...agentView(agent), stats: stats[agent.name] ?? null, account: await agentAccount(agent).catch(() => null) }))),
       library: {
         skills: Object.values(profiles.library.skills).map((skill) => ({ name: skill.name, description: skill.description })),
         roles: Object.values(profiles.library.roles).map((role) => ({ name: role.name, description: role.description, tools: role.tools, model: role.model })),
@@ -305,6 +306,60 @@ export function registerApi(app: FastifyInstance): void {
     } catch (error) {
       return reply.code(error instanceof ProfileFileError ? 400 : 500).send({ error: errorMessage(error) });
     }
+  });
+
+  // The GitHub account an agent acts as (instead of the App). The token never leaves the server.
+  app.put<{ Params: { name: string }; Body: { token?: string } }>("/api/agents/:name/github-account", async (request, reply) => {
+    const profile = loadProfiles().agents.find((agent) => agent.name === request.params.name);
+    if (!profile) return reply.code(404).send({ error: "Agent not found" });
+    if (profile.github.accountTokenEnv) return reply.code(400).send({ error: `${profile.name}'s agent.md sets github.account_token_env (${profile.github.accountTokenEnv}), which takes precedence. Remove it there to register an account here.` });
+    try {
+      const account = await registerAccount(profile.name, String(request.body?.token ?? ""));
+      bus.publish({ type: "agents" });
+      const admins = config.adminUsers.includes(account.login.toLowerCase());
+      return {
+        account,
+        warning: admins ? `@${account.login} is in ADMIN_USERS. What this account does on GitHub no longer starts agents, so use an account made for the agent.` : null,
+      };
+    } catch (error) {
+      return reply.code(error instanceof AccountError ? 400 : 500).send({ error: errorMessage(error) });
+    }
+  });
+
+  app.delete<{ Params: { name: string } }>("/api/agents/:name/github-account", async (request, reply) => {
+    if (!loadProfiles().agents.some((agent) => agent.name === request.params.name)) return reply.code(404).send({ error: "Agent not found" });
+    removeAccount(request.params.name);
+    bus.publish({ type: "agents" });
+    return { ok: true };
+  });
+
+  /** Checks the token still works, and which repositories the account can push to. */
+  app.post<{ Params: { name: string }; Body: { repository?: string } }>("/api/agents/:name/github-account/check", async (request, reply) => {
+    const profile = loadProfiles().agents.find((agent) => agent.name === request.params.name);
+    if (!profile) return reply.code(404).send({ error: "Agent not found" });
+    const account = await agentAccount(profile);
+    if (!account) return reply.code(400).send({ error: `${profile.name} has no GitHub account; it acts as the GitHub App.` });
+    if (account.problem) return { ok: false, problem: account.problem, repositories: [] };
+    try {
+      const token = accountToken(profile)!;
+      const info = await lookUpToken(token);
+      if (info.login.toLowerCase() !== account.login.toLowerCase()) throw new AccountError(`The token now belongs to @${info.login}, not @${account.login}. Register it again.`);
+    } catch (error) {
+      return { ok: false, problem: errorMessage(error), repositories: [] };
+    }
+    const wanted = String(request.body?.repository ?? "").trim();
+    if (wanted && !/^[\w.-]+\/[\w.-]+$/.test(wanted)) return reply.code(400).send({ error: "Give the repository as owner/name." });
+    const names = new Set<string>(wanted ? [wanted] : []);
+    for (const task of listTasks({ agent: profile.name, limit: 100 })) names.add(`${task.owner}/${task.repo}`);
+    for (const pattern of config.allowedRepos) if (!pattern.endsWith("/*")) names.add(pattern);
+    const repositories = await Promise.all(
+      [...names].slice(0, 20).map(async (full) => {
+        const [owner, repo] = full.split("/") as [string, string];
+        const access = await repositoryAccess(profile.name, owner, repo).catch((error) => `error: ${errorMessage(error)}`);
+        return { repository: full, access };
+      }),
+    );
+    return { ok: true, problem: null, login: account.login, repositories };
   });
 
   app.post<{ Params: { name: string }; Body: { name?: string; handle?: string; count?: number; group?: string } }>("/api/agents/:name/duplicate", async (request, reply) => {

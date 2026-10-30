@@ -96,6 +96,13 @@ const AGENT: FileDoc = {
       description: `start_related_agent: when its task finishes, start the agent responsible for a related issue, with a message. true allows every relation; a list allows some of ${RELATIONS.join(", ")} (parent: its parent issue; sub_issue: its sub-issues; blocked_by: issues blocking it; blocks: issues it blocks). On a board card the card's column's agent starts (the board's related_agents and loop guards apply); otherwise the agent named, or the one that last worked on that issue. MAX_AGENT_CHAIN limits how many agents may start each other in a row.`,
       example: "github:\n  start_related: [parent]",
     },
+    {
+      key: "github.account_token_env",
+      type: "string",
+      default: "none (the GitHub App, or the account registered on the agent's page)",
+      description: "Act on GitHub as a GitHub account instead of the GitHub App: the name of the environment variable holding that account's personal access token. Its comments, pull requests, reviews, issue changes, git pushes and commits are made as the account. Takes precedence over an account registered on the agent's page. Use an account made for the agent: what it does on GitHub doesn't start agents.",
+      example: "github:\n  account_token_env: CODER_GITHUB_TOKEN",
+    },
     { key: "max_turns", type: "number", default: "no limit", description: "Most model turns per task.", example: "max_turns: 200" },
     { key: "max_budget_usd", type: "number", default: "no limit", description: "Most it may spend per task, in US dollars.", example: "max_budget_usd: 5" },
     { key: "timeout_minutes", type: "number", default: "DEFAULT_TIMEOUT_MINUTES", description: "Stop a task after this long.", example: "timeout_minutes: 45" },
