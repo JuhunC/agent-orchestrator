@@ -1,6 +1,6 @@
 import { bus } from "./bus.ts";
 import { config, repoAllowed } from "./config.ts";
-import { createTask, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
+import { createTask, deliveryActedOn, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
 import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
 import type { Profile } from "./profiles/types.ts";
 import { agentForLogin as agentOfAccount, clientFor } from "./github/accounts.ts";
@@ -177,7 +177,24 @@ function record(deliveryId: string, event: string, payload: Payload, decision: D
 }
 
 /** Entry point for verified webhooks. */
+/** Deliveries being handled right now, so one sent twice at once runs once. */
+const inFlight = new Set<string>();
+
 export async function handleWebhook(event: string, deliveryId: string, payload: Payload): Promise<void> {
+  // GitHub redelivers with the same id (the Redeliver button, or a retry after a timeout). One that
+  // already started or reached an agent isn't acted on again; one that failed or was ignored is.
+  if (inFlight.has(deliveryId) || deliveryActedOn(deliveryId)) {
+    return record(deliveryId, event, payload, "ignored", "Already handled: GitHub sent this delivery again");
+  }
+  inFlight.add(deliveryId);
+  try {
+    await handleDelivery(event, deliveryId, payload);
+  } finally {
+    inFlight.delete(deliveryId);
+  }
+}
+
+async function handleDelivery(event: string, deliveryId: string, payload: Payload): Promise<void> {
   try {
     if (event === "projects_v2_item") {
       // Board moves, including the orchestrator's own (they start the next column's agent).

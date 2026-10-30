@@ -90,9 +90,10 @@ export async function startHarness(profiles: Record<string, string>, env: Record
   const app = await buildServer();
 
   let deliveryCounter = 0;
-  async function sendWebhook(event: string, payload: Record<string, unknown>) {
+  async function sendWebhook(event: string, payload: Record<string, unknown>, deliveryId?: string) {
     const body = JSON.stringify({ installation: { id: 77 }, repository: { full_name: "acme/widgets" }, ...payload });
-    const delivery = `d-${++deliveryCounter}`;
+    const delivery = deliveryId ?? `d-${++deliveryCounter}`;
+    const seen = db.listDeliveries(500).filter((entry) => entry.deliveryId === delivery).length;
     const response = await app.inject({
       method: "POST",
       url: "/api/github/webhooks",
@@ -107,8 +108,8 @@ export async function startHarness(profiles: Record<string, string>, env: Record
     assert.equal(response.statusCode, 202);
     // Webhooks are handled after the 202; wait for the decision to be recorded.
     for (let i = 0; i < 200; i++) {
-      const found = db.listDeliveries(50).find((entry) => entry.deliveryId === delivery);
-      if (found) return found;
+      const found = db.listDeliveries(500).filter((entry) => entry.deliveryId === delivery);
+      if (found.length > seen) return found[0]!;
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Error("webhook was not processed");

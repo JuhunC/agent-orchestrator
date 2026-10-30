@@ -236,7 +236,7 @@ columns:
 | PR, review, inline comment | mention, assign or request review | works on the PR's branch (forks: replies only) |
 | Discussion | mention the handle | branch and PR if it changes anything |
 
-Only people with write access (`TRIGGER_MIN_PERMISSION`) can start agents; bots and the GitHub accounts agents act as are ignored, so agents can't trigger each other in a loop.
+Only people with write access (`TRIGGER_MIN_PERMISSION`) can start agents; bots and the GitHub accounts agents act as are ignored, so agents can't trigger each other in a loop. A webhook GitHub sends again (the **Redeliver** button, or a retry) isn't acted on twice: one that already started or reached an agent is skipped, one that failed or was ignored is handled again.
 
 **While an agent works**, what people do on its issue or PR reaches it mid-task: comments (and edits), reviews and inline comments, labels, assignees, title or description edits, pushes, closing, reopening or merging. That includes the PR it opened for an issue. The agent gets it after its current step, or just before it would finish, so it keeps going and deals with it. Mentioning an agent that's already working on the thread tells it there instead of queueing another run; if it finished before seeing the mention, a follow-up run is queued. Activity from people below `TRIGGER_MIN_PERMISSION` is marked as information, not instructions. Bots are never forwarded. The task's log shows each item, and **Deliveries** marks these webhooks *forwarded*.
 

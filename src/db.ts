@@ -114,6 +114,7 @@ addColumn("tasks", "board_item_id", "TEXT");
 addColumn("tasks", "board_round", "TEXT");
 addColumn("tasks", "usage", "TEXT");
 addColumn("tasks", "started_by_task", "INTEGER");
+db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
 db.exec(`
 CREATE TABLE IF NOT EXISTS board_items (
   board TEXT NOT NULL,
@@ -535,6 +536,11 @@ export function recordDelivery(entry: Omit<Delivery, "id" | "ts">): Delivery {
     .run(entry.deliveryId, entry.event, entry.action, entry.repo, entry.sender, entry.decision, entry.detail.slice(0, 2000), ts);
   db.prepare("DELETE FROM deliveries WHERE id <= ?").run(Number(result.lastInsertRowid) - 2000);
   return { ...entry, id: Number(result.lastInsertRowid), ts };
+}
+
+/** Did an earlier delivery with this id start or reach an agent? (GitHub redeliveries keep the id.) */
+export function deliveryActedOn(deliveryId: string): boolean {
+  return Boolean(db.prepare("SELECT 1 FROM deliveries WHERE delivery_id = ? AND decision IN ('triggered', 'forwarded') LIMIT 1").get(deliveryId));
 }
 
 export function listDeliveries(limit = 200): Delivery[] {
