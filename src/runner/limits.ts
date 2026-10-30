@@ -6,19 +6,24 @@
 export interface DetectedLimit {
   resetAt: Date | null;
   message: string;
+  /** usage: the account's quota is used up (everyone waits). rate: too many requests at once (only this task backs off). */
+  kind?: "usage" | "rate";
 }
 
-const LIMIT_PHRASES = [
+/** The account's allowance is used up: everyone waits for it to reset. */
+const USAGE_PHRASES = [
   /usage limit/i,
   /hit (?:your|the) (?:\w+[ -])?limit/i,
   /(?:session|weekly|5-hour|daily|monthly|opus|plan) limit/i,
-  /limit (?:reached|exceeded)/i,
   /out of (?:extra )?usage/i,
-  /rate[ _-]?limit(?:ed|_error| exceeded| reached)/i,
   /quota (?:exceeded|exhausted)|exceeded your current quota|RESOURCE_EXHAUSTED/i,
-  /too many requests/i,
-  /usage_limit_reached|usageLimitExceeded|rateLimitExceeded/,
+  /usage_limit_reached|usageLimitExceeded/,
 ];
+
+/** Too many requests at once: the task that hit it backs off (unless it resets far off, which is a quota too). */
+const RATE_PHRASES = [/limit (?:reached|exceeded)/i, /rate[ _-]?limit(?:ed|_error| exceeded| reached)/i, /too many requests/i, /rateLimitExceeded/];
+
+const LIMIT_PHRASES = [...USAGE_PHRASES, ...RATE_PHRASES];
 
 const UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, m: 60_000, s: 1000 };
 
@@ -121,7 +126,9 @@ export function detectUsageLimit(text: string, now = new Date()): DetectedLimit 
   const lines = text.split("\n").filter((line) => LIMIT_PHRASES.some((phrase) => phrase.test(line)));
   if (!lines.length) return null;
   const message = lines[0]!.trim().slice(0, 300);
-  return { resetAt: resetTime(lines.join("\n"), now) ?? resetTime(text, now), message };
+  const resetAt = resetTime(lines.join("\n"), now) ?? resetTime(text, now);
+  const usage = lines.some((line) => USAGE_PHRASES.some((phrase) => phrase.test(line))) || (resetAt !== null && resetAt.getTime() - now.getTime() > 10 * 60_000);
+  return { resetAt, message, kind: usage ? "usage" : "rate" };
 }
 
 /** When to try again: the reset time if known (plus a minute of slack), otherwise in 30 minutes. */

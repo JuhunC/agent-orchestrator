@@ -103,6 +103,11 @@ test("usage-limit messages are recognised with their reset time", () => {
   assert.equal(detectUsageLimit("You've hit your limit · resets 3pm (America/Los_Angeles)", now)?.resetAt?.toISOString(), "2026-10-20T22:00:00.000Z");
   assert.equal(detectUsageLimit("API Error: 429 try again in 2 hours 13 minutes. rate_limit_error", now)?.resetAt?.toISOString(), "2026-10-20T14:13:00.000Z");
   assert.equal(detectUsageLimit("Failed to authenticate. API Error: 401", now), null);
+  // A quota (or a limit that resets far off) holds everyone; too many requests at once only backs off the task.
+  assert.equal(detectUsageLimit("Claude AI usage limit reached|1761000000", now)?.kind, "usage");
+  assert.equal(detectUsageLimit("API Error: 429 try again in 2 hours 13 minutes. rate_limit_error", now)?.kind, "usage");
+  assert.equal(detectUsageLimit("API Error: 429 rate_limit_error: Number of request tokens has exceeded your per-minute rate limit", now)?.kind, "rate");
+  assert.equal(detectUsageLimit("429 Too Many Requests", now)?.kind, "rate");
 });
 
 test("server-side model errors are told apart from client errors", () => {

@@ -256,8 +256,8 @@ export class AgentSession {
     if (isError && !partial.cancelled && !partial.timedOut) {
       const text = [partial.error ?? "", partial.result ?? "", ...this.stderrTail].join("\n");
       limit = detectUsageLimit(text);
-      if (this.rejectedUntil) limit = { resetAt: new Date(this.rejectedUntil), message: limit?.message ?? "Usage limit reached" };
-      else if (!limit && apiErrors.includes("rate_limit")) limit = { resetAt: new Date(Date.now() + 5 * 60_000), message: "The model service is rate limiting requests" };
+      if (this.rejectedUntil) limit = { resetAt: new Date(this.rejectedUntil), message: limit?.message ?? "Usage limit reached", kind: "usage" };
+      else if (!limit && apiErrors.includes("rate_limit")) limit = { resetAt: null, message: "The model service is rate limiting requests", kind: "rate" };
       if (!limit) serverError = serverErrorOf(text, apiErrors);
     }
     return {

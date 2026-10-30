@@ -121,6 +121,8 @@ function settingsView() {
   return {
     paused: scheduler.paused,
     maxConcurrent: scheduler.maxConcurrent,
+    /** Lower than maxConcurrent while recovering from the model service's rate limits. */
+    effectiveConcurrent: scheduler.effectiveConcurrent(),
     running: scheduler.runningIds().length,
     liveIdleMinutes: sessions.idleMinutes,
     maxLiveSessions: sessions.maxLive,
@@ -689,6 +691,7 @@ export function registerApi(app: FastifyInstance): void {
     const spend = spendStatus();
     reply.type("text/plain; version=0.0.4");
     return renderMetrics({
+      atOnce: scheduler.effectiveConcurrent(),
       running: scheduler.runningIds().length,
       queued: listTasks({ status: "queued", limit: 10_000 }).length,
       paused: scheduler.paused,

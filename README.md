@@ -48,7 +48,7 @@ To run your own build of Claude Code instead of the one bundled with the SDK, se
 
 **Fallback models:** give an agent `fallback_model: claude-sonnet-5-5` (or a list), or set `FALLBACK_MODEL` for all agents. When its model is overloaded, Claude Code switches to the fallback for that turn. When its model's usage limit is reached, the task carries on with the fallback straight away instead of pausing, and while the limit holds, that agent's new tasks start on the fallback (agents without one wait).
 
-When the service reports a usage limit, tasks pause and continue automatically when it resets (Settings shows the limit and can clear it). When it fails to answer (server errors, overloads, dropped connections), requests are retried, and a task that still fails is retried with the same session (`MODEL_ERROR_RETRIES`, default 3). Client errors such as a bad key or invalid request aren't retried.
+When the service says it's getting too many requests at once (a rate limit, as opposed to a used-up allowance), only the task that hit it waits, about 30 seconds and longer each time, with some randomness, and fewer tasks run at once for a while: half as many, then one more every two minutes (the top bar shows it). When the service reports a usage limit (the allowance is used up, or the limit resets more than 10 minutes away), tasks pause and continue automatically when it resets (Settings shows the limit and can clear it). When it fails to answer (server errors, overloads, dropped connections), requests are retried, and a task that still fails is retried with the same session (`MODEL_ERROR_RETRIES`, default 3). Client errors such as a bad key or invalid request aren't retried.
 
 ## Agent profiles
 

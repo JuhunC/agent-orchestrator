@@ -106,8 +106,9 @@ export async function startHarness(profiles: Record<string, string>, env: Record
       payload: body,
     });
     assert.equal(response.statusCode, 202);
-    // Webhooks are handled after the 202; wait for the decision to be recorded.
-    for (let i = 0; i < 200; i++) {
+    // Webhooks are handled after the 202; wait for the decision to be recorded. GitHub writes are
+    // spaced a second apart (Octokit's throttling), so with other work going on this takes a while.
+    for (let i = 0; i < 600; i++) {
       const found = db.listDeliveries(500).filter((entry) => entry.deliveryId === delivery);
       if (found.length > seen) return found[0]!;
       await new Promise((r) => setTimeout(r, 25));

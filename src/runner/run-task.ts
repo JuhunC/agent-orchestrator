@@ -26,6 +26,7 @@ import { retryTime, type DetectedLimit } from "./limits.ts";
 import { getLimit, setLimit } from "./limit-store.ts";
 import { progressEditAllowed, ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
 import { recordIncident } from "./incidents.ts";
+import { scheduler } from "./scheduler.ts";
 
 function patch(taskId: number, changes: Partial<Task>): Task {
   const task = updateTask(taskId, changes);
@@ -228,7 +229,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       usage = addUsage(usage, outcome.usage);
     }
     // A usage limit on the model: carry on with the fallback model at once instead of pausing.
-    if (outcome.limit && !outcome.cancelled && !usingFallback && fallbacks.length) {
+    if (outcome.limit && outcome.limit.kind !== "rate" && !outcome.cancelled && !usingFallback && fallbacks.length) {
       setLimit(retryTime(outcome.limit), outcome.limit.message);
       usingFallback = true;
       onEvent("system", `Usage limit reached (${outcome.limit.message}). Continuing with the fallback model ${fallbacks[0]}`);
@@ -255,6 +256,10 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     if (outcome.cancelled) {
       if (signal.reason === "shutdown") await requeueForRestart(outcome.result);
       else await finish("cancelled", outcome.result, typeof signal.reason === "string" && signal.reason !== "admin" ? signal.reason : "Cancelled from the admin UI.");
+      return;
+    }
+    if (outcome.limit?.kind === "rate") {
+      await backOffForRateLimit(outcome.limit, outcome.result);
       return;
     }
     if (outcome.limit) {
@@ -430,6 +435,28 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     state.phase = "waiting";
     state.note = "The orchestrator is restarting. This continues where it left off when it's back.";
     task = patch(task.id, { status: "queued", restarts: task.restarts + 1, error: null, retryAt: null });
+    await throttle.flush(true);
+    await throttle.stop();
+  }
+
+  /**
+   * The model service is rate limiting (too many requests at once), not out of quota: only this
+   * task waits, longer each time with some randomness so tasks don't retry together, and the
+   * scheduler runs fewer tasks for a while.
+   */
+  async function backOffForRateLimit(limit: DetectedLimit, text: string) {
+    scheduler.noteRateLimit();
+    if (task.attempts + 1 > config.usageLimitRetries) {
+      await finish("failed", text, `The model service kept rate limiting this task (${task.attempts + 1} times). Mention the agent again later.`);
+      return;
+    }
+    const seconds = Math.round(Math.min(600, 30 * 2 ** task.attempts) * (0.75 + Math.random() * 0.5));
+    const until = new Date(Date.now() + seconds * 1000);
+    const at = until.toISOString().slice(11, 19);
+    onEvent("system", `${limit.message}. This task retries at ${at} UTC; others carry on`);
+    state.phase = "waiting";
+    state.note = `The model service is rate limiting requests. This continues automatically at **${at} UTC**.`;
+    task = patch(task.id, { status: "queued", retryAt: until.toISOString(), attempts: task.attempts + 1, error: null });
     await throttle.flush(true);
     await throttle.stop();
   }

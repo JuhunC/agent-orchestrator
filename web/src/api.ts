@@ -300,6 +300,8 @@ export interface Delivery {
 export interface Settings {
   paused: boolean;
   maxConcurrent: number;
+  /** Lower than maxConcurrent while recovering from the model service's rate limits. */
+  effectiveConcurrent?: number;
   running: number;
   liveIdleMinutes: number;
   maxLiveSessions: number;

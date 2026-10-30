@@ -134,7 +134,8 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
           {settings && (
             <>
               <span className="meta">
-                {settings.running}/{settings.maxConcurrent} slots busy
+                {settings.running}/{settings.effectiveConcurrent ?? settings.maxConcurrent} slots busy
+                {settings.effectiveConcurrent !== undefined && settings.effectiveConcurrent < settings.maxConcurrent ? ` (of ${settings.maxConcurrent}: the model service is rate limiting)` : ""}
               </span>
               <button className={settings.paused ? "primary" : ""} disabled={me.role === "viewer"} onClick={togglePause}>
                 {settings.paused ? "Resume queue" : "Pause queue"}

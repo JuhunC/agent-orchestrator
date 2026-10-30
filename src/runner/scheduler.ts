@@ -24,6 +24,31 @@ class Scheduler {
   private wakeTimer: NodeJS.Timeout | null = null;
   /** Set while shutting down: nothing new starts. */
   private stopping = false;
+  /** After the model service rate-limits a task, fewer tasks run for a while (see noteRateLimit). */
+  private rateCap: number | null = null;
+  private rateCapAt = 0;
+
+  /**
+   * The model service rate-limited a task: halve how many tasks run at once (at least one), then
+   * allow one more every two minutes until it's back to the setting.
+   */
+  noteRateLimit(): void {
+    this.rateCap = Math.max(1, Math.floor(this.effectiveConcurrent() / 2));
+    this.rateCapAt = Date.now();
+    log.warn("The model service is rate limiting; running fewer agents for a while", { atOnce: this.rateCap });
+    bus.publish({ type: "settings" });
+  }
+
+  /** How many tasks may run at once now: the setting, or less while recovering from rate limits. */
+  effectiveConcurrent(now = Date.now()): number {
+    if (this.rateCap === null) return this.maxConcurrent;
+    const cap = this.rateCap + Math.floor((now - this.rateCapAt) / 120_000);
+    if (cap >= this.maxConcurrent) {
+      this.rateCap = null;
+      return this.maxConcurrent;
+    }
+    return cap;
+  }
 
   get maxConcurrent(): number {
     const stored = Number(getSetting("max_concurrent"));
@@ -84,7 +109,7 @@ class Scheduler {
       if (running?.board) perBoard.set(running.board, (perBoard.get(running.board) ?? 0) + 1);
     }
     for (const task of queueOrder(queued, now)) {
-      if (this.running.size >= this.maxConcurrent) break;
+      if (this.running.size >= this.effectiveConcurrent(now)) break;
       const workspace = workspaceDir(task);
       if (busy.has(workspace)) continue;
       const profile = profiles.find((candidate) => candidate.name === task.agent);
@@ -109,6 +134,8 @@ class Scheduler {
       if (task.board) perBoard.set(task.board, (perBoard.get(task.board) ?? 0) + 1);
       this.launch(task, workspace);
     }
+    // Recovering from rate limits: a slot comes back every two minutes, so look again then.
+    if (this.rateCap !== null && queued.length) wakeAt = Math.min(wakeAt, now + 120_000);
     if (this.wakeTimer) clearTimeout(this.wakeTimer);
     this.wakeTimer = null;
     if (Number.isFinite(wakeAt)) {
