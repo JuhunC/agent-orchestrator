@@ -60,6 +60,9 @@ export interface Task {
   dryRun: boolean;
   /** How many times the orchestrator restarted under this task (it resumes each time, up to RESTART_RESUMES). */
   restarts: number;
+  /** Fingerprint of the agent's profile that ran it, and the profiles folder's commit (see profiles/version.ts). */
+  profileVersion: string | null;
+  profileCommit: string | null;
 }
 
 /** Tokens one model used. */

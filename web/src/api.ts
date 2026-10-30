@@ -167,6 +167,9 @@ export interface Task {
   startedByTask: number | null;
   /** A replay that changed nothing on GitHub. */
   dryRun?: boolean;
+  /** Fingerprint of the agent's profile that ran it, and the profiles folder's commit. */
+  profileVersion?: string | null;
+  profileCommit?: string | null;
 }
 
 export interface BoardColumnInfo {
@@ -329,11 +332,25 @@ export interface AgentOutcome {
   avgTaskMinutes: number | null;
 }
 
+export interface VersionOutcome {
+  version: string;
+  commit: string | null;
+  firstUsed: string;
+  lastUsed: string;
+  tasks: { succeeded: number; failed: number; cancelled: number };
+  successRate: number | null;
+  pulls: { merged: number; closed: number; open: number };
+  mergeRate: number | null;
+  costUsd: number;
+  costPerMergedPull: number | null;
+}
+
 export interface OutcomeReport {
   days: number;
   since: string;
   agents: AgentOutcome[];
   totals: Omit<AgentOutcome, "agent">;
+  versions?: VersionOutcome[];
 }
 
 export interface CleanupReport {

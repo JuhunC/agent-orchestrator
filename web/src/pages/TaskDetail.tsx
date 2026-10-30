@@ -176,6 +176,13 @@ export function TaskDetail({ id }: { id: number }) {
                   <a href={href(`/tasks/${task.retryOf}`)}>#{task.retryOf}</a>
                 </>
               )}
+              {task.profileVersion && (
+                <span title="The version of the agent's profile that ran this task (see the agent's page for outcomes by version)">
+                  {" · profile "}
+                  <code>{task.profileVersion}</code>
+                  {task.profileCommit ? ` (commit ${task.profileCommit})` : ""}
+                </span>
+              )}
               {task.startedByTask && (
                 <>
                   {" · started by task "}

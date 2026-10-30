@@ -117,6 +117,8 @@ addColumn("tasks", "started_by_task", "INTEGER");
 // Dry runs replay a task without changing anything on GitHub (see run-task.ts).
 addColumn("tasks", "dry_run", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "restarts", "INTEGER NOT NULL DEFAULT 0");
+addColumn("tasks", "profile_version", "TEXT");
+addColumn("tasks", "profile_commit", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
 // Time-range queries (spending, usage, outcomes) use exactly this expression, so it's indexed.
 db.exec("CREATE INDEX IF NOT EXISTS tasks_ended ON tasks (COALESCE(finished_at, started_at, created_at))");
@@ -232,6 +234,8 @@ function toTask(row: Row): Task {
     startedByTask: row.started_by_task === null || row.started_by_task === undefined ? null : Number(row.started_by_task),
     dryRun: Boolean(row.dry_run),
     restarts: Number(row.restarts ?? 0),
+    profileVersion: (row.profile_version as string | null) ?? null,
+    profileCommit: (row.profile_commit as string | null) ?? null,
   };
 }
 
@@ -325,6 +329,8 @@ const TASK_COLUMNS: Record<string, string> = {
   boardRound: "board_round",
   startedByTask: "started_by_task",
   restarts: "restarts",
+  profileVersion: "profile_version",
+  profileCommit: "profile_commit",
 };
 
 export function updateTask(id: number, patch: Partial<Task>): Task {
@@ -852,6 +858,38 @@ export function backfillPullOutcomes(): number {
 export function handoffsInto(column: string, since: string): Record<string, number> {
   const rows = db.prepare("SELECT agent, COUNT(*) AS count FROM board_handoffs WHERE to_column = ? AND ts >= ? GROUP BY agent").all(column, since) as Row[];
   return Object.fromEntries(rows.map((row) => [String(row.agent), Number(row.count)]));
+}
+
+/** One agent's outcomes per profile version since `since`: tasks by status, and its pull requests by state. */
+export function outcomesByVersion(agent: string, since: string): { version: string; commit: string | null; firstUsed: string; lastUsed: string; tasks: Record<string, number>; pulls: Record<string, number>; costUsd: number }[] {
+  const tasks = db
+    .prepare(
+      `SELECT profile_version AS version, MAX(profile_commit) AS commit_id, MIN(created_at) AS first_used, MAX(created_at) AS last_used, status, COUNT(*) AS count, COALESCE(SUM(cost_usd), 0) AS cost
+       FROM tasks WHERE agent = ? AND profile_version IS NOT NULL AND dry_run = 0 AND COALESCE(finished_at, started_at, created_at) >= ? GROUP BY profile_version, status`,
+    )
+    .all(agent, since) as Row[];
+  const pulls = db
+    .prepare(
+      `SELECT t.profile_version AS version, p.state AS state, COUNT(*) AS count FROM pull_outcomes p
+       JOIN tasks t ON t.id = (SELECT MIN(id) FROM tasks WHERE owner = p.owner AND repo = p.repo AND pr_number = p.number)
+       WHERE p.agent = ? AND p.opened_at >= ? AND t.profile_version IS NOT NULL GROUP BY t.profile_version, p.state`,
+    )
+    .all(agent, since) as Row[];
+  const versions = new Map<string, { version: string; commit: string | null; firstUsed: string; lastUsed: string; tasks: Record<string, number>; pulls: Record<string, number>; costUsd: number }>();
+  for (const row of tasks) {
+    const version = String(row.version);
+    const entry = versions.get(version) ?? { version, commit: (row.commit_id as string | null) ?? null, firstUsed: String(row.first_used), lastUsed: String(row.last_used), tasks: {}, pulls: {}, costUsd: 0 };
+    entry.tasks[String(row.status)] = Number(row.count);
+    entry.costUsd += Number(row.cost);
+    if (String(row.first_used) < entry.firstUsed) entry.firstUsed = String(row.first_used);
+    if (String(row.last_used) > entry.lastUsed) entry.lastUsed = String(row.last_used);
+    versions.set(version, entry);
+  }
+  for (const row of pulls) {
+    const entry = versions.get(String(row.version));
+    if (entry) entry.pulls[String(row.state)] = Number(row.count);
+  }
+  return [...versions.values()].sort((a, b) => b.firstUsed.localeCompare(a.firstUsed));
 }
 
 /** Tasks per agent and status since `since`, with how long they ran. */

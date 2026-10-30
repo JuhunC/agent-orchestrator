@@ -27,6 +27,7 @@ import { getLimit, setLimit } from "./limit-store.ts";
 import { progressEditAllowed, ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
 import { recordIncident } from "./incidents.ts";
 import { scheduler } from "./scheduler.ts";
+import { profileCommit, profileVersion } from "../profiles/version.ts";
 
 function patch(taskId: number, changes: Partial<Task>): Task {
   const task = updateTask(taskId, changes);
@@ -119,6 +120,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       boardContext = { board, column: column.name, itemId: task.boardItemId, pendingMove: null, testRuns: [], reviews: [], subMoves: [], newSubIssues: [], subIssueFields: {} };
     }
     emit(task.id, "status", `Started ${profile.name}${boardContext ? ` (${boardContext.board.name}: ${boardContext.column})` : ""}`);
+    // Which version of the profile does this work, so outcomes can be compared across changes.
+    task = patch(task.id, { profileVersion: profileVersion(profile, profiles.library), profileCommit: await profileCommit(profile) });
     gh = await clientFor(task);
     thread = await fetchThread(gh, task.owner, task.repo, task.threadKind, task.threadNumber);
     task = patch(task.id, { threadTitle: thread.title, threadUrl: thread.url });

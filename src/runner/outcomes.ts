@@ -7,6 +7,7 @@ import {
   getSetting,
   handoffsInto,
   markBranchDeleted,
+  outcomesByVersion,
   markPullChecked,
   pullOutcomes,
   pullsToCheck,
@@ -46,11 +47,26 @@ export interface AgentOutcome {
   avgTaskMinutes: number | null;
 }
 
+export interface VersionOutcome {
+  version: string;
+  commit: string | null;
+  firstUsed: string;
+  lastUsed: string;
+  tasks: { succeeded: number; failed: number; cancelled: number };
+  successRate: number | null;
+  pulls: { merged: number; closed: number; open: number };
+  mergeRate: number | null;
+  costUsd: number;
+  costPerMergedPull: number | null;
+}
+
 export interface OutcomeReport {
   days: number;
   since: string;
   agents: AgentOutcome[];
   totals: Omit<AgentOutcome, "agent">;
+  /** For one agent: the same numbers per version of its profile, newest first. */
+  versions?: VersionOutcome[];
 }
 
 const ratio = (part: number, whole: number) => (whole > 0 ? part / whole : null);
@@ -98,7 +114,25 @@ export function outcomeReport(days: number, agent?: string): OutcomeReport {
     totals.costUsd += target.costUsd;
   }
   finish(totals, [...minutes.values()].reduce((sum, value) => sum + value, 0));
-  return { days: span, since, agents: [...rows.values()].sort((a, b) => b.costUsd - a.costUsd || a.agent.localeCompare(b.agent)), totals };
+  const versions = agent
+    ? outcomesByVersion(agent, since).map((entry) => {
+        const tasks = { succeeded: entry.tasks.succeeded ?? 0, failed: entry.tasks.failed ?? 0, cancelled: entry.tasks.cancelled ?? 0 };
+        const pulls = { merged: entry.pulls.merged ?? 0, closed: entry.pulls.closed ?? 0, open: entry.pulls.open ?? 0 };
+        return {
+          version: entry.version,
+          commit: entry.commit,
+          firstUsed: entry.firstUsed,
+          lastUsed: entry.lastUsed,
+          tasks,
+          successRate: ratio(tasks.succeeded, tasks.succeeded + tasks.failed),
+          pulls,
+          mergeRate: ratio(pulls.merged, pulls.merged + pulls.closed),
+          costUsd: entry.costUsd,
+          costPerMergedPull: pulls.merged ? entry.costUsd / pulls.merged : null,
+        };
+      })
+    : undefined;
+  return { days: span, since, agents: [...rows.values()].sort((a, b) => b.costUsd - a.costUsd || a.agent.localeCompare(b.agent)), totals, ...(versions ? { versions } : {}) };
 }
 
 /** From a pull_request webhook: an agent's pull request was merged, closed or reopened. */

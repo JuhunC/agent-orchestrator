@@ -264,11 +264,58 @@ function OutcomeSummary({ days }: { days: number }) {
   );
 }
 
+/** Agent page: outcomes per version of its profile, to see whether a change helped. */
+function VersionTable({ versions }: { versions: NonNullable<OutcomeReport["versions"]> }) {
+  if (versions.length < 1) return null;
+  return (
+    <div>
+      <h3 style={{ marginBottom: 8 }}>By profile version</h3>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Version</th>
+              <th>Used</th>
+              <th className="num">Tasks OK</th>
+              <th className="num">PRs merged</th>
+              <th className="num">Per merged PR</th>
+            </tr>
+          </thead>
+          <tbody>
+            {versions.map((row, index) => (
+              <tr key={row.version}>
+                <td>
+                  <code>{row.version}</code>
+                  {row.commit && <span className="meta"> · commit {row.commit}</span>}
+                  {index === 0 && <span className="badge accent" style={{ marginLeft: 6 }}>latest</span>}
+                </td>
+                <td className="meta nowrap">
+                  {new Date(row.firstUsed).toLocaleDateString()} – {new Date(row.lastUsed).toLocaleDateString()}
+                </td>
+                <td className="num">
+                  {percent(row.successRate)} <span className="meta">({row.tasks.succeeded}/{row.tasks.succeeded + row.tasks.failed})</span>
+                </td>
+                <td className="num">
+                  {percent(row.mergeRate)} <span className="meta">({row.pulls.merged}/{row.pulls.merged + row.pulls.closed})</span>
+                </td>
+                <td className="num">{row.costPerMergedPull === null ? "—" : formatUsd(row.costPerMergedPull)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="meta" style={{ margin: "6px 0 0" }}>A new version starts whenever the agent's prompt, model, tools, skills, subagents or permissions change. Compare a version with the one before to see whether the change helped.</p>
+    </div>
+  );
+}
+
 /** Agent page: its outcome numbers as tiles. */
 function OutcomeTiles({ days, agent }: { days: number; agent: string }) {
-  const row = useOutcomes(days, agent)?.agents[0];
+  const report = useOutcomes(days, agent);
+  const row = report?.agents[0];
   if (!row) return null;
   return (
+    <>
     <div className="stats">
       <div className="panel stat">
         <div className="label">Tasks that succeeded</div>
@@ -295,6 +342,8 @@ function OutcomeTiles({ days, agent }: { days: number; agent: string }) {
         <div className="meta">cards moved to needs-human</div>
       </div>
     </div>
+    {report?.versions && report.versions.length > 0 && <VersionTable versions={report.versions} />}
+    </>
   );
 }
 
