@@ -23,10 +23,15 @@ Checking what a tool returned: read the `tool_result` blocks in `request.body.me
 - `fake.addIssue({ number, title, body, user: { login }, parent?, blockedBy? })`, `fake.issues.get(n)!.comments`, `.pull`, `.state`.
 - `fake.permissions.set(login, "write")` (alice already has write).
 - `fake.userTokens.set("ghp_x", { login, id, name?, expires? })`: requests with that token act as the user; an unknown `ghp_` token gets 401.
-- `fake.requests` (`{ method, path, body, actor }`), `fake.reactionsBy`, `fake.repoLabels`, `fake.mergeBranches`, `fake.branchSha`.
+- `fake.requests` (`{ method, path, body, actor }`), `fake.reactionsBy`, `fake.repoLabels`, `fake.mergeBranches`, `fake.branchSha`, `fake.deleteBranch`.
+- Pull requests: `fake.issues.get(n)!.pull` (`{ head, base, merged?, mergeableState? }`); `GET /pulls/:n` and `?base=`/`?head=` lists work. `fake.secondaryLimit = n` makes the next n comment writes get GitHub's "secondary rate limit" (retry after 1 s).
+- Responses can carry headers (`{ status, body, headers }` in `handle`), e.g. token expiry on `GET /user`.
 - Board card: `const id = fake.addItem(n)`, set `fake.items.get(id)!.status` and push to `.history`, then send a `projects_v2_item` webhook (copy `humanMoves` from test/sub-issues.test.ts).
 
 ## Patterns
+- Octokit spaces GitHub writes a second apart across the whole process, so with other work going on a webhook can take several seconds to be recorded (`sendWebhook` waits up to 15 s).
+- macOS temp paths: compare with `realpathSync` (`/var` vs `/private/var`).
+- Tasks go through the scheduler: `db.createTask(...)` then `h.scheduler.kick()`; `h.scheduler.shutdown(0)` / `start()` to simulate a restart.
 - Wait for all agents: loop until no queued/running task, then `await h.scheduler.idle()` (`quiet()` in test/sub-issues.test.ts).
 - Task log: `GET /api/tasks/:id` → `events[].message`.
 - Signed-in calls (AUTH_DISABLED "false"): `db.createSession(id, login, 1)` and cookie `ao_session=${app.signCookie(id)}` (test/roles.test.ts).
