@@ -253,7 +253,9 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `PUBLIC_URL` | `http://localhost:3000` | Where GitHub and admins reach the orchestrator |
 | `GITHUB_URL` | `https://github.com` | Your GitHub Enterprise Server URL to use GHES |
 | `ANTHROPIC_*` | | The model service (see above) |
-| `ADMIN_USERS` / `ADMIN_TOKEN` | | Who can sign in to the admin UI |
+| `ADMIN_USERS` / `ADMIN_TOKEN` | | Who can sign in to the admin UI and change anything |
+| `OPERATOR_USERS` | | GitHub users who may sign in to run the queue: pause it, run, stop and retry agents, turn them on and off, clear a usage limit. Not configuration, prompts or credentials |
+| `VIEWER_USERS` | | GitHub users who may sign in to look, without changing anything |
 | `PROFILES_DIR` | `/profiles` | Agent profiles |
 | `MAX_CONCURRENT_TASKS` | `2` | Agents working at once |
 | `MODEL_ERROR_RETRIES` | `3` | When the model API fails to answer (5xx, overloaded, dropped connection): each request is retried this many times, then a task that still fails is retried this many times, continuing its session |
@@ -273,6 +275,8 @@ See [`.env.example`](.env.example) for everything. The main ones:
 Agents see only the model settings (with a per-session stand-in for the key), `AGENT_ENV_PASSTHROUGH` and their profile's `env` in their environment. In the Docker image they also run as a separate user that can't read the orchestrator's files or processes (see [Security](#security)).
 
 ## Monitoring
+
+**Audit log:** every change made in the admin UI (and every change someone's role didn't allow) is recorded with who made it and what they sent, secrets left out. **Settings → Audit log** shows the latest; `GET /api/audit` has the last 5000. Profile edits are also commits in the profiles folder's git history.
 
 Problems an administrator should hear about are recorded as incidents: failed tasks, loop guards that stopped agents (board guards, `MAX_AGENT_CHAIN`, `MAX_PULL_REQUESTS_PER_ISSUE`), spending limits reached or near, the model service's usage limits, agents that aren't isolated, and webhooks with a bad signature. The Dashboard lists the last 7 days under **Recent problems** (`GET /api/incidents` has the last 1000).
 

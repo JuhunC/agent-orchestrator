@@ -99,6 +99,10 @@ export const config = {
   },
 
   adminUsers: list("ADMIN_USERS").map((login) => login.toLowerCase()),
+  // GitHub users who may sign in to look (viewers) or to run the queue (operators: pause, cancel,
+  // retry, run agents, turn them on and off) without changing configuration.
+  viewerUsers: list("VIEWER_USERS").map((login) => login.toLowerCase()),
+  operatorUsers: list("OPERATOR_USERS").map((login) => login.toLowerCase()),
   adminToken: env("ADMIN_TOKEN"),
   authDisabled: env("AUTH_DISABLED") === "true",
   sessionSecret: env("SESSION_SECRET"),

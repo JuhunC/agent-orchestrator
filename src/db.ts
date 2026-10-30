@@ -717,6 +717,45 @@ export interface UsageRow {
   usage: TaskUsage | null;
 }
 
+// ---------- audit log ----------
+
+db.exec(`CREATE TABLE IF NOT EXISTS audit (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  login TEXT NOT NULL,
+  role TEXT NOT NULL,
+  action TEXT NOT NULL,
+  detail TEXT NOT NULL,
+  status INTEGER NOT NULL,
+  ts TEXT NOT NULL
+)`);
+
+export interface AuditRow {
+  id: number;
+  login: string;
+  role: string;
+  action: string;
+  detail: string;
+  status: number;
+  ts: string;
+}
+
+export function addAudit(entry: Omit<AuditRow, "id" | "ts">): void {
+  const result = db.prepare("INSERT INTO audit (login, role, action, detail, status, ts) VALUES (?, ?, ?, ?, ?, ?)").run(entry.login, entry.role, entry.action, entry.detail.slice(0, 2000), entry.status, now());
+  db.prepare("DELETE FROM audit WHERE id <= ?").run(Number(result.lastInsertRowid) - 5000);
+}
+
+export function listAudit(limit = 100): AuditRow[] {
+  return (db.prepare("SELECT * FROM audit ORDER BY id DESC LIMIT ?").all(limit) as Row[]).map((row) => ({
+    id: Number(row.id),
+    login: String(row.login),
+    role: String(row.role),
+    action: String(row.action),
+    detail: String(row.detail),
+    status: Number(row.status),
+    ts: String(row.ts),
+  }));
+}
+
 // ---------- incidents ----------
 
 export interface IncidentRow {

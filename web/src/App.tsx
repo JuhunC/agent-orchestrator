@@ -17,6 +17,8 @@ import { href, useRoute } from "./router.ts";
 
 interface Me {
   login: string | null;
+  /** admin: changes anything. operator: runs the queue. viewer: only looks. */
+  role?: "admin" | "operator" | "viewer" | null;
   githubLogin: boolean;
   authDisabled: boolean;
   callbackUrl?: string;
@@ -114,7 +116,10 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
         </nav>
         <div className="sidebar-foot">
           <span className={`live${live ? " on" : ""}`}>{live ? "Live" : "Reconnecting…"}</span>
-          <span>Signed in as {me.login}</span>
+          <span>
+            Signed in as {me.login}
+            {me.role && me.role !== "admin" ? ` (${me.role})` : ""}
+          </span>
           {!me.authDisabled && (
             <button className="small" onClick={onSignOut}>
               Sign out
@@ -131,12 +136,14 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
               <span className="meta">
                 {settings.running}/{settings.maxConcurrent} slots busy
               </span>
-              <button className={settings.paused ? "primary" : ""} onClick={togglePause}>
+              <button className={settings.paused ? "primary" : ""} disabled={me.role === "viewer"} onClick={togglePause}>
                 {settings.paused ? "Resume queue" : "Pause queue"}
               </button>
             </>
           )}
         </div>
+        {me.role === "viewer" && <div className="banner info">You can look around, but not change anything: you're signed in as a viewer.</div>}
+        {me.role === "operator" && section === "settings" && <div className="banner info">As an operator you can pause the queue and run, stop and retry agents, but not change configuration.</div>}
         <ErrorBoundary resetKey={route.path}>{page}</ErrorBoundary>
       </main>
     </div>

@@ -4,6 +4,7 @@ import { config } from "../config.ts";
 import { createSession, deleteSession, getSession } from "../db.ts";
 import { addressCheck, appAddresses, ensureAppDetails, getCredentials } from "../github/app.ts";
 import { errorMessage, log } from "../log.ts";
+import { audit, roleOf } from "./roles.ts";
 import { adminToken } from "./secrets.ts";
 
 const COOKIE = "ao_session";
@@ -77,12 +78,6 @@ async function githubJson<T>(url: string, init: RequestInit, what: string): Prom
   }
 }
 
-/** Who may sign in with GitHub: ADMIN_USERS, plus the account that created the app via setup. */
-function allowedLogins(): string[] {
-  const credentials = getCredentials();
-  const owner = credentials?.source === "setup" && credentials.ownerLogin ? [credentials.ownerLogin.toLowerCase()] : [];
-  return [...new Set([...config.adminUsers, ...owner])];
-}
 
 export function registerAuth(app: FastifyInstance): void {
   app.addHook("onRequest", async (request, reply) => {
@@ -90,7 +85,11 @@ export function registerAuth(app: FastifyInstance): void {
     if (!path.startsWith("/api/") || path.startsWith("/api/auth/") || PUBLIC_PATHS.has(path)) return;
     const login = currentLogin(request);
     if (!login) return reply.code(401).send({ error: "Sign in required" });
+    // Checked on every request, so taking someone off the lists signs them out.
+    const role = roleOf(login, [TOKEN_LOGIN, "dev"]);
+    if (!role) return reply.code(401).send({ error: `@${login} may no longer sign in here` });
     request.adminLogin = login;
+    request.role = role;
   });
 
   app.get("/api/auth/me", async (request) => {
@@ -101,6 +100,7 @@ export function registerAuth(app: FastifyInstance): void {
     const check = githubLogin && !login ? addressCheck(await appAddresses()) : null;
     return {
       login,
+      role: roleOf(login, [TOKEN_LOGIN, "dev"]),
       githubLogin,
       authDisabled: config.authDisabled,
       callbackUrl: `${config.publicUrl}/api/auth/github/callback`,
@@ -112,6 +112,7 @@ export function registerAuth(app: FastifyInstance): void {
     const token = String(request.body?.token ?? "");
     if (!token || !safeEqual(token, adminToken)) return reply.code(401).send({ error: "That admin token is not right" });
     startSession(reply, TOKEN_LOGIN);
+    audit({ adminLogin: TOKEN_LOGIN, role: "admin" }, "sign in", "with the admin token");
     return { login: TOKEN_LOGIN };
   });
 
@@ -172,11 +173,14 @@ export function registerAuth(app: FastifyInstance): void {
       );
       const login = user.login ?? "";
       if (!login) return fail(`GitHub didn't say who you are${user.message ? `: ${user.message}` : ""}.`);
-      if (!allowedLogins().includes(login.toLowerCase())) {
+      const role = roleOf(login);
+      if (!role) {
         log.warn("Rejected admin sign-in", { login });
-        return fail(`@${login} is not an admin. Add them to ADMIN_USERS.`);
+        audit({ adminLogin: login, role: "none" as never }, "sign in", "refused: not in ADMIN_USERS, OPERATOR_USERS or VIEWER_USERS", 403);
+        return fail(`@${login} is not an admin. Add them to ADMIN_USERS (or OPERATOR_USERS, or VIEWER_USERS to only look).`);
       }
       startSession(reply, login);
+      audit({ adminLogin: login, role }, "sign in", "with GitHub");
       log.info("Signed in with GitHub", { login });
       return reply.redirect("/#/");
     } catch (error) {

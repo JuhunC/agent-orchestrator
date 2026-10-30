@@ -11,6 +11,7 @@ import { registerApi } from "./api.ts";
 import { registerAuth } from "./auth.ts";
 import { sessionSecret } from "./secrets.ts";
 import { recordIncident } from "../runner/incidents.ts";
+import { registerRoles } from "./roles.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -49,6 +50,7 @@ export async function buildServer(): Promise<FastifyInstance> {
 
   await app.register(cookie, { secret: sessionSecret });
   registerAuth(app);
+  registerRoles(app);
 
   app.get("/healthz", async () => ({ ok: true }));
   app.get("/api/health", async () => ({ ok: true, configured: Boolean(getCredentials()) }));
