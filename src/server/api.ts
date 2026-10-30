@@ -365,7 +365,7 @@ export function registerApi(app: FastifyInstance): void {
       const admins = config.adminUsers.includes(account.login.toLowerCase());
       return {
         account,
-        warning: admins ? `@${account.login} is in ADMIN_USERS. What this account does on GitHub no longer starts agents, so use an account made for the agent.` : null,
+        warning: admins && profile.github.accountMentions ? `@${account.login} is in ADMIN_USERS, so it looks like a person's account: mentions of @${account.login} now start ${profile.name}. Set github.account_mentions: false in its agent.md if that's not wanted.` : null,
       };
     } catch (error) {
       return reply.code(error instanceof AccountError ? 400 : 500).send({ error: errorMessage(error) });

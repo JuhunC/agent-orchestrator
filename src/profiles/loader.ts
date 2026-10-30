@@ -120,6 +120,7 @@ export const GITHUB_DEFAULTS = {
   parent_branch: true,
   start_related: false,
   account_token_env: null,
+  account_mentions: true,
 } as const;
 
 /** The name of the variable holding the agent's GitHub account token (github.account_token_env). */
@@ -275,6 +276,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
       parentBranch: github.parent_branch !== false,
       startRelated: parseRelations(github.start_related, "start_related", errors),
       accountTokenEnv: parseTokenEnv(github.account_token_env, errors),
+      accountMentions: github.account_mentions !== false,
     },
     maxTurns: number("max_turns"),
     maxBudgetUsd: number("max_budget_usd"),

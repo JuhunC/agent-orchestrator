@@ -31,6 +31,8 @@ export interface GithubPermissions {
   startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
   /** github.account_token_env: the variable holding its GitHub account's token. */
   accountTokenEnv: string | null;
+  /** Mentioning or assigning its account starts it. */
+  accountMentions: boolean;
 }
 
 /** The GitHub account an agent acts as instead of the GitHub App. */

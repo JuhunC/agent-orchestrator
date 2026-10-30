@@ -59,6 +59,8 @@ export interface GithubPermissions {
   startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
   /** Environment variable with a token for the GitHub account it acts as; null = the admin UI's, or the App. */
   accountTokenEnv: string | null;
+  /** Mentioning or assigning its GitHub account starts it, like its handle. */
+  accountMentions: boolean;
 }
 
 /** One agent: profiles/agents/<name>/agent.md plus its own skills/ and mcp.json. */

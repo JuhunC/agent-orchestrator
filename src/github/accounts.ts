@@ -149,13 +149,45 @@ export async function agentAccount(agent: string | Profile): Promise<(AgentAccou
 
 type Who = { agent: string; installationId: number };
 
+/**
+ * What the orchestrator changed on GitHub as an agent's account in the last few minutes: issues
+ * and pull requests (owner/repo#number) and branches it pushed (owner/repo@branch). GitHub sends
+ * webhooks for those with the account as the sender; they're the agent's own echo, not a person.
+ */
+const ownWrites = new Map<string, number>();
+const OWN_WINDOW_MS = 5 * 60_000;
+
+export function noteOwnWrite(key: string): void {
+  const now = Date.now();
+  ownWrites.set(key.toLowerCase(), now);
+  if (ownWrites.size > 2000) for (const [entry, at] of ownWrites) if (now - at > OWN_WINDOW_MS) ownWrites.delete(entry);
+}
+
+export function isRecentOwnWrite(key: string): boolean {
+  const at = ownWrites.get(key.toLowerCase());
+  return at !== undefined && Date.now() - at <= OWN_WINDOW_MS;
+}
+
+/** Notes the issue, pull request or branch an account's API request changes. */
+function noteRequest(options: Record<string, any>, data?: Record<string, any>): void {
+  if (String(options.method ?? "GET").toUpperCase() === "GET" || !options.owner || !options.repo) return;
+  const repo = `${options.owner}/${options.repo}`;
+  const number = options.issue_number ?? options.pull_number ?? data?.number;
+  if (number) noteOwnWrite(`${repo}#${number}`);
+  for (const branch of [options.head, options.base]) if (typeof branch === "string" && branch) noteOwnWrite(`${repo}@${branch.replace(/^[^:]+:/, "")}`);
+}
+
 /** The client an agent's task acts on GitHub with: its account's, or the App installation's. */
 export async function clientFor(task: Who): Promise<GitHubClient> {
   const token = accountToken(task.agent);
   if (!token) return installationClient(task.installationId);
   let client = clients.get(token);
   if (!client) {
-    client = new GitHubOctokit({ auth: token }) as GitHubClient;
+    const created = new GitHubOctokit({ auth: token }) as GitHubClient;
+    // Before (the webhook can beat the response) and after (to learn a new pull request's number).
+    created.hook.before("request", (options) => noteRequest(options as Record<string, any>));
+    created.hook.after("request", (response, options) => noteRequest(options as Record<string, any>, response.data as Record<string, any>));
+    client = created;
     clients.set(token, client);
   }
   return client;
@@ -173,18 +205,21 @@ export async function commitIdentityFor(task: Who): Promise<{ name: string; emai
   return getBotIdentity(task.installationId);
 }
 
-/**
- * The agent whose account a GitHub login is, if any. What these accounts do on GitHub is the
- * agents' own work, so webhooks they cause are ignored like the App's.
- */
-export async function agentForLogin(login: string): Promise<string | null> {
-  if (!login) return null;
+/** Agents' GitHub accounts: login (lower case) → agent names. */
+export async function accountLogins(): Promise<Map<string, string[]>> {
+  const logins = new Map<string, string[]>();
   for (const profile of loadProfiles().agents) {
     if (!profile.github.accountTokenEnv && !getSetting(KEY(profile.name))) continue;
     const account = await agentAccount(profile).catch(() => null);
-    if (account?.login && account.login.toLowerCase() === login.toLowerCase()) return profile.name;
+    if (account?.login) logins.set(account.login.toLowerCase(), [...(logins.get(account.login.toLowerCase()) ?? []), profile.name]);
   }
-  return null;
+  return logins;
+}
+
+/** The agent whose account a GitHub login is, if any (the first, when agents share one). */
+export async function agentForLogin(login: string): Promise<string | null> {
+  if (!login) return null;
+  return (await accountLogins()).get(login.toLowerCase())?.[0] ?? null;
 }
 
 /** What the account can do in a repository: push (write), read, or nothing. */

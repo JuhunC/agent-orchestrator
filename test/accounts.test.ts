@@ -77,24 +77,39 @@ test("an agent registered as a GitHub account comments, opens PRs, reacts and co
   ]);
 });
 
-test("what an agent's account does on GitHub doesn't start agents", async () => {
+test("what the orchestrator did as an account is ignored; what a person does with it, and mentions of it, count", async () => {
   fake.addIssue({ number: 2, title: "Issue 2", body: "x", user: { login: "alice" } });
   fake.permissions.set("coder-bot", "write");
-  const delivery = await h.sendWebhook("issue_comment", {
-    action: "created",
-    sender: { login: "coder-bot", type: "User" },
-    issue: { number: 2, title: "Issue 2", html_url: `${fake.url}/acme/widgets/issues/2` },
-    comment: { body: "@aorch-plain please look", html_url: `${fake.url}/c/1`, node_id: "IC_1" },
-  });
-  assert.equal(delivery.decision, "ignored");
-  assert.equal(delivery.detail, "Sent by @coder-bot, the GitHub account agent coder acts as");
-  const fromEnv = await h.sendWebhook("issue_comment", {
-    action: "created",
-    sender: { login: "envy-bot", type: "User" },
-    issue: { number: 2, title: "Issue 2", html_url: `${fake.url}/acme/widgets/issues/2` },
-    comment: { body: "@aorch-plain please look", html_url: `${fake.url}/c/2`, node_id: "IC_2" },
-  });
-  assert.equal(fromEnv.detail, "Sent by @envy-bot, the GitHub account agent envy acts as");
+  const comment = (sender: string, body: string, id: string) =>
+    h.sendWebhook("issue_comment", {
+      action: "created",
+      sender: { login: sender, type: "User" },
+      issue: { number: 2, title: "Issue 2", html_url: `${fake.url}/acme/widgets/issues/2` },
+      comment: { body, html_url: `${fake.url}/c/${id}`, node_id: `IC_${id}` },
+    });
+
+  // The agent's own comment (it carries the orchestrator's mark) mentioning another agent: ignored.
+  const own = await comment("coder-bot", "@aorch-plain please look\n\n<!-- agent-orchestrator -->", "1");
+  assert.equal(own.decision, "ignored");
+  assert.equal(own.detail, "Made by agent coder as @coder-bot");
+
+  // A person typing with that same account (say it's their own): handled like anyone's comment.
+  const typed = await comment("coder-bot", "@aorch-plain please look", "2");
+  assert.equal(typed.decision, "triggered", typed.detail);
+  await h.waitForTask(db.listTasks({ limit: 1 })[0]!.id);
+
+  // Mentioning the account starts the agent that acts as it, like its handle.
+  const byAccount = await comment("alice", "@envy-bot can you check this?", "3");
+  assert.equal(byAccount.decision, "triggered", byAccount.detail);
+  const started = db.listTasks({ limit: 1 })[0]!;
+  assert.equal(started.agent, "envy");
+  await h.waitForTask(started.id);
+
+  // The orchestrator's other changes as the account (here: the issue it just commented on) are its echo.
+  const labeled = await h.sendWebhook("issues", { action: "labeled", sender: { login: "envy-bot", type: "User" }, label: { name: "x" }, issue: { number: 2, title: "Issue 2", body: "x", html_url: `${fake.url}/acme/widgets/issues/2`, node_id: "I_2" } });
+  assert.equal(labeled.detail, "Made by agent envy as @envy-bot");
+  const elsewhere = await h.sendWebhook("issues", { action: "assigned", sender: { login: "envy-bot", type: "User" }, assignee: { login: "envy-bot" }, issue: { number: 77, title: "Issue 77", body: "x", html_url: `${fake.url}/acme/widgets/issues/77`, node_id: "I_77" } });
+  assert.notEqual(elsewhere.detail, "Made by agent envy as @envy-bot", "an issue it didn't touch: a person assigned it");
 });
 
 test("agents without an account act as the App; an env account works; removing one goes back to the App", async () => {

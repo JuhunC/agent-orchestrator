@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { config } from "../config.ts";
 import { errorMessage, log } from "../log.ts";
-import { commitIdentityFor, gitTokenFor } from "../github/accounts.ts";
+import { commitIdentityFor, gitTokenFor, noteOwnWrite } from "../github/accounts.ts";
 import { makeSharedDir, shareWritten } from "./isolation.ts";
 import { repoRemoteUrl } from "../github/app.ts";
 import { issueBranch, sameRepo } from "../github/relations.ts";
@@ -144,12 +144,13 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
  * A sub-issue's pull request goes into its parent's branch. If that branch isn't on GitHub yet,
  * create it where this branch left the default branch, so the pull request shows only this work.
  */
-export async function ensureBaseBranch(task: Pick<Task, "installationId" | "agent">, workspace: Workspace, defaultBranch: string): Promise<boolean> {
+export async function ensureBaseBranch(task: Pick<Task, "installationId" | "agent" | "owner" | "repo">, workspace: Workspace, defaultBranch: string): Promise<boolean> {
   if (workspace.baseBranch === defaultBranch) return false;
   const token = await gitTokenFor(task);
   if ((await git(workspace.dir, ["ls-remote", "--heads", "origin", workspace.baseBranch], { token })).trim()) return false;
   const fork = await git(workspace.dir, ["merge-base", "HEAD", `refs/remotes/origin/${defaultBranch}`]);
   try {
+    noteOwnWrite(`${task.owner}/${task.repo}@${workspace.baseBranch}`);
     await git(workspace.dir, ["push", "origin", `${fork}:refs/heads/${workspace.baseBranch}`], { token });
   } catch (error) {
     // Another sub-issue's agent created it first: that's fine.

@@ -3,9 +3,9 @@ import { config, repoAllowed } from "./config.ts";
 import { createTask, deliveryActedOn, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
 import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
 import type { Profile } from "./profiles/types.ts";
-import { agentForLogin as agentOfAccount, clientFor } from "./github/accounts.ts";
+import { accountLogins, agentAccount, agentForLogin as agentOfAccount, clientFor, isRecentOwnWrite } from "./github/accounts.ts";
 import { installationClient, type GitHubClient } from "./github/app.ts";
-import { addEyesReaction, markAgentOnThread, permissionAtLeast, userPermission } from "./github/threads.ts";
+import { addEyesReaction, markAgentOnThread, permissionAtLeast, userPermission, writtenByOrchestrator } from "./github/threads.ts";
 import { errorMessage, log } from "./log.ts";
 import { extractMentions } from "./mentions.ts";
 import { handleProjectItemWebhook } from "./boards/engine.ts";
@@ -34,18 +34,19 @@ interface Intent {
 
 type Payload = Record<string, any>;
 
-function agentsMentionedIn(...texts: (string | null | undefined)[]): Agent[] {
-  const handles = new Set(texts.flatMap((text) => extractMentions(text)));
-  return [...handles].map((handle) => profileByHandle(handle)).filter((agent): agent is Agent => agent !== null);
-}
-
-function agentForLogin(login: string | undefined): Agent[] {
-  const agent = login ? profileByHandle(login) : null;
-  return agent ? [agent] : [];
-}
+/** GitHub logins that also name agents: their accounts (login, lower case → agents). */
+type Aliases = Map<string, Agent[]>;
 
 /** Maps a webhook to the agents it should start. Pure apart from agent lookups. */
-export function intentsFor(event: string, payload: Payload): Intent[] {
+export function intentsFor(event: string, payload: Payload, aliases: Aliases = new Map()): Intent[] {
+  // An agent is named by its handle, or by the GitHub account it acts as.
+  const byName = (name: string): Agent[] => {
+    const agent = profileByHandle(name);
+    return agent ? [agent] : (aliases.get(name.toLowerCase()) ?? []);
+  };
+  const unique = (agents: Agent[]) => [...new Map(agents.map((agent) => [agent.name, agent])).values()];
+  const agentsMentionedIn = (...texts: (string | null | undefined)[]): Agent[] => unique([...new Set(texts.flatMap((text) => extractMentions(text)))].flatMap(byName));
+  const agentForLogin = (login: string | undefined): Agent[] => (login ? unique(byName(login)) : []);
   const action = String(payload.action ?? "");
   const intents: Intent[] = [];
   const add = (agents: Agent[], base: Omit<Intent, "agent">) => {
@@ -178,6 +179,36 @@ function record(deliveryId: string, event: string, payload: Payload, decision: D
 }
 
 /** Entry point for verified webhooks. */
+/** Agents named by their GitHub accounts (unless they turned that off with github.account_mentions). */
+async function accountAliases(): Promise<Map<string, Profile[]>> {
+  const agents = loadProfiles().agents;
+  const aliases = new Map<string, Profile[]>();
+  for (const [login, names] of await accountLogins()) {
+    const named = names.map((name) => agents.find((agent) => agent.name === name)).filter((agent): agent is Profile => Boolean(agent?.github.accountMentions));
+    if (named.length) aliases.set(login, named);
+  }
+  return aliases;
+}
+
+/**
+ * Is this webhook (sent by an agent's account) something the orchestrator itself did? Its comments,
+ * reviews, issues and pull requests carry its mark; other changes it made to an issue or pull
+ * request (labels, edits, assignments, closing, pushes) are in the recent-writes record.
+ */
+function ownAction(event: string, payload: Payload): boolean {
+  const action = String(payload.action ?? "");
+  const opened = action === "opened" || action === "created";
+  const texts = [payload.comment?.body, payload.review?.body, opened ? (payload.issue?.body ?? payload.pull_request?.body ?? payload.discussion?.body) : null];
+  if (texts.some(writtenByOrchestrator)) return true;
+  // A comment or review without the mark was written by a person using the account.
+  if (["issue_comment", "pull_request_review_comment", "pull_request_review", "discussion_comment"].includes(event)) return false;
+  const repo = String(payload.repository?.full_name ?? "");
+  const number = payload.issue?.number ?? payload.pull_request?.number ?? payload.discussion?.number;
+  if (number && isRecentOwnWrite(`${repo}#${number}`)) return true;
+  const head = payload.pull_request?.head?.ref;
+  return Boolean(head && isRecentOwnWrite(`${repo}@${head}`));
+}
+
 /** Deliveries being handled right now, so one sent twice at once runs once. */
 const inFlight = new Set<string>();
 
@@ -212,12 +243,14 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
     const installationId = Number(payload.installation?.id ?? 0);
     if (!repoFull || !installationId) return record(deliveryId, event, payload, "ignored", "No repository or installation in payload");
     if (payload.sender?.type === "Bot") return record(deliveryId, event, payload, "ignored", "Sent by a bot");
-    // What agents do as their own GitHub accounts is their work, not a request: like the App's.
-    const ownAgent = await agentOfAccount(String(payload.sender?.login ?? ""));
-    if (ownAgent) return record(deliveryId, event, payload, "ignored", `Sent by @${payload.sender.login}, the GitHub account agent ${ownAgent} acts as`);
+    // What the orchestrator did as an agent's GitHub account is the agent's own work, like the
+    // App's. What a person does with that account (it may be theirs) counts like anyone's.
+    const senderLogin = String(payload.sender?.login ?? "");
+    const ownAgent = await agentOfAccount(senderLogin);
+    if (ownAgent && ownAction(event, payload)) return record(deliveryId, event, payload, "ignored", `Made by agent ${ownAgent} as @${senderLogin}`);
     if (!loadProfiles().agents.length) return record(deliveryId, event, payload, "ignored", "No agents configured");
 
-    const intents = intentsFor(event, payload);
+    const intents = intentsFor(event, payload, await accountAliases());
     // Agents already working on this thread hear about what people do there.
     const activity = activityFor(event, payload);
     const working = activity ? runningTasksForThread(activity.ref) : [];
@@ -305,7 +338,7 @@ async function accept(
   await Promise.all([
     intent.reactTo && as ? addEyesReaction(as, intent.reactTo).catch(() => undefined) : undefined,
     as && intent.kind !== "discussion" && intent.trigger === "mention"
-      ? markAgentOnThread(as, context.owner, context.repo, intent.number, agent.handle, label)
+      ? markAgentOnThread(as, context.owner, context.repo, intent.number, (await agentAccount(agent).catch(() => null))?.login || agent.handle, label)
       : undefined,
   ]);
   return `Queued task #${task.id} for ${agent.name}`;

@@ -5,6 +5,18 @@ import { fetchRelations, NO_RELATIONS, type Relations } from "./relations.ts";
 
 export const PROGRESS_MARKER = "<!-- agent-orchestrator:progress -->";
 export const RESULT_MARKER = "<!-- agent-orchestrator:result -->";
+/** On everything the orchestrator writes (comments, pull requests, reviews, issues), so its own webhooks are recognised. */
+export const AGENT_MARKER = "<!-- agent-orchestrator -->";
+
+/** The text with the orchestrator's (invisible) mark. */
+export function signed(body: string): string {
+  return body.includes("<!-- agent-orchestrator") ? body : `${body}\n\n${AGENT_MARKER}`;
+}
+
+/** Did the orchestrator write this (any of its marks)? */
+export function writtenByOrchestrator(text: unknown): boolean {
+  return typeof text === "string" && text.includes("<!-- agent-orchestrator");
+}
 const MAX_BODY = 65_000;
 
 export interface ThreadComment {
@@ -39,7 +51,8 @@ export interface ThreadContext {
 }
 
 function clampBody(body: string): string {
-  return body.length > MAX_BODY ? `${body.slice(0, MAX_BODY - 40)}\n\n…(truncated)` : body;
+  const marked = signed(body);
+  return marked.length > MAX_BODY ? `${marked.slice(0, MAX_BODY - 80)}\n\n…(truncated)\n\n${AGENT_MARKER}` : marked;
 }
 
 function isOrchestratorComment(body: string): boolean {

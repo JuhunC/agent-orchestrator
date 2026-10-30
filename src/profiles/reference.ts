@@ -104,6 +104,13 @@ const AGENT: FileDoc = {
       description: "Act on GitHub as a GitHub account instead of the GitHub App: the name of the environment variable holding that account's personal access token. Its comments, pull requests, reviews, issue changes, git pushes and commits are made as the account. Takes precedence over an account registered on the agent's page. Use an account made for the agent: what it does on GitHub doesn't start agents.",
       example: "github:\n  account_token_env: CODER_GITHUB_TOKEN",
     },
+    {
+      key: "github.account_mentions",
+      type: "boolean",
+      default: bool(GITHUB_DEFAULTS.account_mentions),
+      description: "When the agent acts as a GitHub account: mentioning that account (@login), assigning it or requesting its review starts the agent, like its handle. Turn off if the account is also a person's, who is mentioned for other things.",
+      example: "github:\n  account_mentions: false",
+    },
     { key: "max_turns", type: "number", default: "no limit", description: "Most model turns per task.", example: "max_turns: 200" },
     { key: "max_budget_usd", type: "number", default: "no limit", description: "Most it may spend per task, in US dollars.", example: "max_budget_usd: 5" },
     { key: "timeout_minutes", type: "number", default: "DEFAULT_TIMEOUT_MINUTES", description: "Stop a task after this long.", example: "timeout_minutes: 45" },

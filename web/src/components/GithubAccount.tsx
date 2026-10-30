@@ -119,8 +119,8 @@ export function GithubAccount({ agent, onChanged }: { agent: Agent; onChanged: (
         )}
         <p className="meta" style={{ margin: 0 }}>
           {account
-            ? "Its comments, pull requests, reviews, issue changes, pushes and commits are made as this account. Board card moves still use the board's access."
-            : "Use an account made for this agent, and a classic token with the repo scope (add workflow to let it change GitHub Actions files), or a fine-grained token with Contents, Issues and Pull requests read and write on its repositories. What this account does on GitHub won't start agents. The token stays on the server, encrypted."}
+            ? `Its comments, pull requests, reviews, issue changes, pushes and commits are made as this account. Board card moves still use the board's access.${agent.github.accountMentions ? ` Mentioning @${account.login} (or assigning it) starts ${agent.name}, like @${agent.handle}.` : ""}`
+            : "A classic token with the repo scope (add workflow to let it change GitHub Actions files), or a fine-grained token with Contents, Issues and Pull requests read and write on its repositories. It can be an account made for the agent or your own: what the orchestrator does as it is recognised as the agent's, what you do with it counts as yours. Mentioning the account starts the agent (github.account_mentions: false turns that off). The token stays on the server, encrypted."}
         </p>
       </div>
     </Panel>

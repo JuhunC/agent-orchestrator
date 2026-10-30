@@ -4,9 +4,9 @@ import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type Sdk
 import { z } from "zod";
 import { config, repoAllowed } from "../config.ts";
 import { getBoardItem, linkedThreads, linkThreads, listBoardItems, recordPullOpened, type CardFieldValues } from "../db.ts";
-import { gitTokenFor } from "../github/accounts.ts";
+import { gitTokenFor, noteOwnWrite } from "../github/accounts.ts";
 import { repoRemoteUrl, type GitHubClient } from "../github/app.ts";
-import { ciStatus, fetchThread, findOpenPull, openPull, postComment, updatePull, type ThreadContext } from "../github/threads.ts";
+import { ciStatus, fetchThread, findOpenPull, openPull, postComment, signed, updatePull, type ThreadContext } from "../github/threads.ts";
 import { errorMessage } from "../log.ts";
 import type { Profile } from "../profiles/types.ts";
 import { listWikiPages, readWikiPage, writeWikiPage } from "../github/wiki.ts";
@@ -148,6 +148,7 @@ export async function commitAndPush(ctx: ToolContext, message: string): Promise<
   const sha = await git(dir, ["rev-parse", "HEAD"]);
   if (!ahead) return { pushed: 0, sha, files: [] };
   const files = (await git(dir, ["diff", "--name-only", `${base}..HEAD`])).split("\n").filter(Boolean);
+  noteOwnWrite(`${task.owner}/${task.repo}@${workspace.branch}`); // the pull request's "synchronize" webhook is ours
   try {
     await git(dir, ["push", "origin", `HEAD:refs/heads/${workspace.branch}`], { token });
   } catch (error) {
@@ -456,12 +457,12 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             const pr = ctx.task.threadKind === "pull" ? { number: ctx.task.threadNumber } : await findOpenPull(ctx.gh, owner, repo, ctx.workspace.branch);
             if (!pr) return fail("There's no open pull request for this task's branch yet.");
             try {
-              await ctx.gh.rest.pulls.createReview({ owner, repo, pull_number: pr.number, event: args.event, body: args.body });
+              await ctx.gh.rest.pulls.createReview({ owner, repo, pull_number: pr.number, event: args.event, body: signed(args.body) });
             } catch (error) {
               // GitHub doesn't let an app approve or block a PR it opened itself; leave the verdict as a comment review.
               if (args.event === "COMMENT" || !/own pull request|Can not (approve|request changes)/i.test(errorMessage(error))) throw error;
               const verdict = args.event === "APPROVE" ? "Approved" : "Changes requested";
-              await ctx.gh.rest.pulls.createReview({ owner, repo, pull_number: pr.number, event: "COMMENT", body: `**${verdict}.**\n\n${args.body}` });
+              await ctx.gh.rest.pulls.createReview({ owner, repo, pull_number: pr.number, event: "COMMENT", body: signed(`**${verdict}.**\n\n${args.body}`) });
             }
             ctx.board?.reviews.push({ event: args.event, sha: await git(ctx.workspace.dir, ["rev-parse", "HEAD"]) });
             ctx.onEvent("tool", `Reviewed pull request #${pr.number}: ${args.event.toLowerCase().replace("_", " ")}`);
@@ -617,7 +618,7 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             const created: string[] = [];
             const labels = args.labels?.length ? await ensureLabels(ctx.gh, owner, repo, args.labels, (name) => created.push(name)) : [];
             const footer = `<sub>Sub-issue of #${threadNumber}, created by **${profile.name}** · orchestrator task #${ctx.task.id}.</sub>`;
-            const { data } = await ctx.gh.rest.issues.create({ owner, repo, title: args.title, body: [args.body.trim(), "", footer].join("\n"), ...(labels.length ? { labels } : {}) });
+            const { data } = await ctx.gh.rest.issues.create({ owner, repo, title: args.title, body: signed([args.body.trim(), "", footer].join("\n")), ...(labels.length ? { labels } : {}) });
             const child = toIssueRef(data);
             ctx.subIssuesCreated = (ctx.subIssuesCreated ?? 0) + 1;
             try {
