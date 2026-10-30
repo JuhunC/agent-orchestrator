@@ -52,7 +52,11 @@ export class FakeModel {
     return this.requests.filter((request) => request.isAgentLoop);
   }
 
+  /** The x-api-key of every request, to check which credential reached the model service. */
+  apiKeys: string[] = [];
+
   private async handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    this.apiKeys.push(String(req.headers["x-api-key"] ?? ""));
     const chunks: Buffer[] = [];
     for await (const chunk of req) chunks.push(chunk as Buffer);
     const text = Buffer.concat(chunks).toString("utf8");

@@ -8,6 +8,7 @@ import { takeInbox } from "../runner/inbox.ts";
 import { errorMessage, log } from "../log.ts";
 import type { Effort, Library, Profile } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
+import { modelAccess, revokeModelAccess, startModelProxy } from "./model-proxy.ts";
 import { createGithubServer, type ToolContext } from "./github-tools.ts";
 import { buildOptions, PER_TASK_ENV } from "./options.ts";
 import { testRunHooks } from "./evidence.ts";
@@ -31,6 +32,8 @@ interface Entry {
   busy: boolean;
   turns: number;
   lastUsedAt: number;
+  /** The model credential this session's agent uses (see model-proxy.ts). */
+  modelToken: string | null;
 }
 
 export interface SessionView {
@@ -158,6 +161,7 @@ class Sessions {
     this.entries.delete(key);
     log.info("Closing agent session", { key, reason });
     entry.session.close();
+    revokeModelAccess(entry.modelToken);
     this.changed();
     return true;
   }
@@ -187,12 +191,14 @@ class Sessions {
     this.makeRoom();
     const context: Entry["context"] = { current: null };
     const github = createGithubServer(profile, () => context.current, { cardFields: anyBoardTracksFields() });
+    // The real model credentials stay here; the agent gets its own, good for this session only.
+    const access = modelAccess(key);
     const session = new AgentSession(
       buildOptions({
         profile,
         library,
         workspace,
-        env,
+        env: access ? { ...env, ...access.env } : env,
         github,
         resume,
         stateDir: join(config.dataDir, "sessions", hash(key)),
@@ -215,6 +221,7 @@ class Sessions {
       busy: false,
       turns: 0,
       lastUsedAt: Date.now(),
+      modelToken: access?.token ?? null,
     };
     this.entries.set(key, entry);
     this.changed();
@@ -235,6 +242,7 @@ class Sessions {
       cardFields: anyBoardTracksFields(),
     });
 
+    await startModelProxy();
     let entry = this.entries.get(key);
     if (entry && (!entry.session.alive || entry.configHash !== configHash)) {
       this.close(key, entry.session.alive ? "the agent's profile changed" : "process ended");

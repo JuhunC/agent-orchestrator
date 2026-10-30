@@ -136,6 +136,9 @@ export const config = {
   // AGENT_ISOLATION: auto (isolate when it works, warn when not), required (refuse to run agents
   // unisolated), off (run agents as the orchestrator's own user).
   agentUser: env("AGENT_USER"),
+  // Agents reach the model service through the orchestrator with a per-session credential, so the
+  // real key never enters their environment. off: give agents the real credentials.
+  modelProxy: env("MODEL_PROXY", "on").toLowerCase() === "off" ? "off" : "on",
   agentIsolation: (["auto", "required", "off"].includes(env("AGENT_ISOLATION", "auto").toLowerCase()) ? env("AGENT_ISOLATION", "auto").toLowerCase() : "auto") as "auto" | "required" | "off",
 
   webhookProxyUrl: env("WEBHOOK_PROXY_URL"),
