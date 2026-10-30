@@ -224,7 +224,7 @@ export interface ColumnStartRequest {
  * Starts the column's agent(s) for the card, unless a guard says to escalate instead. Returns the
  * tasks it queued, or why it started none.
  */
-export async function startColumnAgent(board: Board, itemId: string, extra?: ColumnStartRequest): Promise<{ tasks: Task[]; skipped: string | null }> {
+export async function startColumnAgent(board: Board, itemId: string, extra?: ColumnStartRequest, startedBy?: number): Promise<{ tasks: Task[]; skipped: string | null }> {
   const row = getBoardItem(board.name, itemId);
   const column = row?.status ? board.columns[row.status] : undefined;
   if (!row || !column?.agents.length || board.errors.length) {
@@ -275,7 +275,8 @@ export async function startColumnAgent(board: Board, itemId: string, extra?: Col
       boardColumn: column.name,
       boardItemId: itemId,
       boardRound: round,
-      startedByTask: extra?.startedByTask ?? null,
+      // The task whose move (or start_related_agent) led here, so chains of agents can be traced and limited.
+      startedByTask: extra?.startedByTask ?? startedBy ?? null,
     });
     bus.publish({ type: "task", task });
     tasks.push(task);
@@ -322,11 +323,11 @@ export async function boardTaskSettled(taskId: number): Promise<void> {
   for (const vote of votes) addHandoff(board.name, row.itemId, { taskId: vote.taskId, agent: vote.agent, fromColumn: task.boardColumn!, toColumn: vote.to, note: vote.note });
   const summary = votes.map((vote) => `- **${vote.agent}** → ${vote.to}`).join("\n");
   await postComment(gh, target, `All agents in **${task.boardColumn}** finished. Moving the card to **${to}**.\n\n${summary}`).catch(() => undefined);
-  await moveCard(board, row.itemId, to, { agentMove: true }).catch((error) => log.warn("Could not move the card", { error: errorMessage(error) }));
+  await moveCard(board, row.itemId, to, { agentMove: true, startedBy: taskId }).catch((error) => log.warn("Could not move the card", { error: errorMessage(error) }));
 }
 
 /** Moves a card for an agent (or a guard), then reacts to the new column like any other move. */
-export async function moveCard(board: Board, itemId: string, to: string, options: { excludeTaskId?: number; agentMove: boolean; trigger?: boolean }): Promise<string> {
+export async function moveCard(board: Board, itemId: string, to: string, options: { excludeTaskId?: number; agentMove: boolean; trigger?: boolean; startedBy?: number }): Promise<string> {
   const row = getBoardItem(board.name, itemId);
   if (!row) throw new Error("This card isn't known to the board");
   let target = to;
@@ -354,7 +355,7 @@ export async function moveCard(board: Board, itemId: string, to: string, options
     for (const task of activeBoardTasks(board.name, itemId)) {
       if (task.id !== options.excludeTaskId && task.boardColumn !== target) scheduler.cancel(task.id, `The card moved to "${target}".`);
     }
-    await startColumnAgent(board, moved.itemId);
+    await startColumnAgent(board, moved.itemId, undefined, options.startedBy);
   }
   return target;
 }
@@ -367,7 +368,7 @@ export async function addIssueToBoard(
   board: Board,
   issue: { owner: string; repo: string; number: number; nodeId: string; title: string },
   column: string,
-  options: { trigger: boolean; fields?: CardFieldValues },
+  options: { trigger: boolean; fields?: CardFieldValues; startedBy?: number },
 ): Promise<string> {
   const { info, gh } = await project(board);
   const itemId = await addProjectItem(gh, info, issue.nodeId);
@@ -384,7 +385,7 @@ export async function addIssueToBoard(
     await setCardFields(board, itemId, options.fields).catch((error) => log.warn("Could not set the new card's fields", { board: board.name, item: itemId, error: errorMessage(error) }));
   }
   await stampDates(board, itemId, column, { ...options.fields });
-  if (options.trigger) await startColumnAgent(board, itemId);
+  if (options.trigger) await startColumnAgent(board, itemId, undefined, options.startedBy);
   return itemId;
 }
 

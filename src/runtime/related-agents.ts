@@ -66,15 +66,19 @@ export function relationOf(relations: Relations, owner: string, repo: string, nu
   return null;
 }
 
-/** How many agent-started tasks lead up to this one (0 for a task a person or a board started). */
+/**
+ * How many agents in a row started each other to get here: the tasks in this one's chain (itself,
+ * the task that started it, and so on) that start_related_agent started. Board stages an agent's
+ * card move started are links in the chain but don't count, so a loop through the board counts too.
+ */
 export function chainDepth(task: Task): number {
   let depth = 0;
-  const seen = new Set<number>([task.id]);
+  const seen = new Set<number>();
   let current: Task | null = task;
-  while (current?.startedByTask && !seen.has(current.startedByTask)) {
-    seen.add(current.startedByTask);
-    depth++;
-    current = getTask(current.startedByTask);
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    if (current.triggerKind === "agent") depth++;
+    current = current.startedByTask ? getTask(current.startedByTask) : null;
   }
   return depth;
 }

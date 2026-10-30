@@ -96,8 +96,8 @@ export interface ToolContext {
   board: BoardContext | null;
 }
 
-const MAX_COMMENTS_PER_TASK = 10;
-const MAX_SUB_ISSUES_PER_TASK = 20;
+export const MAX_COMMENTS_PER_TASK = 10;
+export const MAX_SUB_ISSUES_PER_TASK = 20;
 
 const DATE = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "a date like 2026-10-27");
 const FIELD_ARGS = {

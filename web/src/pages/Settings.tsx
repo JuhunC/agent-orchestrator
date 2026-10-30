@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Guards } from "../components/Guards.tsx";
 import { api, useApi, type Installation, type ModelInfo, type Settings as SettingsData, type Setup } from "../api.ts";
 import { Empty, Panel, Switch } from "../components/ui.tsx";
 import { useRoute } from "../router.ts";
@@ -340,6 +341,7 @@ export function Settings() {
       <div className="grid-2">
         <LivePanel settings={data} onSave={update} />
         <Workspaces info={data.workspaces} onDone={() => void reload()} />
+        <Guards />
         <Panel title="Environment" hint="set with environment variables">
           <dl className="kv">
             <dt>GITHUB_URL</dt>

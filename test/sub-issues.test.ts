@@ -141,6 +141,8 @@ test("a parent splits into sub-issues whose work merges into the parent's branch
   const cardOf = (number: number) => [...fake.items.values()].find((item) => item.number === number)!;
   assert.deepEqual(cardOf(1).history, ["Backlog"], "the planner didn't move the parent");
 
+  assert.equal(lastTask("worker", 2).startedByTask, lastTask("planner", 1).id, "the board stage records the task that put the card there");
+
   // Each sub-issue branched from the parent's branch and opened its pull request against it.
   const workerPrompt = lastTask("worker", 2).prompt!;
   assert.match(workerPrompt, /- Parent: #1 "Build the widget" \(open\)/);

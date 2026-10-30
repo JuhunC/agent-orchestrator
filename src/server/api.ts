@@ -29,6 +29,8 @@ import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { queueOrder } from "../runner/queue-order.ts";
 import { listIncidents, renderMetrics } from "../runner/incidents.ts";
+import { MAX_COMMENTS_PER_TASK, MAX_SUB_ISSUES_PER_TASK } from "../runtime/github-tools.ts";
+import { MAX_RELATED_STARTS_PER_TASK } from "../runtime/related-agents.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import { configReference } from "../profiles/reference.ts";
@@ -567,6 +569,36 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   app.post("/api/workspaces/cleanup", async () => cleanUpWorkspaces());
+
+  /** Every limit that stops agents running away, with what each is set to, and recent trips. */
+  app.get("/api/guards", async () => {
+    const profiles = loadProfiles();
+    const spend = spendStatus();
+    const money = (value: number | null) => (value === null ? "no limit" : `$${value}`);
+    return {
+      global: [
+        { name: "Spending per day", setting: "SPEND_LIMIT_DAILY_USD", value: money(spend.dailyUsd), what: "new tasks wait until the next UTC day once agents have spent this" },
+        { name: "Spending per month", setting: "SPEND_LIMIT_MONTHLY_USD", value: money(spend.monthlyUsd), what: "new tasks wait until the next UTC month" },
+        { name: "Agents starting agents", setting: "MAX_AGENT_CHAIN", value: config.maxAgentChain === 0 ? "off" : String(config.maxAgentChain), what: "how many agents in a row may start each other on related issues (start_related_agent), counted through board moves" },
+        { name: "Related starts per task", setting: "built in", value: String(MAX_RELATED_STARTS_PER_TASK), what: "agents one task may start on related issues" },
+        { name: "Pull requests per issue", setting: "MAX_PULL_REQUESTS_PER_ISSUE", value: config.maxPullRequestsPerIssue ? String(config.maxPullRequestsPerIssue) : "no limit", what: "pull requests agents may open for one issue, closed ones included" },
+        { name: "Comments per task", setting: "built in", value: String(MAX_COMMENTS_PER_TASK), what: "post_comment calls per task" },
+        { name: "Sub-issues per task", setting: "built in", value: String(MAX_SUB_ISSUES_PER_TASK), what: "create_sub_issue calls per task" },
+        { name: "Task timeout", setting: "TASK_TIMEOUT_MINUTES", value: `${config.defaultTimeoutMinutes} min`, what: "a task is stopped after this long (agents can set their own timeout_minutes)" },
+        { name: "Agents at once", setting: "MAX_CONCURRENT_TASKS", value: String(scheduler.maxConcurrent), what: "tasks running at the same time" },
+      ],
+      boards: loadBoards(profiles).boards.map((board) => ({
+        name: board.name,
+        movesPerIssue: board.limits.movesPerIssue,
+        entriesPerColumn: board.limits.entriesPerColumn,
+        budgetUsdPerIssue: board.limits.budgetUsdPerIssue,
+        maxRunning: board.limits.maxRunning,
+        needsHuman: board.needsHuman,
+      })),
+      agents: profiles.agents.map((agent) => ({ name: agent.name, maxBudgetUsd: agent.maxBudgetUsd, maxTurns: agent.maxTurns, timeoutMinutes: agent.timeoutMinutes, replicas: agent.replicas })),
+      recent: [...listIncidents(200, "loop_guard"), ...listIncidents(50, "spend_limit")].sort((a, b) => b.id - a.id).slice(0, 30),
+    };
+  });
 
   app.get<{ Querystring: { limit?: string; kind?: string } }>("/api/incidents", async (request) => listIncidents(Math.min(500, Number(request.query.limit) || 100), request.query.kind || undefined));
 
