@@ -67,6 +67,8 @@ export interface RunTurnOptions {
   onEvent: EventSink;
   signal: AbortSignal;
   timeoutMs: number;
+  /** The session's id, as soon as it's known (and again if it changes). */
+  onSessionId?: (id: string) => void;
 }
 
 export interface RunTurnOutcome extends TurnOutcome {
@@ -258,6 +260,8 @@ class Sessions {
 
     entry.busy = true;
     entry.context.current = context;
+    entry.session.onSessionId = options.onSessionId ?? null;
+    if (entry.session.sessionId) options.onSessionId?.(entry.session.sessionId);
     this.changed();
     try {
       let prompt = reused || entry.session.resumed ? prompts.followUp : prompts.full;
@@ -271,6 +275,7 @@ class Sessions {
         entry = this.open(options, key, configHash, null);
         entry.busy = true;
         entry.context.current = context;
+        entry.session.onSessionId = options.onSessionId ?? null;
         prompt = prompts.full;
         outcome = await entry.session.turn(prompt, onEvent, signal, timeoutMs);
       }
@@ -296,6 +301,7 @@ class Sessions {
     } finally {
       entry.busy = false;
       entry.context.current = null;
+      entry.session.onSessionId = null;
       entry.lastUsedAt = Date.now();
       // One-off agents and dead processes don't stay around.
       if (!entry.live || !entry.session.alive) this.close(key, entry.live ? "process ended" : "task finished");

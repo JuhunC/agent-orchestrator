@@ -199,7 +199,7 @@ export function buildFollowUpPrompt(input: {
   const fresh = thread.comments.filter((comment) => !comment.fromOrchestrator && (!since || comment.createdAt > since) && comment.body.trim() !== task.requestText.trim());
   const sections = [
     interrupted
-      ? `You were interrupted by a usage limit while working on this. Your uncommitted changes are still in the working copy. Continue where you left off.`
+      ? `You were interrupted while working on this (a usage limit, or the orchestrator restarted). Your uncommitted changes are still in the working copy. Continue where you left off.`
       : `@${task.requestedBy} has a new request for you on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
     "",
     "## Request",

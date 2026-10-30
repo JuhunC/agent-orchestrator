@@ -129,7 +129,7 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
 
   // After a usage-limit pause, keep the interrupted attempt's work so the agent can carry on.
   const current = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
-  const keepWork = task.attempts > 0 && current === branch;
+  const keepWork = (task.attempts > 0 || task.restarts > 0) && current === branch;
   if (!keepWork) {
     await git(dir, ["checkout", "--force", "-B", branch, startPoint], { token });
     await git(dir, ["clean", "-fd", "-e", ".deps/"]);

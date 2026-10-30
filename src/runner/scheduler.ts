@@ -12,7 +12,7 @@ import { queueOrder } from "./queue-order.ts";
 import { fallbackModels } from "../runtime/options.ts";
 import { loadBoards } from "../boards/loader.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
-import { executeTask, markInterrupted } from "./run-task.ts";
+import { executeTask, recoverInterrupted } from "./run-task.ts";
 
 /**
  * Runs queued tasks, up to the concurrency limit. Two tasks that share a workspace (same agent
@@ -22,6 +22,8 @@ class Scheduler {
   private running = new Map<number, { controller: AbortController; workspace: string }>();
   private draining: Promise<void>[] = [];
   private wakeTimer: NodeJS.Timeout | null = null;
+  /** Set while shutting down: nothing new starts. */
+  private stopping = false;
 
   get maxConcurrent(): number {
     const stored = Number(getSetting("max_concurrent"));
@@ -48,14 +50,15 @@ class Scheduler {
     return [...this.running.keys()];
   }
 
-  /** Recovers from a restart: running tasks are marked interrupted, queued ones resume. */
+  /** Recovers from a restart: tasks that were running go back in the queue to resume (or fail after RESTART_RESUMES). */
   async start(): Promise<void> {
-    for (const task of tasksWithStatus("running")) await markInterrupted(task);
+    this.stopping = false;
+    for (const task of tasksWithStatus("running")) await recoverInterrupted(task);
     this.kick();
   }
 
   kick(): void {
-    if (this.paused) return;
+    if (this.paused || this.stopping) return;
     const now = Date.now();
     let wakeAt = Infinity;
     const queued = queuedTasks();
@@ -173,7 +176,17 @@ class Scheduler {
     while (this.draining.length) await Promise.all(this.draining);
   }
 
-  async shutdown(): Promise<void> {
+  /**
+   * Stops for a restart: nothing new starts, running tasks get SHUTDOWN_WAIT_SECONDS to finish,
+   * and the rest are stopped and queued again, to resume their sessions after the restart.
+   */
+  async shutdown(waitSeconds = config.shutdownWaitSeconds): Promise<void> {
+    this.stopping = true;
+    if (this.wakeTimer) clearTimeout(this.wakeTimer);
+    if (this.running.size && waitSeconds > 0) {
+      log.info("Waiting for running agents before stopping", { running: this.running.size, seconds: waitSeconds });
+      await Promise.race([this.idle(), new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000).unref())]);
+    }
     for (const { controller } of this.running.values()) controller.abort("shutdown");
     await this.idle();
     sessions.closeAll();

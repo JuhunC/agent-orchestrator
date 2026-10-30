@@ -57,6 +57,8 @@ export interface Task {
   startedByTask: number | null;
   /** A replay that changes nothing on GitHub: write tools only say what they would do. */
   dryRun: boolean;
+  /** How many times the orchestrator restarted under this task (it resumes each time, up to RESTART_RESUMES). */
+  restarts: number;
 }
 
 /** Tokens one model used. */

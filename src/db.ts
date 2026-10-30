@@ -116,6 +116,7 @@ addColumn("tasks", "usage", "TEXT");
 addColumn("tasks", "started_by_task", "INTEGER");
 // Dry runs replay a task without changing anything on GitHub (see run-task.ts).
 addColumn("tasks", "dry_run", "INTEGER NOT NULL DEFAULT 0");
+addColumn("tasks", "restarts", "INTEGER NOT NULL DEFAULT 0");
 db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
 db.exec(`CREATE TABLE IF NOT EXISTS incidents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -227,6 +228,7 @@ function toTask(row: Row): Task {
     boardRound: (row.board_round as string | null) ?? null,
     startedByTask: row.started_by_task === null || row.started_by_task === undefined ? null : Number(row.started_by_task),
     dryRun: Boolean(row.dry_run),
+    restarts: Number(row.restarts ?? 0),
   };
 }
 
@@ -319,6 +321,7 @@ const TASK_COLUMNS: Record<string, string> = {
   boardItemId: "board_item_id",
   boardRound: "board_round",
   startedByTask: "started_by_task",
+  restarts: "restarts",
 };
 
 export function updateTask(id: number, patch: Partial<Task>): Task {

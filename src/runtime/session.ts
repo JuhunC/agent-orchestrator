@@ -142,8 +142,14 @@ export class AgentSession {
     }
   }
 
+  /** Told the session's id as soon as it's known, so an interrupted task can resume it. */
+  onSessionId: ((id: string) => void) | null = null;
+
   private handle(message: SDKMessage): void {
-    if ("session_id" in message && message.session_id) this.sessionId = message.session_id;
+    if ("session_id" in message && message.session_id && message.session_id !== this.sessionId) {
+      this.sessionId = message.session_id;
+      this.onSessionId?.(message.session_id);
+    }
     const turn = this.current;
     switch (message.type) {
       case "system":

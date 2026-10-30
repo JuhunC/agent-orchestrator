@@ -130,6 +130,10 @@ export const config = {
   liveIdleMinutes: int("LIVE_SESSION_IDLE_MINUTES", 30),
   maxLiveSessions: int("MAX_LIVE_SESSIONS", 4),
   usageLimitRetries: int("USAGE_LIMIT_RETRIES", 5),
+  // A task the orchestrator restarted under (a deploy, a crash) resumes where it left off, up to
+  // this many times; on shutdown, running tasks get SHUTDOWN_WAIT_SECONDS to finish first.
+  restartResumes: Math.max(0, int("RESTART_RESUMES", 2)),
+  shutdownWaitSeconds: Math.max(0, int("SHUTDOWN_WAIT_SECONDS", 20)),
   // Retries when the model API fails to answer (5xx, overloaded, dropped connection): each request
   // is retried this many times by Claude Code, and a task that still fails is retried this many
   // times by the orchestrator, waiting MODEL_ERROR_RETRY_DELAY_SECONDS (doubling) in between.

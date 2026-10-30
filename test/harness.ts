@@ -153,7 +153,7 @@ export async function startHarness(profiles: Record<string, string>, env: Record
   }
 
   async function stop() {
-    await scheduler.shutdown();
+    await scheduler.shutdown(0);
     sessions.closeAll();
     await app.close();
     await fake.stop();

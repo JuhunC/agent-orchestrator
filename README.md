@@ -272,6 +272,8 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `PROGRESS_UPDATE_SECONDS` | `60` | How often a running task's progress comment is edited, at most |
 | `PROGRESS_EDITS_PER_HOUR` | `300` | Progress edits all tasks together may make per hour. GitHub limits how fast content is written (about 500 writes an hour); past the budget, edits wait and the comment is completed when the task ends |
 | `PROGRESS_COMMENTS` | `edit` | `minimal`: post the progress comment when a task starts and complete it when it ends, with no edits in between (for many agents at once) |
+| `RESTART_RESUMES` | `2` | A task running when the orchestrator restarts (a deploy, a crash) is queued again and resumes its own session, with its uncommitted work, up to this many times; then it fails as before |
+| `SHUTDOWN_WAIT_SECONDS` | `20` | On shutdown, nothing new starts and running tasks get this long to finish before they're stopped (and resumed after the restart). Keep it below Docker's `stop_grace_period` (30 s in the compose files) |
 | `QUEUE_AGING_MINUTES` | `30` | Queued tasks start in this order: people's requests (mentions, assignments, runs from the admin UI), then work agents started for each other, then board stages; a task that has waited this long goes first. Boards can also cap their running cards with `limits.max_running` |
 | `GIT_SHARED_OBJECTS` | `on` | New checkouts borrow history from one shared copy of each repository (`DATA_DIR/mirrors`, never pruned), so each holds little more than its files and is quick to make. `off`: a full clone each |
 | `WORKSPACE_CLOSED_RETENTION_DAYS` | `2` | Checkouts of closed issues and pull requests are removed after this many days unused |

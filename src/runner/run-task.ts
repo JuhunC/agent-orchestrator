@@ -174,7 +174,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         : null;
     const prompts = {
       full: buildPrompt({ agent: profile, task, thread, history, workspace, board: stage }),
-      followUp: buildFollowUpPrompt({ agent: profile, task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0, board: stage }),
+      followUp: buildFollowUpPrompt({ agent: profile, task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0 || task.restarts > 0, board: stage }),
     };
 
     const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0, board: boardContext };
@@ -191,8 +191,12 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       library: profiles.library,
       workspace,
       env: agentEnv(profile, taskEnv(task, workspace)),
-      // A dry run starts afresh (the thread's history is in its prompt), so it can't change the real session.
-      resumeSessionId: task.dryRun ? null : lastSessionId(ref, profile.name),
+      // An interrupted task resumes its own session. A dry run otherwise starts afresh (the thread's
+      // history is in its prompt), so it can't change the real session.
+      resumeSessionId: (task.attempts > 0 || task.restarts > 0) && task.sessionId ? task.sessionId : task.dryRun ? null : lastSessionId(ref, profile.name),
+      onSessionId: (id: string) => {
+        if (task.sessionId !== id) task = patch(task.id, { sessionId: id });
+      },
       prompts,
       context,
       model: startModel,
@@ -249,7 +253,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     });
 
     if (outcome.cancelled) {
-      if (signal.reason === "shutdown") await finish("failed", outcome.result, "The orchestrator stopped while this was running. Mention the agent again to retry.");
+      if (signal.reason === "shutdown") await requeueForRestart(outcome.result);
       else await finish("cancelled", outcome.result, typeof signal.reason === "string" && signal.reason !== "admin" ? signal.reason : "Cancelled from the admin UI.");
       return;
     }
@@ -416,6 +420,20 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
   }
 
   /** The model service hit its usage limit: wait for the reset and carry on, instead of failing. */
+  /** The orchestrator is shutting down: queue the task again, to resume its session when it's back. */
+  async function requeueForRestart(text: string) {
+    if (task.restarts + 1 > config.restartResumes) {
+      await finish("failed", text, `The orchestrator restarted while this was running (${task.restarts + 1} times). Mention the agent again to retry.`);
+      return;
+    }
+    onEvent("system", "The orchestrator is restarting; this task resumes where it left off when it's back");
+    state.phase = "waiting";
+    state.note = "The orchestrator is restarting. This continues where it left off when it's back.";
+    task = patch(task.id, { status: "queued", restarts: task.restarts + 1, error: null, retryAt: null });
+    await throttle.flush(true);
+    await throttle.stop();
+  }
+
   async function pauseForLimit(limit: DetectedLimit, text: string) {
     const until = retryTime(limit);
     setLimit(until, limit.message);
@@ -455,6 +473,33 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       details,
     });
     await postComment(gh, target(), body).catch((error) => log.warn("Could not post result comment", { task: task.id, error: errorMessage(error) }));
+  }
+}
+
+/**
+ * A task that was running when the orchestrator stopped without shutting down (a crash, a killed
+ * container): queue it again to resume its session, up to RESTART_RESUMES times; then it fails.
+ */
+export async function recoverInterrupted(task: Task): Promise<void> {
+  if (task.restarts + 1 > config.restartResumes) return markInterrupted(task);
+  const updated = patch(task.id, { status: "queued", restarts: task.restarts + 1, error: null, retryAt: null });
+  emit(task.id, "system", "The orchestrator restarted while this was running; it resumes where it left off");
+  if (!task.progressCommentId || task.dryRun) return;
+  try {
+    const gh = await clientFor(task);
+    const state: ProgressState = {
+      phase: "waiting",
+      steps: [],
+      latestText: "",
+      startedAt: task.startedAt ? Date.parse(task.startedAt) : Date.now(),
+      finishedAt: null,
+      note: "The orchestrator restarted while this was running. It continues where it left off.",
+      prNumber: null,
+      prUrl: null,
+    };
+    await editComment(gh, { owner: task.owner, repo: task.repo, kind: task.threadKind }, task.progressCommentId, renderProgress({ name: task.agent }, updated, state));
+  } catch (error) {
+    log.warn("Could not update an interrupted task's comment", { task: task.id, error: errorMessage(error) });
   }
 }
 
