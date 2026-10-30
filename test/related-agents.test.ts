@@ -120,6 +120,11 @@ test("a sub-issue's agent starts its parent's agent, which can start it back, un
   assert.equal(back.startedByTask, woken.id);
   assert.match(back.requestText, /from acme\/widgets#1 "Issue 1", this issue's parent/);
   assert.match(results("PING_CHILD"), /end of a chain of 2 agents starting each other, and MAX_AGENT_CHAIN is 2/);
+
+  // The task page shows the chain both ways.
+  const view = (await h.app.inject({ method: "GET", url: `/api/tasks/${woken.id}` })).json().chain;
+  assert.deepEqual(view.ancestors.map((node: { id: number }) => node.id), [first.id]);
+  assert.deepEqual(view.started.map((node: { id: number; agent: string }) => [node.id, node.agent]), [[back.id, "sub"]]);
   assert.equal(tasks().filter((task) => task.agent === "lead" && task.threadNumber === 1).length, 2, "no third lead task");
   assert.ok(!model.agentRequests().some((request) => request.prompt.includes("PING_AGAIN")));
 });

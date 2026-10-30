@@ -1217,3 +1217,13 @@ blockquote {
     flex-wrap: wrap;
   }
 }
+
+/* Chain of tasks on the task page */
+.chain {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.chain-row {
+  overflow-wrap: anywhere;
+}

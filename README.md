@@ -188,7 +188,7 @@ An agent can hand work over to a related issue: a sub-issue that merged its work
 - **Who starts.** For a card on a project board, the agent of the card's column, as if the card had just entered it, so the board's loop guards apply. A board can limit which columns may be started this way with `related_agents: { columns: [...] }`. For any other issue, the agent named in the call, or else the agent that last worked on that issue.
 - **When.** When the asking task finishes, and only if it succeeds: after its card moves and after its issue is closed, so the other agent sees the finished work. An agent already working on the related issue gets the message instead, and one already queued there gets it added to its request.
 - **Loops.** A task started this way records which task started it, and so does a board stage an agent's card move started. Once `MAX_AGENT_CHAIN` (default 3) agents have started each other in a row, counting through board moves in between, the last one can't start another. Each task can start at most 5.
-- Only issues related on GitHub count; link others first with `link_issue`. The task page shows which task started a task, and the related issue gets the usual progress comment.
+- Only issues related on GitHub count; link others first with `link_issue`. A task's page shows its **Chain**: the tasks that led to it and the ones it started, across issues and board stages. The related issue gets the usual progress comment.
 
 ## Project boards
 

@@ -3,8 +3,57 @@ import { api, duration, KIND_LABEL, useNow, useStream, type Task, type TaskEvent
 import { Empty, Panel, StatusPill, who } from "../components/ui.tsx";
 import { href, navigate } from "../router.ts";
 
+/** A task in a chain of agents starting each other. */
+interface ChainNode {
+  id: number;
+  agent: string;
+  owner: string;
+  repo: string;
+  threadKind: Task["threadKind"];
+  threadNumber: number;
+  threadTitle: string;
+  triggerKind: Task["triggerKind"];
+  status: Task["status"];
+  board: string | null;
+  boardColumn: string | null;
+  started?: ChainNode[];
+}
+
+function ChainRow({ node, depth, current }: { node: ChainNode; depth: number; current?: boolean }) {
+  return (
+    <>
+      <div className="chain-row" style={{ paddingLeft: depth * 18 }}>
+        <StatusPill status={node.status} />{" "}
+        {current ? <b>this task</b> : <a href={href(`/tasks/${node.id}`)}>task #{node.id}</a>} · {node.agent} on {node.owner}/{node.repo}#{node.threadNumber}
+        {node.threadTitle ? ` "${node.threadTitle}"` : ""}
+        <span className="meta">
+          {" "}
+          · {node.triggerKind === "agent" ? "started by an agent" : node.triggerKind === "board" ? `board stage${node.boardColumn ? ` (${node.boardColumn})` : ""}` : node.triggerKind}
+        </span>
+      </div>
+      {node.started?.map((child) => <ChainRow key={child.id} node={child} depth={depth + 1} />)}
+    </>
+  );
+}
+
+/** Who started whom: the tasks that led to this one, and those it started. */
+function Chain({ task, chain }: { task: Task; chain: { ancestors: ChainNode[]; started: ChainNode[] } }) {
+  if (!chain.ancestors.length && !chain.started.length) return null;
+  return (
+    <Panel title="Chain" hint="agents starting agents on related issues, and board stages their moves started">
+      <div className="chain">
+        {chain.ancestors.map((node, index) => (
+          <ChainRow key={node.id} node={node} depth={index} />
+        ))}
+        <ChainRow node={{ ...task, started: chain.started }} depth={chain.ancestors.length} current />
+      </div>
+    </Panel>
+  );
+}
+
 export function TaskDetail({ id }: { id: number }) {
   const [task, setTask] = useState<Task | null>(null);
+  const [chain, setChain] = useState<{ ancestors: ChainNode[]; started: ChainNode[] } | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showStderr, setShowStderr] = useState(false);
@@ -17,10 +66,11 @@ export function TaskDetail({ id }: { id: number }) {
     setTask(null);
     setEvents([]);
     api
-      .get<{ task: Task; events: TaskEvent[] }>(`/api/tasks/${id}`)
+      .get<{ task: Task; events: TaskEvent[]; chain?: { ancestors: ChainNode[]; started: ChainNode[] } }>(`/api/tasks/${id}`)
       .then((data) => {
         setTask(data.task);
         setEvents(data.events);
+        setChain(data.chain ?? null);
       })
       .catch((err) => setError((err as Error).message));
   }, [id]);
@@ -93,6 +143,8 @@ export function TaskDetail({ id }: { id: number }) {
           <button onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)}>Run now</button>
         </div>
       )}
+
+      {chain && <Chain task={task} chain={chain} />}
 
       <div className="grid-2">
         <Panel title="Request">

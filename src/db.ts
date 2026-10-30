@@ -919,6 +919,11 @@ export function deliveryCounts(): Record<string, number> {
   return Object.fromEntries(rows.map((row) => [String(row.decision), Number(row.count)]));
 }
 
+/** Tasks this one started (start_related_agent, or a card move that started a board stage). */
+export function tasksStartedBy(id: number): Task[] {
+  return (db.prepare("SELECT * FROM tasks WHERE started_by_task = ? ORDER BY id").all(id) as Row[]).map(toTask);
+}
+
 /** What each agent's tasks cost since `since`. */
 export function spendByAgentSince(since: string): Record<string, number> {
   const rows = db.prepare("SELECT agent, COALESCE(SUM(cost_usd), 0) AS total FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? GROUP BY agent").all(since) as Row[];

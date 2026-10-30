@@ -19,6 +19,7 @@ import {
   tasksForThread,
   listBoardItems,
   listHandoffs,
+  tasksStartedBy,
 } from "../db.ts";
 import { addressCheck, appAddresses, ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials, setAppWebhookUrl } from "../github/app.ts";
 import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount, removeAccount, repositoryAccess } from "../github/accounts.ts";
@@ -54,7 +55,7 @@ import { loadBoards } from "../boards/loader.ts";
 import { clearLimit, getLimit } from "../runner/limit-store.ts";
 import { startManualTask } from "../triggers.ts";
 import { usageReport } from "../runner/usage-report.ts";
-import type { ThreadKind, ThreadRef } from "../types.ts";
+import type { Task, ThreadKind, ThreadRef } from "../types.ts";
 
 const KINDS: ThreadKind[] = ["issue", "pull", "discussion"];
 
@@ -78,6 +79,36 @@ function modelView() {
     credential: auth,
     limit: getLimit(),
   };
+}
+
+/** A task in a chain of agents starting each other, for the task page. */
+function chainEntry(task: Task) {
+  return { id: task.id, agent: task.agent, owner: task.owner, repo: task.repo, threadKind: task.threadKind, threadNumber: task.threadNumber, threadTitle: task.threadTitle, triggerKind: task.triggerKind, status: task.status, board: task.board, boardColumn: task.boardColumn, createdAt: task.createdAt };
+}
+
+/**
+ * Who started whom around a task: the tasks that led to it (oldest first) and those it led to,
+ * as a tree (agents starting agents on related issues, and board stages their moves started).
+ */
+function taskChain(task: Task) {
+  const ancestors: ReturnType<typeof chainEntry>[] = [];
+  const seen = new Set<number>([task.id]);
+  let current = task.startedByTask ? getTask(task.startedByTask) : null;
+  while (current && !seen.has(current.id) && ancestors.length < 50) {
+    seen.add(current.id);
+    ancestors.unshift(chainEntry(current));
+    current = current.startedByTask ? getTask(current.startedByTask) : null;
+  }
+  type Node = ReturnType<typeof chainEntry> & { started: Node[] };
+  let budget = 200;
+  const descend = (from: Task): Node[] =>
+    tasksStartedBy(from.id)
+      .filter((child) => !seen.has(child.id) && budget-- > 0)
+      .map((child) => {
+        seen.add(child.id);
+        return { ...chainEntry(child), started: descend(child) };
+      });
+  return { ancestors, started: descend(task) };
 }
 
 function threadRef(params: { owner: string; repo: string; kind: string; number: string }): ThreadRef {
@@ -215,7 +246,7 @@ export function registerApi(app: FastifyInstance): void {
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/tasks/:id", async (request, reply) => {
     const task = getTask(Number(request.params.id));
     if (!task) return reply.code(404).send({ error: "Task not found" });
-    return { task, events: listEvents(task.id, Number(request.query.after ?? 0)) };
+    return { task, events: listEvents(task.id, Number(request.query.after ?? 0)), chain: request.query.after ? undefined : taskChain(task) };
   });
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (request, reply) => {
