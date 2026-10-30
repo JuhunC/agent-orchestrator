@@ -717,6 +717,101 @@ export interface UsageRow {
   usage: TaskUsage | null;
 }
 
+// ---------- outcomes: what became of agents' pull requests ----------
+
+db.exec(`CREATE TABLE IF NOT EXISTS pull_outcomes (
+  owner TEXT NOT NULL COLLATE NOCASE,
+  repo TEXT NOT NULL COLLATE NOCASE,
+  number INTEGER NOT NULL,
+  agent TEXT NOT NULL,
+  state TEXT NOT NULL,
+  opened_at TEXT NOT NULL,
+  closed_at TEXT,
+  checked_at TEXT,
+  PRIMARY KEY (owner, repo, number)
+)`);
+
+export interface PullOutcome {
+  owner: string;
+  repo: string;
+  number: number;
+  agent: string;
+  state: "open" | "merged" | "closed";
+  openedAt: string;
+  closedAt: string | null;
+  checkedAt: string | null;
+}
+
+const toOutcome = (row: Row): PullOutcome => ({
+  owner: String(row.owner),
+  repo: String(row.repo),
+  number: Number(row.number),
+  agent: String(row.agent),
+  state: String(row.state) as PullOutcome["state"],
+  openedAt: String(row.opened_at),
+  closedAt: (row.closed_at as string | null) ?? null,
+  checkedAt: (row.checked_at as string | null) ?? null,
+});
+
+/** An agent opened a pull request. */
+export function recordPullOpened(owner: string, repo: string, number: number, agent: string, at = now()): void {
+  db.prepare("INSERT OR IGNORE INTO pull_outcomes (owner, repo, number, agent, state, opened_at) VALUES (?, ?, ?, ?, 'open', ?)").run(owner, repo, number, agent, at);
+}
+
+/** A pull request agents opened was merged, closed or reopened. False when it isn't one of theirs. */
+export function setPullState(owner: string, repo: string, number: number, state: PullOutcome["state"], at = now()): boolean {
+  const result = db.prepare("UPDATE pull_outcomes SET state = ?, closed_at = ?, checked_at = ? WHERE owner = ? AND repo = ? AND number = ?").run(state, state === "open" ? null : at, now(), owner, repo, number);
+  return Number(result.changes) > 0;
+}
+
+export function markPullChecked(owner: string, repo: string, number: number): void {
+  db.prepare("UPDATE pull_outcomes SET checked_at = ? WHERE owner = ? AND repo = ? AND number = ?").run(now(), owner, repo, number);
+}
+
+/** Open ones not checked with GitHub since `before`, oldest check first. */
+export function pullsToCheck(before: string, limit = 50): PullOutcome[] {
+  return (db.prepare("SELECT * FROM pull_outcomes WHERE state = 'open' AND (checked_at IS NULL OR checked_at < ?) ORDER BY COALESCE(checked_at, '') LIMIT ?").all(before, limit) as Row[]).map(toOutcome);
+}
+
+/** Pull requests agents opened since `since`, for one agent or all. */
+export function pullOutcomes(since: string, agent?: string): PullOutcome[] {
+  return (db.prepare(`SELECT * FROM pull_outcomes WHERE opened_at >= ? ${agent ? "AND agent = ?" : ""}`).all(...(agent ? [since, agent] : [since])) as Row[]).map(toOutcome);
+}
+
+/** For /metrics: agents' pull requests by agent and state. */
+export function pullStateCounts(): { agent: string; state: string; count: number }[] {
+  return (db.prepare("SELECT agent, state, COUNT(*) AS count FROM pull_outcomes GROUP BY agent, state").all() as Row[]).map((row) => ({ agent: String(row.agent), state: String(row.state), count: Number(row.count) }));
+}
+
+/** Pull requests from tasks before outcomes were tracked: the first task that recorded each. */
+export function backfillPullOutcomes(): number {
+  const result = db
+    .prepare(
+      `INSERT OR IGNORE INTO pull_outcomes (owner, repo, number, agent, state, opened_at)
+       SELECT owner, repo, pr_number, agent, 'open', MIN(COALESCE(finished_at, started_at, created_at)) FROM tasks
+       WHERE pr_number IS NOT NULL GROUP BY owner, repo, pr_number`,
+    )
+    .run();
+  return Number(result.changes);
+}
+
+/** Board handoffs into a column since `since`, per agent (e.g. how often each sent cards to needs-human). */
+export function handoffsInto(column: string, since: string): Record<string, number> {
+  const rows = db.prepare("SELECT agent, COUNT(*) AS count FROM board_handoffs WHERE to_column = ? AND ts >= ? GROUP BY agent").all(column, since) as Row[];
+  return Object.fromEntries(rows.map((row) => [String(row.agent), Number(row.count)]));
+}
+
+/** Tasks per agent and status since `since`, with how long they ran. */
+export function taskOutcomes(since: string, agent?: string): { agent: string; status: string; count: number; minutes: number }[] {
+  const rows = db
+    .prepare(
+      `SELECT agent, status, COUNT(*) AS count, COALESCE(SUM((julianday(finished_at) - julianday(started_at)) * 1440), 0) AS minutes
+       FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? AND status IN ('succeeded', 'failed', 'cancelled') ${agent ? "AND agent = ?" : ""} GROUP BY agent, status`,
+    )
+    .all(...(agent ? [since, agent] : [since])) as Row[];
+  return rows.map((row) => ({ agent: String(row.agent), status: String(row.status), count: Number(row.count), minutes: Number(row.minutes) }));
+}
+
 // ---------- audit log ----------
 
 db.exec(`CREATE TABLE IF NOT EXISTS audit (
@@ -817,6 +912,12 @@ export function tokenTotals(): { agent: string; input: number; output: number; c
 export function deliveryCounts(): Record<string, number> {
   const rows = db.prepare("SELECT decision, COUNT(*) AS count FROM deliveries GROUP BY decision").all() as Row[];
   return Object.fromEntries(rows.map((row) => [String(row.decision), Number(row.count)]));
+}
+
+/** What each agent's tasks cost since `since`. */
+export function spendByAgentSince(since: string): Record<string, number> {
+  const rows = db.prepare("SELECT agent, COALESCE(SUM(cost_usd), 0) AS total FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? GROUP BY agent").all(since) as Row[];
+  return Object.fromEntries(rows.map((row) => [String(row.agent), Number(row.total)]));
 }
 
 /** What tasks cost since `since` (ISO time), by when they finished (or started). */

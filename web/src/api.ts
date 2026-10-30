@@ -308,6 +308,26 @@ export interface Settings {
   isolation: { mode: "off" | "sudo" | "direct"; user: string | null; required: boolean; problem: string | null };
 }
 
+/** What agents' work came to: tasks, pull requests merged or closed, cards sent to a person. */
+export interface AgentOutcome {
+  agent: string;
+  tasks: { succeeded: number; failed: number; cancelled: number };
+  successRate: number | null;
+  pulls: { opened: number; merged: number; closed: number; open: number };
+  mergeRate: number | null;
+  needsHuman: number;
+  costUsd: number;
+  costPerMergedPull: number | null;
+  avgTaskMinutes: number | null;
+}
+
+export interface OutcomeReport {
+  days: number;
+  since: string;
+  agents: AgentOutcome[];
+  totals: Omit<AgentOutcome, "agent">;
+}
+
 export interface CleanupReport {
   at: string;
   retentionDays: number;

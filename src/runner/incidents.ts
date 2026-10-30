@@ -1,6 +1,6 @@
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { addIncident, deliveryCounts, incidentCounts, listIncidents, taskTotals, tokenTotals, type IncidentRow } from "../db.ts";
+import { addIncident, deliveryCounts, incidentCounts, listIncidents, pullStateCounts, taskTotals, tokenTotals, type IncidentRow } from "../db.ts";
 import { errorMessage, log } from "../log.ts";
 
 /**
@@ -83,6 +83,7 @@ export function renderMetrics(live: { running: number; queued: number; paused: b
       [{ agent: row.agent, type: "cache_write" }, row.cacheWrite],
     ] as [Record<string, string>, number][]),
   );
+  metric("ao_pull_requests_total", "counter", "Pull requests agents opened, by agent and state (open, merged, closed).", pullStateCounts().map((row) => [{ agent: row.agent, state: row.state }, row.count]));
   metric("ao_tasks_running", "gauge", "Tasks running now.", [[{}, live.running]]);
   metric("ao_tasks_queued", "gauge", "Tasks waiting to start.", [[{}, live.queued]]);
   metric("ao_queue_paused", "gauge", "1 when the queue is paused.", [[{}, live.paused ? 1 : 0]]);

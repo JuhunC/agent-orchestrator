@@ -11,6 +11,7 @@ import { extractMentions } from "./mentions.ts";
 import { handleProjectItemWebhook } from "./boards/engine.ts";
 import { activityFor, deliver } from "./runner/inbox.ts";
 import { scheduler } from "./runner/scheduler.ts";
+import { notePullEvent } from "./runner/outcomes.ts";
 import type { Delivery, ThreadKind, TriggerKind } from "./types.ts";
 
 type Agent = Profile;
@@ -205,6 +206,8 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
     if (event === "installation" || event === "installation_repositories") {
       return record(deliveryId, event, payload, "ignored", `Installation ${payload.action ?? "changed"}`);
     }
+    // What became of agents' pull requests (merged, closed), whoever closed them.
+    if (event === "pull_request") notePullEvent(payload);
     const repoFull = String(payload.repository?.full_name ?? "");
     const installationId = Number(payload.installation?.id ?? 0);
     if (!repoFull || !installationId) return record(deliveryId, event, payload, "ignored", "No repository or installation in payload");

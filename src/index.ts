@@ -8,6 +8,7 @@ import { loadProfiles } from "./profiles/loader.ts";
 import { seedProfiles } from "./profiles/seed.ts";
 import { scheduler } from "./runner/scheduler.ts";
 import { startWorkspaceCleanup } from "./runtime/cleanup.ts";
+import { startOutcomeChecks } from "./runner/outcomes.ts";
 import { setupIsolation } from "./runtime/isolation.ts";
 import { sessions } from "./runtime/manager.ts";
 import { buildServer } from "./server/http.ts";
@@ -57,6 +58,7 @@ async function main(): Promise<void> {
   await scheduler.start();
   startBoards();
   startWorkspaceCleanup();
+  startOutcomeChecks();
 
   let stopping = false;
   const stop = async (signal: string) => {

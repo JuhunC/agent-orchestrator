@@ -29,6 +29,7 @@ import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { queueOrder } from "../runner/queue-order.ts";
 import { listIncidents, renderMetrics } from "../runner/incidents.ts";
+import { outcomeReport } from "../runner/outcomes.ts";
 import { MAX_COMMENTS_PER_TASK, MAX_SUB_ISSUES_PER_TASK } from "../runtime/github-tools.ts";
 import { MAX_RELATED_STARTS_PER_TASK } from "../runtime/related-agents.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
@@ -599,6 +600,8 @@ export function registerApi(app: FastifyInstance): void {
       recent: [...listIncidents(200, "loop_guard"), ...listIncidents(50, "spend_limit")].sort((a, b) => b.id - a.id).slice(0, 30),
     };
   });
+
+  app.get<{ Querystring: { days?: string; agent?: string } }>("/api/outcomes", async (request) => outcomeReport(Number(request.query.days) || 30, request.query.agent || undefined));
 
   app.get<{ Querystring: { limit?: string; kind?: string } }>("/api/incidents", async (request) => listIncidents(Math.min(500, Number(request.query.limit) || 100), request.query.kind || undefined));
 

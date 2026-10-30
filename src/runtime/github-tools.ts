@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { createSdkMcpServer, tool, type McpSdkServerConfigWithInstance, type SdkMcpToolDefinition } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { config, repoAllowed } from "../config.ts";
-import { getBoardItem, linkedThreads, linkThreads, listBoardItems, type CardFieldValues } from "../db.ts";
+import { getBoardItem, linkedThreads, linkThreads, listBoardItems, recordPullOpened, type CardFieldValues } from "../db.ts";
 import { gitTokenFor } from "../github/accounts.ts";
 import { repoRemoteUrl, type GitHubClient } from "../github/app.ts";
 import { ciStatus, fetchThread, findOpenPull, openPull, postComment, updatePull, type ThreadContext } from "../github/threads.ts";
@@ -214,6 +214,7 @@ export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, b
       }
       const created = await openPull(gh, { owner: task.owner, repo: task.repo, head: workspace.branch, base: workspace.baseBranch, title, body: fullBody, draft });
       result = { ...created, created: true };
+      recordPullOpened(task.owner, task.repo, created.number, profile.name);
     }
     linkThreads(task.owner, task.repo, { kind: thread.kind, number: thread.number }, { kind: "pull", number: result.number });
     return result;

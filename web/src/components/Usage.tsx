@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useApi, type UsageReport, type UsageTotals } from "../api.ts";
+import { useApi, type AgentOutcome, type OutcomeReport, type UsageReport, type UsageTotals } from "../api.ts";
 import { href } from "../router.ts";
 import { Empty, Panel } from "./ui.tsx";
 
@@ -203,6 +203,101 @@ function Tiles({ totals }: { totals: UsageTotals }) {
 
 const NOTE = "Claude Code's estimates at list prices; with your own model service they may not match its bill.";
 
+const percent = (value: number | null) => (value === null ? "—" : `${Math.round(value * 100)}%`);
+
+function useOutcomes(days: number, agent?: string) {
+  return useApi<OutcomeReport>(`/api/outcomes?days=${days}${agent ? `&agent=${encodeURIComponent(agent)}` : ""}`, (message) => message.type === "task" || message.type === "settings").data;
+}
+
+/** What each agent's work came to: did its tasks succeed, were its pull requests merged. */
+function OutcomeTable({ rows }: { rows: AgentOutcome[] }) {
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Agent</th>
+            <th className="num" title="succeeded / (succeeded + failed)">Tasks OK</th>
+            <th className="num" title="merged / (merged + closed without merging)">PRs merged</th>
+            <th className="num">Open PRs</th>
+            <th className="num" title="cards the agent moved to the board's needs-human column">To a person</th>
+            <th className="num" title="spend in this period / pull requests merged">Per merged PR</th>
+            <th className="num">Avg task</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr key={row.agent}>
+              <td>
+                <a href={href(`/agents/${row.agent}`)}>{row.agent}</a>
+              </td>
+              <td className="num" title={`${row.tasks.succeeded} succeeded, ${row.tasks.failed} failed, ${row.tasks.cancelled} cancelled`}>
+                {percent(row.successRate)} <span className="meta">({row.tasks.succeeded}/{row.tasks.succeeded + row.tasks.failed})</span>
+              </td>
+              <td className="num" title={`${row.pulls.merged} merged, ${row.pulls.closed} closed without merging`}>
+                {percent(row.mergeRate)} <span className="meta">({row.pulls.merged}/{row.pulls.merged + row.pulls.closed})</span>
+              </td>
+              <td className="num">{row.pulls.open}</td>
+              <td className="num">{row.needsHuman}</td>
+              <td className="num">{row.costPerMergedPull === null ? "—" : formatUsd(row.costPerMergedPull)}</td>
+              <td className="num">{row.avgTaskMinutes === null ? "—" : `${row.avgTaskMinutes.toFixed(1)} min`}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Dashboard: outcomes per agent, over the same period as the usage above. */
+function OutcomeSummary({ days }: { days: number }) {
+  const data = useOutcomes(days);
+  if (!data?.agents.length) return null;
+  return (
+    <div>
+      <h3 style={{ marginBottom: 8 }}>Outcomes</h3>
+      <OutcomeTable rows={data.agents} />
+      <p className="meta" style={{ margin: "6px 0 0" }}>
+        Pull requests count once merged or closed; tasks once they succeed or fail. A low merge rate, many failed tasks or many cards sent to a person say an agent's role or tools need work.
+      </p>
+    </div>
+  );
+}
+
+/** Agent page: its outcome numbers as tiles. */
+function OutcomeTiles({ days, agent }: { days: number; agent: string }) {
+  const row = useOutcomes(days, agent)?.agents[0];
+  if (!row) return null;
+  return (
+    <div className="stats">
+      <div className="panel stat">
+        <div className="label">Tasks that succeeded</div>
+        <div className="value">{percent(row.successRate)}</div>
+        <div className="meta">
+          {row.tasks.succeeded} ok · {row.tasks.failed} failed · {row.tasks.cancelled} cancelled
+        </div>
+      </div>
+      <div className="panel stat">
+        <div className="label">Pull requests merged</div>
+        <div className="value">{percent(row.mergeRate)}</div>
+        <div className="meta">
+          {row.pulls.merged} merged · {row.pulls.closed} closed · {row.pulls.open} open
+        </div>
+      </div>
+      <div className="panel stat">
+        <div className="label">Per merged PR</div>
+        <div className="value">{row.costPerMergedPull === null ? "—" : formatUsd(row.costPerMergedPull)}</div>
+        <div className="meta">spend ÷ merged pull requests</div>
+      </div>
+      <div className="panel stat">
+        <div className="label">Sent to a person</div>
+        <div className="value">{row.needsHuman}</div>
+        <div className="meta">cards moved to needs-human</div>
+      </div>
+    </div>
+  );
+}
+
 /** Dashboard: spend across all agents, and per agent. */
 export function UsageSummary() {
   const { data, days, picker } = useUsage();
@@ -240,6 +335,7 @@ export function UsageSummary() {
               );
             })}
           </div>
+          <OutcomeSummary days={days} />
           <p className="meta" style={{ margin: 0 }}>
             {NOTE}
           </p>
@@ -264,6 +360,7 @@ export function AgentUsage({ agent }: { agent: string }) {
       ) : (
         <div className="stack" style={{ gap: 14 }}>
           <Tiles totals={data.totals} />
+          <OutcomeTiles days={days} agent={agent} />
           <DailyColumns daily={data.daily} byCost={byCost} />
           <div className="grid-2">
             <div>
