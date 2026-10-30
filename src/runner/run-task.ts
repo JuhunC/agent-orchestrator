@@ -24,7 +24,7 @@ import { git } from "./git.ts";
 import { settleInbox } from "./inbox.ts";
 import { retryTime, type DetectedLimit } from "./limits.ts";
 import { getLimit, setLimit } from "./limit-store.ts";
-import { ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
+import { progressEditAllowed, ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
 import { recordIncident } from "./incidents.ts";
 
 function patch(taskId: number, changes: Partial<Task>): Task {
@@ -81,11 +81,16 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
   let thread: ThreadContext | null = null;
   let boardContext: BoardContext | null = null;
   const target = () => ({ owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber, threadNodeId: thread?.nodeId });
-  const throttle = new ProgressThrottle(async () => {
+  // The body last posted, so an edit that changes nothing isn't sent.
+  let lastProgress = "";
+  const throttle: ProgressThrottle = new ProgressThrottle(async (force) => {
     if (!gh || !profile || !task.progressCommentId) return;
-    await editComment(gh, target(), task.progressCommentId, renderProgress(profile, task, state)).catch((error) =>
-      log.warn("Could not update progress comment", { task: task.id, error: errorMessage(error) }),
-    );
+    const body = renderProgress(profile, task, state);
+    if (body === lastProgress) return;
+    // Optional updates wait for the edit budget (and for GitHub to stop throttling); forced ones go now.
+    if (!force && !progressEditAllowed()) return throttle.markDirty();
+    lastProgress = body;
+    await editComment(gh, target(), task.progressCommentId, body).catch((error) => log.warn("Could not update progress comment", { task: task.id, error: errorMessage(error) }));
   });
   const onEvent = (kind: EventKind, message: string) => {
     emit(task.id, kind, message);
@@ -123,10 +128,11 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       // Resuming after a usage-limit pause: keep updating the same comment.
       await editComment(gh, target(), task.progressCommentId, renderProgress(profile, task, state)).catch(() => undefined);
     } else {
-      const comment = await postComment(gh, target(), renderProgress(profile, task, state));
+      lastProgress = renderProgress(profile, task, state);
+      const comment = await postComment(gh, target(), lastProgress);
       task = patch(task.id, { progressCommentId: comment.id });
     }
-    throttle.start();
+    if (config.progressComments === "edit") throttle.start(); // "minimal": no edits until the end
 
     const column = boardContext ? boardContext.board.columns[boardContext.column]! : null;
     if (!task.dryRun && boardContext && column?.onStart && getBoardItem(boardContext.board.name, boardContext.itemId)?.status === column.name) {

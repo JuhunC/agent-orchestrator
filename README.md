@@ -269,6 +269,9 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MODEL_ERROR_RETRY_DELAY_SECONDS` | `20` | First wait before a task retry; doubles each time |
 | `CLAUDE_CODE_EXECUTABLE` | bundled | A Claude Code-compatible executable agents run instead of the SDK's own (see [The model service](#the-model-service)) |
 | `BACKUP_KEEP`, `BACKUP_DIR` | `7`, `DATA_DIR/backups` | Daily snapshots of the database and key files: how many to keep (`0` turns them off) and where (see [Backups](#backups)) |
+| `PROGRESS_UPDATE_SECONDS` | `60` | How often a running task's progress comment is edited, at most |
+| `PROGRESS_EDITS_PER_HOUR` | `300` | Progress edits all tasks together may make per hour. GitHub limits how fast content is written (about 500 writes an hour); past the budget, edits wait and the comment is completed when the task ends |
+| `PROGRESS_COMMENTS` | `edit` | `minimal`: post the progress comment when a task starts and complete it when it ends, with no edits in between (for many agents at once) |
 | `QUEUE_AGING_MINUTES` | `30` | Queued tasks start in this order: people's requests (mentions, assignments, runs from the admin UI), then work agents started for each other, then board stages; a task that has waited this long goes first. Boards can also cap their running cards with `limits.max_running` |
 | `WORKSPACE_RETENTION_DAYS` | `14` | Agents' checkouts (a full clone per agent and thread) nobody has used for this long are removed, hourly; ones with uncommitted or unpushed work are kept. The next task clones again. `0` keeps them. **Settings → Workspaces** shows the last cleanup and can run one |
 | `SPEND_LIMIT_DAILY_USD`, `SPEND_LIMIT_MONTHLY_USD` | none | Spending limits for all agents together (UTC days and months, Claude Code's estimates). When one is reached, new tasks wait until the next day or month; running ones finish. The Dashboard warns at 80%. **Settings** can change them |
@@ -289,6 +292,7 @@ Agents see only the model settings (with a per-session stand-in for the key), `A
 
 Problems an administrator should hear about are recorded as incidents: failed tasks, loop guards that stopped agents (board guards, `MAX_AGENT_CHAIN`, `MAX_PULL_REQUESTS_PER_ISSUE`), spending limits reached or near, the model service's usage limits, agents that aren't isolated, and webhooks with a bad signature. The Dashboard lists the last 7 days under **Recent problems** (`GET /api/incidents` has the last 1000).
 
+- **GitHub's rate limits:** when GitHub says to slow down (its hourly quota, or its secondary limit on writing too fast), requests wait as long as it asks and are retried twice, progress edits pause, and a `github_rate_limit` incident is recorded (once per 10 minutes).
 - **Alerts:** set `ALERT_WEBHOOK_URL` to a Slack or Discord incoming webhook (or any URL that takes JSON) and each one is posted there, at most once per 10 minutes for the same problem. The JSON has `text` (Slack), `content` (Discord), and `kind`, `severity`, `message`, `url`, `task` and `at`. `ALERT_MIN_SEVERITY` (`info`, `warning` (default) or `critical`) sets the least severe that's posted.
 - **Metrics:** set `METRICS_TOKEN` and Prometheus can scrape `GET /metrics` with it as a bearer token. It has tasks by agent and status (`ao_tasks_total`), estimated spend and tokens by agent (`ao_cost_usd_total`, `ao_tokens_total`), running and queued tasks, whether the queue is paused or usage-limited, open sessions, today's and this month's spend, whether agents are isolated, incidents by kind and webhook deliveries by decision.
 

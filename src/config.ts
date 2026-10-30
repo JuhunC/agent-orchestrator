@@ -109,7 +109,12 @@ export const config = {
 
   maxConcurrent: int("MAX_CONCURRENT_TASKS", 2),
   defaultTimeoutMinutes: int("TASK_TIMEOUT_MINUTES", 60),
-  progressUpdateSeconds: int("PROGRESS_UPDATE_SECONDS", 20),
+  // How often a running task's progress comment is edited (at most), and how many such edits all
+  // tasks together may make per hour: GitHub limits how fast content is written. "minimal" posts
+  // the comment when a task starts and completes it when it ends, with no edits in between.
+  progressUpdateSeconds: int("PROGRESS_UPDATE_SECONDS", 60),
+  progressEditsPerHour: Math.max(0, int("PROGRESS_EDITS_PER_HOUR", 300)),
+  progressComments: env("PROGRESS_COMMENTS", "edit").toLowerCase() === "minimal" ? "minimal" : "edit",
   historyLimit: int("HISTORY_LIMIT", 10),
   triggerMinPermission: env("TRIGGER_MIN_PERMISSION", "write").toLowerCase(),
   allowedRepos: list("ALLOWED_REPOS").map((repo) => repo.toLowerCase()),

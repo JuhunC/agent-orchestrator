@@ -1,6 +1,7 @@
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { addIncident, deliveryCounts, incidentCounts, listIncidents, pullStateCounts, taskTotals, tokenTotals, type IncidentRow } from "../db.ts";
+import { onGithubThrottled } from "../github/app.ts";
 import { errorMessage, log } from "../log.ts";
 
 /**
@@ -18,7 +19,8 @@ export type IncidentKind =
   | "isolation"
   | "webhook_signature"
   | "account_token"
-  | "backup";
+  | "backup"
+  | "github_rate_limit";
 
 const RANK = { info: 0, warning: 1, critical: 2 } as const;
 /** The same problem isn't posted again within this long. */
@@ -58,6 +60,14 @@ async function post(incident: IncidentRow): Promise<void> {
 }
 
 export { listIncidents };
+
+// GitHub rate-limiting the orchestrator: one incident per 10 minutes, not one per request.
+let lastThrottleIncident = 0;
+onGithubThrottled((what) => {
+  if (Date.now() - lastThrottleIncident < QUIET_MS) return;
+  lastThrottleIncident = Date.now();
+  recordIncident("github_rate_limit", "warning", `GitHub is rate-limiting the orchestrator (${what}). Progress comments pause; other requests wait and retry. If it keeps happening, lower PROGRESS_EDITS_PER_HOUR or MAX_CONCURRENT_TASKS, or set PROGRESS_COMMENTS=minimal.`);
+});
 
 // ---------- Prometheus metrics ----------
 

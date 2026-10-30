@@ -35,6 +35,8 @@ export class FakeGitHub {
   requests: { method: string; path: string; body: any; actor: string }[] = [];
   /** Personal access tokens: who each belongs to. Requests with one act as that user. */
   userTokens = new Map<string, { login: string; id: number; name?: string; push?: boolean; expires?: string }>();
+  /** The next this many comment writes get GitHub's "secondary rate limit" answer (retry after 1 s). */
+  secondaryLimit = 0;
   /** Who added each 👀 reaction. */
   reactionsBy: string[] = [];
   issues = new Map<number, FakeIssue>();
@@ -184,6 +186,10 @@ export class FakeGitHub {
     const method = req.method ?? "GET";
     let match: RegExpMatchArray | null;
     if (!user && /^(ghp_|github_pat_)/.test(token)) return { status: 401, body: { message: "Bad credentials" } };
+    if (this.secondaryLimit > 0 && method !== "GET" && /\/comments/.test(path)) {
+      this.secondaryLimit--;
+      return { status: 403, body: { message: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again." }, headers: { "retry-after": "1" } };
+    }
 
     if (method === "POST" && (match = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/))) {
       return { status: 201, body: { token: "ghs_faketoken", expires_at: new Date(Date.now() + 3600_000).toISOString(), permissions: {}, repository_selection: "all" } };

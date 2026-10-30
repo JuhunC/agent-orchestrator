@@ -18,9 +18,34 @@ export interface AppCredentials {
 
 const credentialsFile = join(config.dataDir, "github-app.json");
 
+/** Until when GitHub asked us to slow down (a secondary rate limit, or the hourly quota). */
+let throttledUntil = 0;
+let onThrottled: ((what: string, retryAfter: number, request: string) => void) | null = null;
+
+/** Is GitHub asking us to slow down right now? Optional writes (progress edits) wait while it is. */
+export function githubThrottled(now = Date.now()): boolean {
+  return now < throttledUntil;
+}
+
+/** Called when GitHub rate-limits a request (for incidents). */
+export function onGithubThrottled(listener: (what: string, retryAfter: number, request: string) => void): void {
+  onThrottled = listener;
+}
+
+function throttled(what: string) {
+  return (retryAfter: number, options: { method?: string; url?: string }, _octokit: unknown, retryCount: number): boolean => {
+    throttledUntil = Math.max(throttledUntil, Date.now() + retryAfter * 1000);
+    const request = `${options.method ?? "?"} ${options.url ?? "?"}`;
+    log.warn(`GitHub ${what}; waiting before retrying`, { request, retryAfterSeconds: retryAfter, retry: retryCount + 1 });
+    onThrottled?.(what, retryAfter, request);
+    return retryCount < 2; // wait and retry twice, then give up
+  };
+}
+
 export const GitHubOctokit = Octokit.defaults({
   baseUrl: config.github.apiUrl,
   userAgent: "agent-orchestrator",
+  throttle: { onRateLimit: throttled("rate limit (hourly quota) reached"), onSecondaryRateLimit: throttled("secondary rate limit (writing too fast)") },
 });
 export type GitHubClient = InstanceType<typeof GitHubOctokit>;
 

@@ -1,6 +1,7 @@
 import { config } from "../config.ts";
 import { PROGRESS_MARKER, RESULT_MARKER } from "../github/threads.ts";
 import type { Task } from "../types.ts";
+import { githubThrottled } from "../github/app.ts";
 
 type Agent = { name: string };
 
@@ -110,14 +111,31 @@ export function renderResult(
   return parts.join("\n");
 }
 
+/** When progress comments were edited in the last hour, by any task (PROGRESS_EDITS_PER_HOUR). */
+const recentEdits: number[] = [];
+
+/**
+ * May a task edit its progress comment now? Edits are optional (the comment is completed when the
+ * task ends anyway), so they stop when all tasks together have used the hour's budget, or while
+ * GitHub is asking the orchestrator to slow down. Takes a slot from the budget when it says yes.
+ */
+export function progressEditAllowed(now = Date.now()): boolean {
+  if (config.progressEditsPerHour <= 0 || githubThrottled(now)) return false;
+  while (recentEdits.length && now - recentEdits[0]! > 3_600_000) recentEdits.shift();
+  if (recentEdits.length >= config.progressEditsPerHour) return false;
+  recentEdits.push(now);
+  return true;
+}
+
 /** Edits the progress comment at most every PROGRESS_UPDATE_SECONDS, and only when something changed. */
 export class ProgressThrottle {
   private timer: NodeJS.Timeout | null = null;
   private dirty = false;
   private inFlight: Promise<void> = Promise.resolve();
-  private flushFn: () => Promise<void>;
+  private flushFn: (force: boolean) => Promise<void>;
 
-  constructor(flush: () => Promise<void>) {
+  /** `flush` gets `force` for updates that must go out (phase changes, the end), not optional ones. */
+  constructor(flush: (force: boolean) => Promise<void>) {
     this.flushFn = flush;
   }
 
@@ -133,7 +151,7 @@ export class ProgressThrottle {
   flush(force = false): Promise<void> {
     if (!this.dirty && !force) return this.inFlight;
     this.dirty = false;
-    this.inFlight = this.inFlight.then(() => this.flushFn()).catch(() => undefined);
+    this.inFlight = this.inFlight.then(() => this.flushFn(force)).catch(() => undefined);
     return this.inFlight;
   }
 
