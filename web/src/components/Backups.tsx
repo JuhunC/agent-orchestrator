@@ -5,6 +5,8 @@ import { Panel } from "./ui.tsx";
 interface BackupsResponse {
   dir: string;
   keep: number;
+  database: { kb: number; freeKb: number };
+  detailRetentionDays: number;
   backups: { name: string; at: string; kb: number; files: string[] }[];
 }
 
@@ -24,6 +26,9 @@ export function Backups() {
         ) : (
           <div className="meta">No backups yet. They go to <code>{data.dir}</code>.</div>
         )}
+        <div className="meta">
+          Database: {(data.database.kb / 1024).toFixed(1)} MB. {data.detailRetentionDays ? `Prompts and step logs of tasks older than ${data.detailRetentionDays} days are dropped; the tasks stay.` : "Tasks' prompts and step logs are kept forever (TASK_DETAIL_RETENTION_DAYS=0)."}
+        </div>
         {error && <div className="banner error">{error}</div>}
         <div>
           <button

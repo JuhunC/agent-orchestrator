@@ -20,6 +20,7 @@ import {
   listBoardItems,
   listHandoffs,
   tasksStartedBy,
+  databaseSize,
 } from "../db.ts";
 import { addressCheck, appAddresses, ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials, setAppWebhookUrl } from "../github/app.ts";
 import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount, removeAccount, repositoryAccess } from "../github/accounts.ts";
@@ -638,10 +639,10 @@ export function registerApi(app: FastifyInstance): void {
 
   app.post("/api/workspaces/cleanup", async () => cleanUpWorkspaces());
 
-  app.get("/api/backups", async () => ({ dir: backupDir(), keep: config.backupKeep, backups: listBackups().map(({ path: _path, ...backup }) => backup) }));
+  app.get("/api/backups", async () => ({ dir: backupDir(), keep: config.backupKeep, database: databaseSize(), detailRetentionDays: config.taskDetailRetentionDays, backups: listBackups().map(({ path: _path, ...backup }) => backup) }));
   app.post("/api/backups", async (_request, reply) => {
     try {
-      const { path: _path, ...backup } = backUp();
+      const { path: _path, ...backup } = await backUp();
       return backup;
     } catch (error) {
       return reply.code(500).send({ error: `The backup failed: ${errorMessage(error)}` });

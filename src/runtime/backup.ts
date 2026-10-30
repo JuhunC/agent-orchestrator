@@ -2,7 +2,8 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } fr
 import { join } from "node:path";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { db } from "../db.ts";
+import { backup } from "node:sqlite";
+import { databaseSize, db, pruneTaskDetail } from "../db.ts";
 import { errorMessage, log } from "../log.ts";
 import { recordIncident } from "../runner/incidents.ts";
 
@@ -46,14 +47,15 @@ export function listBackups(): BackupInfo[] {
 }
 
 /** Takes a snapshot now and removes the oldest beyond BACKUP_KEEP. */
-export function backUp(): BackupInfo {
+export async function backUp(): Promise<BackupInfo> {
   const root = backupDir();
   const name = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z").replace(/^(\d{4})(\d\d)(\d\d)/, "$1-$2-$3");
   const target = join(root, name);
   mkdirSync(target, { recursive: true, mode: 0o700 });
   try {
-    // A consistent copy of the database while it's in use.
-    db.prepare("VACUUM INTO ?").run(join(target, "orchestrator.db"));
+    // A consistent copy of the database while it's in use, a few pages at a time so the server
+    // keeps answering (webhooks, the admin UI) while a large database is copied.
+    await backup(db, join(target, "orchestrator.db"), { rate: 200 });
     for (const file of KEY_FILES) if (existsSync(join(config.dataDir, file))) copyFileSync(join(config.dataDir, file), join(target, file));
   } catch (error) {
     rmSync(target, { recursive: true, force: true });
@@ -73,12 +75,28 @@ export function startBackups(): void {
   const tick = () => {
     const last = listBackups()[0];
     if (last && Date.now() - Date.parse(last.at) < 23 * 60 * 60_000) return;
-    try {
-      backUp();
-    } catch (error) {
-      log.warn("Backup failed", { error: errorMessage(error) });
-    }
+    backUp().catch((error) => log.warn("Backup failed", { error: errorMessage(error) }));
   };
   setTimeout(tick, 60_000).unref();
+  setInterval(tick, 60 * 60_000).unref();
+}
+
+/** Drops prompts and step logs of tasks older than TASK_DETAIL_RETENTION_DAYS (hourly). */
+export function pruneOldDetail(now = Date.now(), days = config.taskDetailRetentionDays): { tasks: number; events: number } {
+  if (days <= 0) return { tasks: 0, events: 0 };
+  const pruned = pruneTaskDetail(new Date(now - days * 86_400_000).toISOString());
+  if (pruned.tasks || pruned.events) log.info("Dropped old tasks' prompts and step logs", { ...pruned, olderThanDays: days, database: databaseSize() });
+  return pruned;
+}
+
+export function startRetention(): void {
+  const tick = () => {
+    try {
+      pruneOldDetail();
+    } catch (error) {
+      log.warn("Dropping old task detail failed", { error: errorMessage(error) });
+    }
+  };
+  setTimeout(tick, 5 * 60_000).unref();
   setInterval(tick, 60 * 60_000).unref();
 }

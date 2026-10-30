@@ -156,6 +156,9 @@ export const config = {
   // Daily snapshots of the database and key files (see backup.ts): how many to keep (0 = none),
   // and where (default DATA_DIR/backups; a separate disk or mounted folder is better).
   backupKeep: Math.max(0, int("BACKUP_KEEP", 7)),
+  // Prompts and step-by-step logs of tasks that finished longer ago than this are dropped (the
+  // task, its reply, cost and links stay). 0 keeps them forever.
+  taskDetailRetentionDays: Math.max(0, int("TASK_DETAIL_RETENTION_DAYS", 90)),
   backupDir: env("BACKUP_DIR") ? resolve(env("BACKUP_DIR")) : "",
   // Queued tasks start people's requests first, then agent-started work, then board stages; one
   // that has waited this long goes first. 0 = strictly that order.

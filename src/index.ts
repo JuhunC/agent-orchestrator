@@ -10,7 +10,7 @@ import { scheduler } from "./runner/scheduler.ts";
 import { startWorkspaceCleanup } from "./runtime/cleanup.ts";
 import { startOutcomeChecks } from "./runner/outcomes.ts";
 import { startAccountChecks } from "./github/accounts.ts";
-import { startBackups } from "./runtime/backup.ts";
+import { startBackups, startRetention } from "./runtime/backup.ts";
 import { setupIsolation } from "./runtime/isolation.ts";
 import { sessions } from "./runtime/manager.ts";
 import { buildServer } from "./server/http.ts";
@@ -63,6 +63,7 @@ async function main(): Promise<void> {
   startOutcomeChecks();
   startAccountChecks();
   startBackups();
+  startRetention();
 
   let stopping = false;
   const stop = async (signal: string) => {

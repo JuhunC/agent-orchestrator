@@ -268,6 +268,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MODEL_ERROR_RETRIES` | `3` | When the model API fails to answer (5xx, overloaded, dropped connection): each request is retried this many times, then a task that still fails is retried this many times, continuing its session |
 | `MODEL_ERROR_RETRY_DELAY_SECONDS` | `20` | First wait before a task retry; doubles each time |
 | `CLAUDE_CODE_EXECUTABLE` | bundled | A Claude Code-compatible executable agents run instead of the SDK's own (see [The model service](#the-model-service)) |
+| `TASK_DETAIL_RETENTION_DAYS` | `90` | Prompts and step-by-step logs of tasks that finished longer ago are dropped, hourly (the task, its request, reply, cost, tokens, branch and pull request stay). `0` keeps them forever |
 | `BACKUP_KEEP`, `BACKUP_DIR` | `7`, `DATA_DIR/backups` | Daily snapshots of the database and key files: how many to keep (`0` turns them off) and where (see [Backups](#backups)) |
 | `PROGRESS_UPDATE_SECONDS` | `60` | How often a running task's progress comment is edited, at most |
 | `PROGRESS_EDITS_PER_HOUR` | `300` | Progress edits all tasks together may make per hour. GitHub limits how fast content is written (about 500 writes an hour); past the budget, edits wait and the comment is completed when the task ends |
@@ -314,7 +315,7 @@ scrape_configs:
 
 `DATA_DIR` holds what can't be rebuilt: the database (tasks, history, settings, agents' encrypted GitHub tokens) and key files: `github-app.json` (the App's key, when it was created in Settings), `data-key` (decrypts the agents' tokens: without it they must be registered again), `session-secret` and `admin-token`. Workspaces, sessions and wikis are clones and caches; the profiles folder is its own git repository (back it up, or push it somewhere).
 
-- Once a day (and from **Settings → Backups** on demand) the orchestrator takes a consistent snapshot of the database and copies the key files into `DATA_DIR/backups/<time>/`, keeping the last `BACKUP_KEEP` (default 7). `BACKUP_DIR` puts them elsewhere, e.g. a mounted folder on another disk. A failed backup shows under **Recent problems**.
+- Once a day (and from **Settings → Backups** on demand) the orchestrator takes a consistent snapshot of the database, copied a few pages at a time so the server keeps answering, and copies the key files into `DATA_DIR/backups/<time>/`, keeping the last `BACKUP_KEEP` (default 7). `BACKUP_DIR` puts them elsewhere, e.g. a mounted folder on another disk. A failed backup shows under **Recent problems**.
 - Copy them off the server regularly, e.g. `docker compose cp orchestrator:/data/backups ./backups`. They hold secrets: keep them private.
 - **Restore:** stop the orchestrator (`docker compose stop orchestrator`), copy a snapshot's `orchestrator.db` and key files into `DATA_DIR` (remove any `orchestrator.db-wal` and `orchestrator.db-shm` there first), and start it again. Running tasks at the time of the snapshot show as interrupted.
 

@@ -118,6 +118,8 @@ addColumn("tasks", "started_by_task", "INTEGER");
 addColumn("tasks", "dry_run", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "restarts", "INTEGER NOT NULL DEFAULT 0");
 db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
+// Time-range queries (spending, usage, outcomes) use exactly this expression, so it's indexed.
+db.exec("CREATE INDEX IF NOT EXISTS tasks_ended ON tasks (COALESCE(finished_at, started_at, created_at))");
 db.exec(`CREATE TABLE IF NOT EXISTS incidents (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kind TEXT NOT NULL,
@@ -165,6 +167,7 @@ CREATE TABLE IF NOT EXISTS board_handoffs (
   note TEXT NOT NULL,
   ts TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS board_handoffs_into ON board_handoffs (to_column, ts);
 `);
 addColumn("board_items", "fields", "TEXT NOT NULL DEFAULT '{}'");
 
@@ -454,7 +457,7 @@ export function listThreads(limit = 100): ThreadSummary[] {
     .prepare(
       `SELECT owner, repo, thread_kind, thread_number, MAX(thread_title) AS thread_title, MAX(thread_url) AS thread_url,
          GROUP_CONCAT(DISTINCT agent) AS agents, COUNT(*) AS task_count, MAX(created_at) AS last_activity
-       FROM tasks GROUP BY owner, repo, thread_kind, thread_number ORDER BY last_activity DESC LIMIT ?`,
+       FROM (SELECT * FROM tasks ORDER BY id DESC LIMIT 5000) GROUP BY owner, repo, thread_kind, thread_number ORDER BY last_activity DESC LIMIT ?`,
     )
     .all(limit) as Row[];
   return rows.map((row) => ({
@@ -738,6 +741,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS pull_outcomes (
   checked_at TEXT,
   PRIMARY KEY (owner, repo, number)
 )`);
+db.exec("CREATE INDEX IF NOT EXISTS pull_outcomes_opened ON pull_outcomes (opened_at)");
 
 export interface PullOutcome {
   owner: string;
@@ -942,6 +946,25 @@ export function deliveryCounts(): Record<string, number> {
 /** Tasks this one started (start_related_agent, or a card move that started a board stage). */
 export function tasksStartedBy(id: number): Task[] {
   return (db.prepare("SELECT * FROM tasks WHERE started_by_task = ? ORDER BY id").all(id) as Row[]).map(toTask);
+}
+
+/**
+ * Drops the bulky detail of tasks that finished before `before`: the prompt and the step-by-step
+ * log. The task itself (request, reply, cost, tokens, branch, pull request) stays. Returns counts.
+ */
+export function pruneTaskDetail(before: string): { tasks: number; events: number } {
+  const old = "SELECT id FROM tasks WHERE status IN ('succeeded', 'failed', 'cancelled') AND COALESCE(finished_at, started_at, created_at) < ?";
+  const events = db.prepare(`DELETE FROM task_events WHERE task_id IN (${old})`).run(before);
+  const tasks = db.prepare(`UPDATE tasks SET prompt = NULL WHERE prompt IS NOT NULL AND id IN (${old})`).run(before);
+  return { tasks: Number(tasks.changes), events: Number(events.changes) };
+}
+
+/** Database size: pages in use and free (after deletes), in KB. */
+export function databaseSize(): { kb: number; freeKb: number } {
+  const page = Number((db.prepare("PRAGMA page_size").get() as Row).page_size);
+  const pages = Number((db.prepare("PRAGMA page_count").get() as Row).page_count);
+  const free = Number((db.prepare("PRAGMA freelist_count").get() as Row).freelist_count);
+  return { kb: Math.round((page * pages) / 1024), freeKb: Math.round((page * free) / 1024) };
 }
 
 /** What each agent's tasks cost since `since`. */
