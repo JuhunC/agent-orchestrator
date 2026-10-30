@@ -300,10 +300,22 @@ export interface Settings {
   usageLimitRetries: number;
   /** Spending (Claude Code's estimates) against the daily and monthly limits, UTC. */
   spend: { dailyUsd: number | null; monthlyUsd: number | null; today: number; month: number; blocked: { period: "day" | "month"; spent: number; limit: number; until: string } | null; warning: string | null };
+  /** Agents' checkouts: how long unused ones are kept, and the last cleanup. */
+  workspaces: { retentionDays: number; lastCleanup: CleanupReport | null };
   /** Why new tasks wait for a spending limit, or null. */
   spendBlocked: string | null;
   /** Whether agents run as a separate OS user that can't read the orchestrator's data. */
   isolation: { mode: "off" | "sudo" | "direct"; user: string | null; required: boolean; problem: string | null };
+}
+
+export interface CleanupReport {
+  at: string;
+  retentionDays: number;
+  removed: { path: string; idleDays: number; kb: number }[];
+  kept: { path: string; reason: string }[];
+  freedKb: number;
+  remaining: number;
+  remainingKb: number | null;
 }
 
 export interface Setup {

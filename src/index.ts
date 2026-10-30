@@ -7,6 +7,7 @@ import { loadBoards } from "./boards/loader.ts";
 import { loadProfiles } from "./profiles/loader.ts";
 import { seedProfiles } from "./profiles/seed.ts";
 import { scheduler } from "./runner/scheduler.ts";
+import { startWorkspaceCleanup } from "./runtime/cleanup.ts";
 import { setupIsolation } from "./runtime/isolation.ts";
 import { sessions } from "./runtime/manager.ts";
 import { buildServer } from "./server/http.ts";
@@ -55,6 +56,7 @@ async function main(): Promise<void> {
   sessions.start();
   await scheduler.start();
   startBoards();
+  startWorkspaceCleanup();
 
   let stopping = false;
   const stop = async (signal: string) => {

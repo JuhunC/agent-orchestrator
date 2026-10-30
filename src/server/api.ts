@@ -24,6 +24,7 @@ import { addressCheck, appAddresses, ensureAppDetails, findInstallation, getApp,
 import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount, removeAccount, repositoryAccess } from "../github/accounts.ts";
 import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
+import { cleanUpWorkspaces, lastCleanup } from "../runtime/cleanup.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
@@ -89,6 +90,7 @@ function settingsView() {
     usageLimitRetries: config.usageLimitRetries,
     isolation: isolationStatus(),
     spend: spendStatus(),
+    workspaces: { retentionDays: config.workspaceRetentionDays, lastCleanup: lastCleanup() },
     spendBlocked: spendBlockReason(),
   };
 }
@@ -560,6 +562,8 @@ export function registerApi(app: FastifyInstance): void {
     sessions.configure({ idleMinutes: request.body?.liveIdleMinutes, maxLive: request.body?.maxLiveSessions });
     return settingsView();
   });
+
+  app.post("/api/workspaces/cleanup", async () => cleanUpWorkspaces());
 
   app.get("/api/installations", async (_request, reply) => {
     if (!getCredentials()) return [];

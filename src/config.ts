@@ -130,6 +130,9 @@ export const config = {
   maxPullRequestsPerIssue: Math.max(0, int("MAX_PULL_REQUESTS_PER_ISSUE", 0)),
   // Spending limits for all agents together (US dollars, Claude Code's estimates; UTC days and
   // months). When one is reached, new tasks wait until the next day or month. Settings can change them.
+  // Agents' checkouts nobody has used for this many days are removed (unless they hold work that
+  // isn't on GitHub). 0 keeps them forever.
+  workspaceRetentionDays: Math.max(0, int("WORKSPACE_RETENTION_DAYS", 14)),
   spendLimitDailyUsd: Number(env("SPEND_LIMIT_DAILY_USD", "0")) || 0,
   spendLimitMonthlyUsd: Number(env("SPEND_LIMIT_MONTHLY_USD", "0")) || 0,
   // How many times in a row agents may start each other on related issues (start_related_agent):

@@ -115,6 +115,54 @@ function Installations({ setup }: { setup: Setup }) {
 }
 
 /** The App's settings on GitHub don't match PUBLIC_URL: say what to change, and fix the webhook URL for them. */
+const mb = (kb: number | null) => (kb === null ? "?" : kb >= 1024 * 1024 ? `${(kb / 1024 / 1024).toFixed(1)} GB` : `${Math.round(kb / 1024)} MB`);
+
+/** Agents' checkouts: unused ones are removed after a while, unless they hold unpublished work. */
+function Workspaces({ info, onDone }: { info: SettingsData["workspaces"]; onDone: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const report = info.lastCleanup;
+  return (
+    <Panel title="Workspaces" hint={info.retentionDays ? `unused ones are removed after ${info.retentionDays} days` : "kept forever (WORKSPACE_RETENTION_DAYS=0)"}>
+      <div className="stack" style={{ gap: 8 }}>
+        {report ? (
+          <div className="meta">
+            {report.remaining} checkout{report.remaining === 1 ? "" : "s"}, {mb(report.remainingKb)}. Last cleanup {new Date(report.at).toLocaleString()}: removed {report.removed.length} ({mb(report.freedKb)}).
+          </div>
+        ) : (
+          <div className="meta">Not cleaned up yet.</div>
+        )}
+        {report?.kept.length ? (
+          <details>
+            <summary className="meta">Kept {report.kept.length} unused checkout{report.kept.length === 1 ? "" : "s"} with work that isn't on GitHub</summary>
+            {report.kept.map((entry) => (
+              <div key={entry.path} className="meta">
+                <code>{entry.path}</code>: {entry.reason}
+              </div>
+            ))}
+          </details>
+        ) : null}
+        <div>
+          <button
+            disabled={busy || !info.retentionDays}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await api.post("/api/workspaces/cleanup");
+                onDone();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Cleaning up…" : "Clean up now"}
+          </button>
+        </div>
+        <div className="meta">Each agent keeps a full clone per thread. The next task on a thread clones it again. History can remove one by hand.</div>
+      </div>
+    </Panel>
+  );
+}
+
 /** Spending limits for all agents together: new tasks wait once one is reached. */
 function SpendLimits({ spend, blocked, onSave }: { spend: SettingsData["spend"]; blocked: string | null; onSave: (body: Partial<{ spendLimitDailyUsd: number | null; spendLimitMonthlyUsd: number | null }>) => void }) {
   const [daily, setDaily] = useState(spend.dailyUsd ? String(spend.dailyUsd) : "");
@@ -291,6 +339,7 @@ export function Settings() {
 
       <div className="grid-2">
         <LivePanel settings={data} onSave={update} />
+        <Workspaces info={data.workspaces} onDone={() => void reload()} />
         <Panel title="Environment" hint="set with environment variables">
           <dl className="kv">
             <dt>GITHUB_URL</dt>
