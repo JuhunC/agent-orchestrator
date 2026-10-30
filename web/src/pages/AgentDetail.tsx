@@ -91,6 +91,7 @@ export function AgentDetail({ name }: { name: string }) {
               {agent.model ?? <span className="meta">default ({modelInfo?.model ?? "ANTHROPIC_MODEL"})</span>}
               {agent.modelFrom === "group" && <span className="meta"> (from group)</span>}
               {agent.effort && <span className="meta"> · effort {agent.effort}{agent.effortFrom === "group" ? " (from group)" : ""}</span>}
+              {agent.fallbackModel && <span className="meta" title="fallback_model: used when the model is overloaded or out of usage"> · falls back to {agent.fallbackModel.split(",").join(", ")}</span>}
             </dd>
             <dt>Groups</dt>
             <dd>

@@ -53,6 +53,7 @@ export interface Agent {
   description: string;
   model: string | null;
   effort: Effort | null;
+  fallbackModel: string | null;
   prompt: string;
   toolsAllow: string[] | null;
   toolsDeny: string[];

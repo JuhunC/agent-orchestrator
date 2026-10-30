@@ -9,6 +9,7 @@ import { workspaceDir } from "../runtime/workspace.ts";
 import { clearLimit, getLimit } from "./limit-store.ts";
 import { spendStatus } from "./spend.ts";
 import { queueOrder } from "./queue-order.ts";
+import { fallbackModels } from "../runtime/options.ts";
 import { loadBoards } from "../boards/loader.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
 import { executeTask, markInterrupted } from "./run-task.ts";
@@ -92,8 +93,10 @@ class Scheduler {
       if (profile.replicas && (perAgent.get(profile.name) ?? 0) >= profile.replicas) continue;
       const boardLimit = task.board ? boards.find((board) => board.name === task.board)?.limits.maxRunning : null;
       if (task.board && boardLimit && (perBoard.get(task.board) ?? 0) >= boardLimit) continue;
-      // Waiting for a usage limit to reset: this task's own, or the model service's.
-      const blockedUntil = Math.max(task.retryAt ? Date.parse(task.retryAt) : 0, limit ? Date.parse(limit.until) : 0);
+      // Waiting for a usage limit to reset: this task's own, or the model service's (unless the
+      // agent has a fallback model to run on meanwhile).
+      const serviceLimit = limit && !fallbackModels(profile).length ? Date.parse(limit.until) : 0;
+      const blockedUntil = Math.max(task.retryAt ? Date.parse(task.retryAt) : 0, serviceLimit);
       if (blockedUntil > now) {
         wakeAt = Math.min(wakeAt, blockedUntil);
         continue;

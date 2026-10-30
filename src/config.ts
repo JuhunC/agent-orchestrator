@@ -119,6 +119,9 @@ export const config = {
   // Claude Code's update checks and telemetry are off by default on the server.
   allowNonessentialTraffic: env("ALLOW_NONESSENTIAL_TRAFFIC") === "true",
 
+  // Model(s) agents switch to when theirs is overloaded or its usage limit is reached, unless an
+  // agent sets fallback_model. Comma-separated, tried in order. Empty: none.
+  fallbackModel: env("FALLBACK_MODEL"),
   liveIdleMinutes: int("LIVE_SESSION_IDLE_MINUTES", 30),
   maxLiveSessions: int("MAX_LIVE_SESSIONS", 4),
   usageLimitRetries: int("USAGE_LIMIT_RETRIES", 5),

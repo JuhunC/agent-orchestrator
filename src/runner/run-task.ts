@@ -14,7 +14,7 @@ import { loadProfiles } from "../profiles/loader.ts";
 import { commitAndPush, openOrUpdatePullRequest, PullRequestLimitError, type BoardContext, type SubIssueMove, type ToolContext } from "../runtime/github-tools.ts";
 import { sessions } from "../runtime/manager.ts";
 import { cardMoveProblems, cardWorkType, moveProblems } from "../runtime/evidence.ts";
-import { agentEnv, taskEnv } from "../runtime/options.ts";
+import { agentEnv, fallbackModels, taskEnv } from "../runtime/options.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
 import { RELATION_NAME, runRelatedStart } from "../runtime/related-agents.ts";
 import { addUsage } from "../runtime/usage.ts";
@@ -23,7 +23,7 @@ import type { EventKind, Task, ThreadRef } from "../types.ts";
 import { git } from "./git.ts";
 import { settleInbox } from "./inbox.ts";
 import { retryTime, type DetectedLimit } from "./limits.ts";
-import { setLimit } from "./limit-store.ts";
+import { getLimit, setLimit } from "./limit-store.ts";
 import { ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
 import { recordIncident } from "./incidents.ts";
 
@@ -36,6 +36,9 @@ function patch(taskId: number, changes: Partial<Task>): Task {
 function emit(taskId: number, kind: EventKind, message: string): void {
   bus.publish({ type: "event", event: addEvent(taskId, kind, message) });
 }
+
+const FALLBACK_PROMPT =
+  "The model you were running on hit its usage limit, so you now run on a fallback model. Continue the task from where you left off: your earlier work in this session and the working copy are intact. Finish as instructed before.";
 
 const RETRY_PROMPT =
   "The model service failed while you were working, so your last turn was cut off. Continue the task from where you left off: your earlier work in this session and the working copy are intact. Finish as instructed before.";
@@ -167,6 +170,11 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     };
 
     const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0, board: boardContext };
+    // While the model service's usage limit holds, an agent with a fallback model starts on it.
+    const fallbacks = fallbackModels(profile);
+    let usingFallback = Boolean(getLimit() && fallbacks.length);
+    const startModel = usingFallback ? fallbacks[0]! : (column?.model ?? null);
+    if (usingFallback) onEvent("system", `The usage limit is in force, so this runs on the fallback model ${startModel}`);
     state.phase = "working";
     throttle.markDirty();
     const runOptions = {
@@ -178,7 +186,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       resumeSessionId: lastSessionId(ref, profile.name),
       prompts,
       context,
-      model: column?.model ?? null,
+      model: startModel,
       effort: column?.effort ?? null,
       onEvent,
       signal,
@@ -202,6 +210,20 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         ...runOptions,
         resumeSessionId: outcome.sessionId ?? runOptions.resumeSessionId,
         prompts: { full: prompts.full, followUp: RETRY_PROMPT },
+      });
+      costUsd += outcome.costUsd ?? 0;
+      usage = addUsage(usage, outcome.usage);
+    }
+    // A usage limit on the model: carry on with the fallback model at once instead of pausing.
+    if (outcome.limit && !outcome.cancelled && !usingFallback && fallbacks.length) {
+      setLimit(retryTime(outcome.limit), outcome.limit.message);
+      usingFallback = true;
+      onEvent("system", `Usage limit reached (${outcome.limit.message}). Continuing with the fallback model ${fallbacks[0]}`);
+      outcome = await sessions.run({
+        ...runOptions,
+        model: fallbacks[0]!,
+        resumeSessionId: outcome.sessionId ?? runOptions.resumeSessionId,
+        prompts: { full: prompts.full, followUp: FALLBACK_PROMPT },
       });
       costUsd += outcome.costUsd ?? 0;
       usage = addUsage(usage, outcome.usage);

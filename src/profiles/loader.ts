@@ -248,6 +248,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
     handle,
     description: String(data.description ?? ""),
     model: data.model ? String(data.model) : groupModel,
+    fallbackModel: Array.isArray(data.fallback_model) ? data.fallback_model.map(String).join(",") || null : data.fallback_model ? String(data.fallback_model) : null,
     effort: parseEffort(data.effort, errors) ?? groupEffort,
     modelFrom: data.model ? "agent" : groupModel ? "group" : null,
     effortFrom: data.effort ? "agent" : groupEffort ? "group" : null,

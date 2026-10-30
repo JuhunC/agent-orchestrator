@@ -53,6 +53,7 @@ const AGENT: FileDoc = {
     { key: "description", type: "string", description: "What the agent is for, shown in the admin UI.", example: "description: Implements issues and opens pull requests" },
     { key: "model", type: "string", default: "ANTHROPIC_MODEL (or its group's)", description: "Model id or alias, e.g. claude-opus-5-5, sonnet.", example: "model: claude-opus-5-5" },
     { key: "effort", type: "string", values: EFFORTS, default: "the model's default (or its group's)", description: "How much the model thinks.", example: "effort: high" },
+    { key: "fallback_model", type: "string or list", default: "FALLBACK_MODEL", description: "Model(s) to switch to, in order, when the agent's model is overloaded (Claude Code switches back each turn) or its usage limit is reached (the task carries on with the fallback instead of pausing, and while the limit holds this agent's tasks start on it).", example: "fallback_model: claude-sonnet-5-5" },
     { key: "skills", type: "list", source: "skills", default: "[]", description: "Skills from library/skills. Its own skills/ folder is always included.", example: "skills: [shipping-changes]" },
     { key: "mcp", type: "list", source: "mcp", default: "[]", description: "MCP servers from library/mcp.json. Its own mcp.json is always included.", example: "mcp: [docs]" },
     { key: "subagents", type: "list", source: "roles", default: "[]", description: "Roles from library/roles the agent can delegate to.", example: "subagents: [code-reviewer]" },

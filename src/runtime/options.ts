@@ -140,12 +140,23 @@ export function buildOptions(setup: SessionSetup): Options {
   if (config.claudeCodeExecutable) options.pathToClaudeCodeExecutable = config.claudeCodeExecutable;
   if (profile.toolsAllow) options.tools = profile.toolsAllow;
   if (model) options.model = model;
+  // Claude Code switches to these when the model is overloaded or unavailable (and back each turn).
+  const fallback = fallbackModels(profile).filter((name) => name !== model);
+  if (fallback.length) options.fallbackModel = fallback.join(",");
   if (effort) options.effort = effort;
   if (profile.maxTurns) options.maxTurns = profile.maxTurns;
   if (profile.maxBudgetUsd) options.maxBudgetUsd = profile.maxBudgetUsd;
   if (resume) options.resume = resume;
   if (setup.hooks) options.hooks = setup.hooks;
   return options;
+}
+
+/** The models an agent falls back to, in order: its fallback_model, or FALLBACK_MODEL. */
+export function fallbackModels(profile: Pick<Profile, "fallbackModel">): string[] {
+  return (profile.fallbackModel ?? config.fallbackModel)
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
 }
 
 /** Per-task values that must not force a new live session when they change. */

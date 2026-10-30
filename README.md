@@ -46,6 +46,8 @@ Agents never get these credentials. Each agent session gets a credential of its 
 
 To run your own build of Claude Code instead of the one bundled with the SDK, set `CLAUDE_CODE_EXECUTABLE` to its path (or a command on `PATH`). The SDK starts it with the same flags it gives Claude Code (`--output-format stream-json --input-format stream-json`, `--resume`, `--mcp-config` and so on), so it must accept them and speak the same protocol on stdin/stdout. Paths ending in `.js`/`.mjs` run with Node; anything else (a binary, a script with a `#!` line) runs directly. In Docker, mount it into the container or add it to an image built on this one.
 
+**Fallback models:** give an agent `fallback_model: claude-sonnet-5-5` (or a list), or set `FALLBACK_MODEL` for all agents. When its model is overloaded, Claude Code switches to the fallback for that turn. When its model's usage limit is reached, the task carries on with the fallback straight away instead of pausing, and while the limit holds, that agent's new tasks start on the fallback (agents without one wait).
+
 When the service reports a usage limit, tasks pause and continue automatically when it resets (Settings shows the limit and can clear it). When it fails to answer (server errors, overloads, dropped connections), requests are retried, and a task that still fails is retried with the same session (`MODEL_ERROR_RETRIES`, default 3). Client errors such as a bad key or invalid request aren't retried.
 
 ## Agent profiles
@@ -269,6 +271,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |
 | `AGENT_USER` | `agent` in the image | The OS user agents run as, which can't read the orchestrator's data (see [Security](#security)) |
+| `FALLBACK_MODEL` | | Model(s) agents switch to when theirs is overloaded or out of usage, unless they set `fallback_model` (comma-separated, in order) |
 | `MODEL_PROXY` | `on` | Agents reach the model service through the orchestrator with a per-session credential; `off` gives them the real one |
 | `AGENT_ISOLATION` | `auto` | `auto`: isolate agents when it works, warn in Settings when not. `required`: don't run agents unless they're isolated. `off`: run them as the orchestrator's user |
 

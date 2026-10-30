@@ -68,6 +68,8 @@ export interface Profile {
   description: string;
   model: string | null;
   effort: Effort | null;
+  /** Models to use when the model is overloaded or its usage limit is reached, in order (null: FALLBACK_MODEL). */
+  fallbackModel: string | null;
   /** The role prompt: the body of agent.md, added to Claude Code's system prompt. */
   prompt: string;
   /** Built-in Claude Code tools to offer; null means all of them. */
