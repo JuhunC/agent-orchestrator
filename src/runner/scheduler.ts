@@ -8,6 +8,8 @@ import { sessions } from "../runtime/manager.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { clearLimit, getLimit } from "./limit-store.ts";
 import { spendStatus } from "./spend.ts";
+import { queueOrder } from "./queue-order.ts";
+import { loadBoards } from "../boards/loader.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
 import { executeTask, markInterrupted } from "./run-task.ts";
 
@@ -65,6 +67,9 @@ class Scheduler {
       return;
     }
     const profiles = queued.length ? loadProfiles().agents : [];
+    // Boards with limits.max_running work at most that many of their cards at once.
+    const boards = queued.some((task) => task.board) ? loadBoards().boards : [];
+    const perBoard = new Map<string, number>();
     const limit = getLimit();
     const busy = new Set([...this.running.values()].map((entry) => entry.workspace));
     // Agents with `replicas: N` work at most N cards at once.
@@ -72,8 +77,9 @@ class Scheduler {
     for (const id of this.running.keys()) {
       const running = getTask(id);
       if (running) perAgent.set(running.agent, (perAgent.get(running.agent) ?? 0) + 1);
+      if (running?.board) perBoard.set(running.board, (perBoard.get(running.board) ?? 0) + 1);
     }
-    for (const task of queued) {
+    for (const task of queueOrder(queued, now)) {
       if (this.running.size >= this.maxConcurrent) break;
       const workspace = workspaceDir(task);
       if (busy.has(workspace)) continue;
@@ -84,6 +90,8 @@ class Scheduler {
       }
       if (!profile.enabled) continue;
       if (profile.replicas && (perAgent.get(profile.name) ?? 0) >= profile.replicas) continue;
+      const boardLimit = task.board ? boards.find((board) => board.name === task.board)?.limits.maxRunning : null;
+      if (task.board && boardLimit && (perBoard.get(task.board) ?? 0) >= boardLimit) continue;
       // Waiting for a usage limit to reset: this task's own, or the model service's.
       const blockedUntil = Math.max(task.retryAt ? Date.parse(task.retryAt) : 0, limit ? Date.parse(limit.until) : 0);
       if (blockedUntil > now) {
@@ -92,6 +100,7 @@ class Scheduler {
       }
       busy.add(workspace);
       perAgent.set(profile.name, (perAgent.get(profile.name) ?? 0) + 1);
+      if (task.board) perBoard.set(task.board, (perBoard.get(task.board) ?? 0) + 1);
       this.launch(task, workspace);
     }
     if (this.wakeTimer) clearTimeout(this.wakeTimer);

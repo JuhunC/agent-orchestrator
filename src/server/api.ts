@@ -27,6 +27,7 @@ import { scheduler } from "../runner/scheduler.ts";
 import { cleanUpWorkspaces, lastCleanup } from "../runtime/cleanup.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
+import { queueOrder } from "../runner/queue-order.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import { configReference } from "../profiles/reference.ts";
@@ -193,7 +194,7 @@ export function registerApi(app: FastifyInstance): void {
       sessions: sessions.list(),
       model: modelView(),
       running: listTasks({ status: "running", limit: 50 }),
-      queued: listTasks({ status: "queued", limit: 100 }).reverse(),
+      queued: queueOrder(listTasks({ status: "queued", limit: 100 })),
       recent: listTasks({ status: "succeeded,failed,cancelled", limit: 15 }),
       settings: settingsView(),
       configured: Boolean(getCredentials()),

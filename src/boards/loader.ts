@@ -46,7 +46,8 @@ export interface Board {
   pollSeconds: number;
   /** Name of an environment variable holding a token for the project, when the App can't reach it. */
   tokenEnv: string | null;
-  limits: { movesPerIssue: number; entriesPerColumn: number; budgetUsdPerIssue: number | null };
+  /** maxRunning: most of this board's cards agents work at once (null: no limit beyond MAX_CONCURRENT_TASKS). */
+  limits: { movesPerIssue: number; entriesPerColumn: number; budgetUsdPerIssue: number | null; maxRunning: number | null };
   columns: Record<string, BoardColumn>;
   /** Card types (by issue label) and the columns agents may not move them into. */
   workTypes: WorkType[];
@@ -139,6 +140,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
       movesPerIssue: Number(limits.moves_per_issue ?? 10),
       entriesPerColumn: Number(limits.entries_per_column ?? 3),
       budgetUsdPerIssue: limits.budget_usd_per_issue === undefined ? null : Number(limits.budget_usd_per_issue),
+      maxRunning: Number(limits.max_running) > 0 ? Math.floor(Number(limits.max_running)) : null,
     },
     columns,
     workTypes: rules.workTypes,

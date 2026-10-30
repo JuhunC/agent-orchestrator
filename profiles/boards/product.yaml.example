@@ -19,6 +19,7 @@ limits:
   moves_per_issue: 10          # agent moves per card before it goes to needs_human
   entries_per_column: 3        # times a card may come back to the same column
   budget_usd_per_issue: 30     # stop when agents have spent this much on a card
+  # max_running: 2             # most of this board's cards agents work at once
 
 # Optional: kinds of card (by issue label) agents may not move into some columns.
 # work_types:

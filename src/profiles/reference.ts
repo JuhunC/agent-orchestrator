@@ -202,6 +202,7 @@ const BOARD: FileDoc = {
     { key: "limits.moves_per_issue", type: "number", default: "10", description: "Agent moves per card before it goes to needs_human.", example: "limits:\n  moves_per_issue: 10" },
     { key: "limits.entries_per_column", type: "number", default: "3", description: "Times a card may come back to the same column.", example: "limits:\n  entries_per_column: 3" },
     { key: "limits.budget_usd_per_issue", type: "number", default: "no limit", description: "Stop when agents have spent this much on a card.", example: "limits:\n  budget_usd_per_issue: 30" },
+    { key: "limits.max_running", type: "number", default: "no limit (MAX_CONCURRENT_TASKS)", description: "Most of this board's cards agents work at once, so one busy board doesn't take every slot. People's own requests (mentions) start before board stages anyway.", example: "limits:\n  max_running: 2" },
     { key: "columns.<name>", type: "map", required: true, description: "One entry per project column, by its exact name. {} for a column without an agent.", example: "columns:\n  Done: {}" },
     { key: "columns.<name>.agent", type: "string", source: "agents", description: "The agent that works cards in this column.", example: "    agent: coder" },
     { key: "columns.<name>.agents", type: "list", source: "agentRefs", description: "Several agents, or group:<name> for a whole group. mode says how cards are handed out.", example: "    agents: [group:developers]" },
