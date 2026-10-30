@@ -786,6 +786,23 @@ export function pullOutcomes(since: string, agent?: string): PullOutcome[] {
   return (db.prepare(`SELECT * FROM pull_outcomes WHERE opened_at >= ? ${agent ? "AND agent = ?" : ""}`).all(...(agent ? [since, agent] : [since])) as Row[]).map(toOutcome);
 }
 
+/** Agents' pull requests open in a repository. */
+export function openAgentPullCount(owner: string, repo: string): number {
+  return Number((db.prepare("SELECT COUNT(*) AS count FROM pull_outcomes WHERE owner = ? AND repo = ? AND state = 'open'").get(owner, repo) as Row).count);
+}
+
+/** Does this thread already have an open pull request from an agent (so new work there updates it)? */
+export function threadHasOpenAgentPull(ref: ThreadRef): boolean {
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 FROM pull_outcomes p JOIN tasks t ON t.owner = p.owner AND t.repo = p.repo AND t.pr_number = p.number
+         WHERE t.owner = ? COLLATE NOCASE AND t.repo = ? COLLATE NOCASE AND t.thread_kind = ? AND t.thread_number = ? AND p.state = 'open' LIMIT 1`,
+      )
+      .get(ref.owner, ref.repo, ref.kind, ref.number),
+  );
+}
+
 /** For /metrics: agents' pull requests by agent and state. */
 export function pullStateCounts(): { agent: string; state: string; count: number }[] {
   return (db.prepare("SELECT agent, state, COUNT(*) AS count FROM pull_outcomes GROUP BY agent, state").all() as Row[]).map((row) => ({ agent: String(row.agent), state: String(row.state), count: Number(row.count) }));

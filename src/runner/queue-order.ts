@@ -10,7 +10,7 @@ import type { Task } from "../types.ts";
 export function priority(task: Pick<Task, "triggerKind" | "createdAt">, now = Date.now()): number {
   if (config.queueAgingMinutes > 0 && now - Date.parse(task.createdAt) > config.queueAgingMinutes * 60_000) return 0;
   if (task.triggerKind === "board") return 3;
-  if (task.triggerKind === "agent") return 2;
+  if (task.triggerKind === "agent" || task.triggerKind === "maintenance") return 2;
   return 1;
 }
 

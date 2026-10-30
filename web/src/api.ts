@@ -136,7 +136,7 @@ export interface Task {
   threadNumber: number;
   threadTitle: string;
   threadUrl: string;
-  triggerKind: "mention" | "assignment" | "manual" | "retry" | "board" | "agent";
+  triggerKind: "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance";
   requestedBy: string;
   requestText: string;
   requestUrl: string;

@@ -144,6 +144,11 @@ export const config = {
   claudeCodeExecutable: executable("CLAUDE_CODE_EXECUTABLE"),
   // Most pull requests agents may open for one issue (or discussion), open or closed. 0 = no limit.
   maxPullRequestsPerIssue: Math.max(0, int("MAX_PULL_REQUESTS_PER_ISSUE", 0)),
+  // Most open agent pull requests per repository before board stages and agent-started work that
+  // would open another one wait (people's own requests still run). 0 = no limit.
+  maxOpenAgentPullsPerRepo: Math.max(0, int("MAX_OPEN_AGENT_PRS_PER_REPO", 0)),
+  // When an agent's pull request conflicts with its base, start that agent to merge the base in.
+  rebaseConflictedPulls: env("REBASE_CONFLICTED_PRS", "on").toLowerCase() !== "off",
   // Spending limits for all agents together (US dollars, Claude Code's estimates; UTC days and
   // months). When one is reached, new tasks wait until the next day or month. Settings can change them.
   // Agents' checkouts nobody has used for this many days are removed (unless they hold work that

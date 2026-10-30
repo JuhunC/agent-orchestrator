@@ -1,7 +1,8 @@
 export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 /** "agent": another issue's agent started it (start_related_agent). */
-export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent";
+/** "maintenance": the orchestrator started it itself (e.g. to fix a pull request that conflicts with its base). */
+export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance";
 /** "github": something a person did on the thread while the agent was working. */
 export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error" | "github";
 

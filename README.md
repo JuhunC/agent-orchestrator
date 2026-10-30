@@ -280,6 +280,8 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `WORKSPACE_RETENTION_DAYS` | `14` | Agents' checkouts (a full clone per agent and thread) nobody has used for this long are removed, hourly; ones with uncommitted or unpushed work are kept. The next task clones again. `0` keeps them. **Settings → Workspaces** shows the last cleanup and can run one |
 | `SPEND_LIMIT_DAILY_USD`, `SPEND_LIMIT_MONTHLY_USD` | none | Spending limits for all agents together (UTC days and months, Claude Code's estimates). When one is reached, new tasks wait until the next day or month; running ones finish. The Dashboard warns at 80%. **Settings** can change them |
 | `MAX_AGENT_CHAIN` | `3` | How many agents in a row may start each other on related issues with `start_related_agent`; `0` turns it off |
+| `MAX_OPEN_AGENT_PRS_PER_REPO` | `0` (no limit) | Once a repository has this many open pull requests from agents, board stages and agent-started work that would open another one wait until some are merged or closed, so reviews keep up. People's own requests still run |
+| `REBASE_CONFLICTED_PRS` | `on` | When an agent's open pull request conflicts with its base (checked hourly), the agent that opened it is started to merge the base in and push, at most once a day per pull request |
 | `MAX_PULL_REQUESTS_PER_ISSUE` | `0` (no limit) | Most pull requests agents may open for one issue, counting closed ones. Past it, agents still push their branch and can update their open PR, but no new PR is opened |
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |

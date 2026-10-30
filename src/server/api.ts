@@ -660,6 +660,7 @@ export function registerApi(app: FastifyInstance): void {
         { name: "Agents starting agents", setting: "MAX_AGENT_CHAIN", value: config.maxAgentChain === 0 ? "off" : String(config.maxAgentChain), what: "how many agents in a row may start each other on related issues (start_related_agent), counted through board moves" },
         { name: "Related starts per task", setting: "built in", value: String(MAX_RELATED_STARTS_PER_TASK), what: "agents one task may start on related issues" },
         { name: "Pull requests per issue", setting: "MAX_PULL_REQUESTS_PER_ISSUE", value: config.maxPullRequestsPerIssue ? String(config.maxPullRequestsPerIssue) : "no limit", what: "pull requests agents may open for one issue, closed ones included" },
+        { name: "Open agent PRs per repository", setting: "MAX_OPEN_AGENT_PRS_PER_REPO", value: config.maxOpenAgentPullsPerRepo ? String(config.maxOpenAgentPullsPerRepo) : "no limit", what: "past it, board and agent-started work that would open another pull request waits until some are merged or closed" },
         { name: "Comments per task", setting: "built in", value: String(MAX_COMMENTS_PER_TASK), what: "post_comment calls per task" },
         { name: "Sub-issues per task", setting: "built in", value: String(MAX_SUB_ISSUES_PER_TASK), what: "create_sub_issue calls per task" },
         { name: "Task timeout", setting: "TASK_TIMEOUT_MINUTES", value: `${config.defaultTimeoutMinutes} min`, what: "a task is stopped after this long (agents can set their own timeout_minutes)" },

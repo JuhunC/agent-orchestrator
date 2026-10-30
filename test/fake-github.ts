@@ -15,7 +15,7 @@ export interface FakeIssue {
   body: string;
   user: { login: string };
   comments: FakeComment[];
-  pull?: { head: string; base: string; merged?: boolean };
+  pull?: { head: string; base: string; merged?: boolean; mergeableState?: string };
   labels?: string[];
   state?: "open" | "closed";
   stateReason?: string | null;
@@ -348,6 +348,16 @@ export class FakeGitHub {
       if (body.state) issue.state = body.state;
       if (body.state_reason !== undefined) issue.stateReason = body.state_reason;
       return { status: 200, body: this.issueJson(issue) };
+    }
+    if (method === "GET" && /^\/repos\/[^/]+\/[^/]+\/pulls\/\d+\/comments$/.test(path)) return { status: 200, body: [] };
+    if (method === "GET" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/))) {
+      const pr = this.issues.get(Number(match[1]));
+      if (!pr?.pull) return { status: 404, body: { message: "Not Found" } };
+      const closed = pr.state === "closed";
+      return {
+        status: 200,
+        body: { number: pr.number, state: closed ? "closed" : "open", merged: Boolean(pr.pull.merged), merged_at: pr.pull.merged ? new Date().toISOString() : null, closed_at: closed ? new Date().toISOString() : null, mergeable_state: pr.pull.mergeableState ?? "clean", head: { ref: pr.pull.head, sha: this.branchSha(pr.pull.head), repo: { full_name: "acme/widgets" } }, base: { ref: pr.pull.base } },
+      };
     }
     if (method === "PATCH" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)$/))) {
       const pr = this.issues.get(Number(match[1]))!;

@@ -1,6 +1,7 @@
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { getSetting, getTask, queuedTasks, setSetting, tasksWithStatus, updateTask } from "../db.ts";
+import { getSetting, getTask, openAgentPullCount, queuedTasks, setSetting, tasksWithStatus, threadHasOpenAgentPull, updateTask } from "../db.ts";
+import { recordIncident } from "./incidents.ts";
 import { errorMessage, log } from "../log.ts";
 import type { Task } from "../types.ts";
 import { loadProfiles } from "../profiles/loader.ts";
@@ -38,6 +39,28 @@ class Scheduler {
     log.warn("The model service is rate limiting; running fewer agents for a while", { atOnce: this.rateCap });
     bus.publish({ type: "settings" });
   }
+
+  /**
+   * Would this task open yet another pull request in a repository that already has
+   * MAX_OPEN_AGENT_PRS_PER_REPO open ones from agents? Then it waits until some are merged or
+   * closed. Only board stages and work agents started: people's own requests always run.
+   */
+  private overPullLimit(task: Task, profile: { github: { pullRequest: boolean; push: boolean } }, counts: Map<string, number>): boolean {
+    const limit = config.maxOpenAgentPullsPerRepo;
+    if (!limit || task.dryRun || task.threadKind !== "issue" || !["board", "agent"].includes(task.triggerKind)) return false;
+    if (!profile.github.pullRequest || !profile.github.push) return false;
+    const key = `${task.owner}/${task.repo}`.toLowerCase();
+    if (!counts.has(key)) counts.set(key, openAgentPullCount(task.owner, task.repo));
+    if (counts.get(key)! < limit) return false;
+    if (threadHasOpenAgentPull({ owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber })) return false;
+    const now = Date.now();
+    if (now - (this.pullLimitNoted.get(key) ?? 0) > 60 * 60_000) {
+      this.pullLimitNoted.set(key, now);
+      recordIncident("loop_guard", "info", `${key} has ${counts.get(key)} open agent pull requests (MAX_OPEN_AGENT_PRS_PER_REPO is ${limit}), so board and agent-started work that would open another waits until some are merged or closed.`);
+    }
+    return true;
+  }
+  private pullLimitNoted = new Map<string, number>();
 
   /** How many tasks may run at once now: the setting, or less while recovering from rate limits. */
   effectiveConcurrent(now = Date.now()): number {
@@ -99,6 +122,7 @@ class Scheduler {
     // Boards with limits.max_running work at most that many of their cards at once.
     const boards = queued.some((task) => task.board) ? loadBoards().boards : [];
     const perBoard = new Map<string, number>();
+    const pullCounts = new Map<string, number>();
     const limit = getLimit();
     const busy = new Set([...this.running.values()].map((entry) => entry.workspace));
     // Agents with `replicas: N` work at most N cards at once.
@@ -119,6 +143,7 @@ class Scheduler {
       }
       if (!profile.enabled) continue;
       if (profile.replicas && (perAgent.get(profile.name) ?? 0) >= profile.replicas) continue;
+      if (this.overPullLimit(task, profile, pullCounts)) continue;
       const boardLimit = task.board ? boards.find((board) => board.name === task.board)?.limits.maxRunning : null;
       if (task.board && boardLimit && (perBoard.get(task.board) ?? 0) >= boardLimit) continue;
       // Waiting for a usage limit to reset: this task's own, or the model service's (unless the
