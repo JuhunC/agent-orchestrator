@@ -149,6 +149,9 @@ export const config = {
   maxOpenAgentPullsPerRepo: Math.max(0, int("MAX_OPEN_AGENT_PRS_PER_REPO", 0)),
   // When an agent's pull request conflicts with its base, start that agent to merge the base in.
   rebaseConflictedPulls: env("REBASE_CONFLICTED_PRS", "on").toLowerCase() !== "off",
+  // Days after an agent's pull request is merged or closed before its branch is deleted on GitHub
+  // (agent/… and ao/issue-… branches only, and not while open pull requests still target it). 0 = never.
+  agentBranchCleanupDays: Math.max(0, int("AGENT_BRANCH_CLEANUP_DAYS", 1)),
   // Spending limits for all agents together (US dollars, Claude Code's estimates; UTC days and
   // months). When one is reached, new tasks wait until the next day or month. Settings can change them.
   // Agents' checkouts nobody has used for this many days are removed (unless they hold work that

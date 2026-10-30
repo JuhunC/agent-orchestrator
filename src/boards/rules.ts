@@ -86,6 +86,12 @@ export interface RelatedAgentSettings {
 
 export const ANY_RELATED_AGENTS: RelatedAgentSettings = { columns: null };
 
+/** Cards to archive once they've sat in one of these columns for a while (the optional `archive:` section). */
+export interface ArchiveSettings {
+  columns: string[];
+  afterDays: number;
+}
+
 /** The project fields a board tracks per card (the optional `fields:` section). */
 export interface CardFieldSettings {
   /** Name of the project's date field for when work starts, e.g. "Start date". */
@@ -210,6 +216,24 @@ function parseRelatedAgents(raw: unknown, columns: string[], errors: string[]): 
   return { columns: picked };
 }
 
+function parseArchive(raw: unknown, columns: string[], errors: string[]): ArchiveSettings | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    errors.push('"archive" must be a map with "columns" and "after_days"');
+    return null;
+  }
+  const entry = raw as Record<string, unknown>;
+  for (const key of Object.keys(entry)) if (key !== "columns" && key !== "after_days") errors.push(`archive: unknown setting "${key}" (use columns and after_days)`);
+  const picked: string[] = [];
+  for (const name of list(entry.columns)) {
+    if (!columns.includes(name)) errors.push(`archive.columns: "${name}" isn't listed under columns`);
+    else if (!picked.includes(name)) picked.push(name);
+  }
+  const afterDays = entry.after_days === undefined ? 7 : Number(entry.after_days);
+  if (!Number.isFinite(afterDays) || afterDays < 0) errors.push("archive.after_days must be a number of days (0 or more)");
+  return picked.length ? { columns: picked, afterDays: Math.max(0, afterDays || 0) } : null;
+}
+
 const FIELD_KEYS = ["start", "end", "estimate", "start_on", "end_on"];
 
 function parseCardFields(raw: unknown, columns: string[], needsHuman: string | null, errors: string[]): CardFieldSettings {
@@ -253,6 +277,7 @@ export function parseBoardRules(data: Record<string, unknown>): {
   subIssues: SubIssueSettings;
   fields: CardFieldSettings;
   relatedAgents: RelatedAgentSettings;
+  archive: ArchiveSettings | null;
   errors: string[];
 } {
   const errors: string[] = [];
@@ -269,7 +294,8 @@ export function parseBoardRules(data: Record<string, unknown>): {
   const subIssues = parseSubIssues(data.sub_issues, Object.keys(rawColumns), needsHuman, errors);
   const fields = parseCardFields(data.fields, Object.keys(rawColumns), needsHuman, errors);
   const relatedAgents = parseRelatedAgents(data.related_agents, Object.keys(rawColumns), errors);
-  return { columns, workTypes, subIssues, fields, relatedAgents, errors };
+  const archive = parseArchive(data.archive, Object.keys(rawColumns), errors);
+  return { columns, workTypes, subIssues, fields, relatedAgents, archive, errors };
 }
 
 /** The first work type (in file order) with one of the card's labels. */

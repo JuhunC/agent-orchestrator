@@ -52,7 +52,7 @@ import {
   writeProfileFile,
 } from "../profiles/store.ts";
 import { sessions } from "../runtime/manager.ts";
-import { boardStatus, forgetProjectCache, syncBoard } from "../boards/engine.ts";
+import { boardStatus, forgetProjectCache, pollInterval, syncBoard } from "../boards/engine.ts";
 import { loadBoards } from "../boards/loader.ts";
 import { clearLimit, getLimit } from "../runner/limit-store.ts";
 import { startManualTask } from "../triggers.ts";
@@ -497,7 +497,7 @@ export function registerApi(app: FastifyInstance): void {
         project: `${board.owner}/${board.projectNumber}`,
         statusField: board.statusField,
         needsHuman: board.needsHuman,
-        pollSeconds: board.pollSeconds,
+        pollSeconds: pollInterval(board),
         limits: board.limits,
         columns: Object.values(board.columns).map((column) => ({ ...column, role: undefined, roleText: column.roleName ? null : column.role.slice(0, 300) })),
         workTypes: board.workTypes,

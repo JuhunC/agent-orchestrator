@@ -666,6 +666,10 @@ export function saveBoardItemFields(board: string, itemId: string, fields: CardF
   db.prepare("UPDATE board_items SET fields = ? WHERE board = ? AND item_id = ?").run(JSON.stringify({ ...current.fields, ...fields }), board, itemId);
 }
 
+export function deleteBoardItem(board: string, itemId: string): void {
+  db.prepare("DELETE FROM board_items WHERE board = ? AND item_id = ?").run(board, itemId);
+}
+
 export function saveBoardItem(item: Omit<BoardItemRow, "updatedAt">): void {
   db.prepare(
     `INSERT INTO board_items (board, item_id, owner, repo, kind, number, title, status, moves, entries, updated_at)
@@ -742,6 +746,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS pull_outcomes (
   PRIMARY KEY (owner, repo, number)
 )`);
 db.exec("CREATE INDEX IF NOT EXISTS pull_outcomes_opened ON pull_outcomes (opened_at)");
+addColumn("pull_outcomes", "branch", "TEXT");
+addColumn("pull_outcomes", "branch_deleted_at", "TEXT");
 
 export interface PullOutcome {
   owner: string;
@@ -765,9 +771,27 @@ const toOutcome = (row: Row): PullOutcome => ({
   checkedAt: (row.checked_at as string | null) ?? null,
 });
 
-/** An agent opened a pull request. */
-export function recordPullOpened(owner: string, repo: string, number: number, agent: string, at = now()): void {
-  db.prepare("INSERT OR IGNORE INTO pull_outcomes (owner, repo, number, agent, state, opened_at) VALUES (?, ?, ?, ?, 'open', ?)").run(owner, repo, number, agent, at);
+/** An agent opened a pull request from `branch`. */
+export function recordPullOpened(owner: string, repo: string, number: number, agent: string, branch: string | null = null, at = now()): void {
+  db.prepare("INSERT OR IGNORE INTO pull_outcomes (owner, repo, number, agent, state, opened_at, branch) VALUES (?, ?, ?, ?, 'open', ?, ?)").run(owner, repo, number, agent, at, branch);
+}
+
+/** Remembers a pull request's branch (from a webhook) when it wasn't known. */
+export function setPullBranch(owner: string, repo: string, number: number, branch: string): void {
+  db.prepare("UPDATE pull_outcomes SET branch = ? WHERE owner = ? AND repo = ? AND number = ? AND branch IS NULL").run(branch, owner, repo, number);
+}
+
+/** Merged or closed agent pull requests whose branch is still there, closed before `before`. */
+export function branchesToDelete(before: string, limit = 30): (PullOutcome & { branch: string })[] {
+  return (
+    db
+      .prepare("SELECT * FROM pull_outcomes WHERE state IN ('merged', 'closed') AND closed_at < ? AND branch IS NOT NULL AND branch_deleted_at IS NULL ORDER BY closed_at LIMIT ?")
+      .all(before, limit) as Row[]
+  ).map((row) => ({ ...toOutcome(row), branch: String(row.branch) }));
+}
+
+export function markBranchDeleted(owner: string, repo: string, number: number): void {
+  db.prepare("UPDATE pull_outcomes SET branch_deleted_at = ? WHERE owner = ? AND repo = ? AND number = ?").run(now(), owner, repo, number);
 }
 
 /** A pull request agents opened was merged, closed or reopened. False when it isn't one of theirs. */
@@ -816,8 +840,8 @@ export function pullStateCounts(): { agent: string; state: string; count: number
 export function backfillPullOutcomes(): number {
   const result = db
     .prepare(
-      `INSERT OR IGNORE INTO pull_outcomes (owner, repo, number, agent, state, opened_at)
-       SELECT owner, repo, pr_number, agent, 'open', MIN(COALESCE(finished_at, started_at, created_at)) FROM tasks
+      `INSERT OR IGNORE INTO pull_outcomes (owner, repo, number, agent, state, opened_at, branch)
+       SELECT owner, repo, pr_number, agent, 'open', MIN(COALESCE(finished_at, started_at, created_at)), MIN(branch) FROM tasks
        WHERE pr_number IS NOT NULL GROUP BY owner, repo, pr_number`,
     )
     .run();

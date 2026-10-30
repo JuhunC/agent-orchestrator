@@ -56,6 +56,8 @@ export class FakeGitHub {
   prOpened?: (number: number) => void;
   /** The commit a branch points at in the test's git remote (set by the harness). */
   branchSha: (branch: string) => string = () => "";
+  /** Deletes a branch in the test's git remote (set by the harness). */
+  deleteBranch: (branch: string) => void = () => undefined;
   /** Merges `head` into `base` in the test's git remote with a merge commit: the new commit, or null if there was nothing to merge. */
   mergeBranches: (base: string, head: string, message: string) => string | null = () => null;
   /** One organization project (acme/1) with a Status field; items map node id → card. */
@@ -327,11 +329,19 @@ export class FakeGitHub {
     }
     if (method === "GET" && path === "/repos/acme/widgets/pulls") {
       const head = url.searchParams.get("head")?.split(":")[1];
-      const open = [...this.issues.values()].filter((issue) => issue.pull && issue.pull.head === head && issue.state !== "closed");
+      const base = url.searchParams.get("base");
+      const open = [...this.issues.values()].filter((issue) => issue.pull && (head ? issue.pull.head === head : true) && (base ? issue.pull.base === base : Boolean(head)) && issue.state !== "closed");
       return {
         status: 200,
         body: open.map((issue) => ({ number: issue.number, html_url: `${this.url}/acme/widgets/pull/${issue.number}`, head: { ref: issue.pull!.head, sha: this.branchSha(issue.pull!.head) }, base: { ref: issue.pull!.base } })),
       };
+    }
+    if (method === "DELETE" && (match = path.match(/^\/repos\/acme\/widgets\/git\/refs\/(.+)$/))) {
+      // Octokit sends the ref encoded (heads%2Fname), which GitHub accepts.
+      const branch = decodeURIComponent(match[1]!).replace(/^heads\//, "");
+      if (!this.branchSha(branch)) return { status: 422, body: { message: "Reference does not exist" } };
+      this.deleteBranch(branch);
+      return { status: 204, body: null };
     }
     if (method === "POST" && path === "/repos/acme/widgets/pulls") {
       const number = Math.max(0, ...this.issues.keys()) + 1;
@@ -406,6 +416,10 @@ export class FakeGitHub {
         const existing = [...this.items.values()].find((item) => item.number === number);
         const id = existing?.id ?? this.addItem(number);
         return { status: 200, body: { data: { addProjectV2ItemById: { item: { id } } } } };
+      }
+      if (query.includes("mutation ArchiveBoardItem")) {
+        this.items.delete(vars.item);
+        return { status: 200, body: { data: { archiveProjectV2Item: { item: { id: vars.item } } } } };
       }
       if (query.includes("mutation MoveBoardItem")) {
         const item = this.items.get(vars.item)!;

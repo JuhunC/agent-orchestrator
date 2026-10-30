@@ -215,7 +215,7 @@ export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, b
       }
       const created = await openPull(gh, { owner: task.owner, repo: task.repo, head: workspace.branch, base: workspace.baseBranch, title, body: fullBody, draft });
       result = { ...created, created: true };
-      recordPullOpened(task.owner, task.repo, created.number, profile.name);
+      recordPullOpened(task.owner, task.repo, created.number, profile.name, workspace.branch);
     }
     linkThreads(task.owner, task.repo, { kind: thread.kind, number: thread.number }, { kind: "pull", number: result.number });
     return result;

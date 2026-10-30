@@ -38,6 +38,10 @@ export async function startHarness(profiles: Record<string, string>, env: Record
     }
   };
 
+  fake.deleteBranch = (branch) => {
+    run(root, "--git-dir", join(remotes, "acme", "widgets.git"), "update-ref", "-d", `refs/heads/${branch}`);
+  };
+
   fake.mergeBranches = (base, head, message) => {
     const work = mkdtempSync(join(root, "merge-"));
     run(root, "clone", "-q", join(remotes, "acme", "widgets.git"), work);

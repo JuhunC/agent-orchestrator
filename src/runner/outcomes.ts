@@ -2,14 +2,17 @@ import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import {
   backfillPullOutcomes,
+  branchesToDelete,
   createTask,
   getSetting,
   handoffsInto,
+  markBranchDeleted,
   markPullChecked,
   pullOutcomes,
   pullsToCheck,
   queuedTaskForThread,
   runningTasksForThread,
+  setPullBranch,
   setPullState,
   setSetting,
   spendByAgentSince,
@@ -105,6 +108,7 @@ export function notePullEvent(payload: Record<string, any>): void {
   if (!pr || !owner || !repo) return;
   const action = String(payload.action ?? "");
   const state = action === "closed" ? (pr.merged ? "merged" : "closed") : action === "reopened" ? "open" : null;
+  if (pr.head?.ref) setPullBranch(owner, repo, Number(pr.number), String(pr.head.ref));
   if (state && setPullState(owner, repo, Number(pr.number), state, pr.merged_at ?? pr.closed_at ?? undefined)) {
     bus.publish({ type: "settings" });
     scheduler.kick(); // work held back by MAX_OPEN_AGENT_PRS_PER_REPO may start now
@@ -165,10 +169,47 @@ export async function checkOpenPulls(before = new Date(Date.now() - 60 * 60_000)
   }
 }
 
+const AGENT_BRANCH = /^(agent\/[^/]+\/(issue|pull|discussion)-\d+|ao\/(issue|discussion)-\d+)$/;
+
+/**
+ * Deletes agents' branches on GitHub a while after their pull requests were merged or closed, so
+ * repositories (and every clone of them) don't collect thousands. Only agent branches, and not
+ * while an open pull request still targets the branch (a parent issue's branch with open sub-issues).
+ */
+export async function deleteFinishedBranches(now = Date.now(), days = config.agentBranchCleanupDays): Promise<number> {
+  if (days <= 0) return 0;
+  let deleted = 0;
+  for (const pull of branchesToDelete(new Date(now - days * 86_400_000).toISOString())) {
+    if (!AGENT_BRANCH.test(pull.branch)) {
+      markBranchDeleted(pull.owner, pull.repo, pull.number); // not ours to delete: stop looking at it
+      continue;
+    }
+    try {
+      const gh = await installationClient(await findInstallation(pull.owner, pull.repo));
+      const { data: targeting } = await gh.rest.pulls.list({ owner: pull.owner, repo: pull.repo, base: pull.branch, state: "open", per_page: 1 });
+      if (targeting.length) continue; // still the base of open work; try again later
+      const { data: fromIt } = await gh.rest.pulls.list({ owner: pull.owner, repo: pull.repo, head: `${pull.owner}:${pull.branch}`, state: "open", per_page: 1 });
+      if (fromIt.length) continue; // reopened, or a new pull request from the same branch
+      await gh.rest.git.deleteRef({ owner: pull.owner, repo: pull.repo, ref: `heads/${pull.branch}` }).catch((error) => {
+        if (![404, 422].includes(Number((error as { status?: number }).status))) throw error; // already gone
+      });
+      markBranchDeleted(pull.owner, pull.repo, pull.number);
+      deleted++;
+    } catch (error) {
+      log.warn("Couldn't delete an agent's branch", { branch: `${pull.owner}/${pull.repo}@${pull.branch}`, error: errorMessage(error) });
+    }
+  }
+  if (deleted) log.info("Deleted agents' branches of merged and closed pull requests", { deleted });
+  return deleted;
+}
+
 export function startOutcomeChecks(): void {
   const added = backfillPullOutcomes();
   if (added) log.info("Following agents' earlier pull requests", { count: added });
-  const tick = () => void checkOpenPulls().catch((error) => log.warn("Pull request check failed", { error: errorMessage(error) }));
+  const tick = () =>
+    void checkOpenPulls()
+      .then(() => deleteFinishedBranches())
+      .catch((error) => log.warn("Pull request check failed", { error: errorMessage(error) }));
   setTimeout(tick, 2 * 60_000).unref();
   setInterval(tick, 60 * 60_000).unref();
 }

@@ -161,6 +161,14 @@ test("board related_agents settings are validated, and related issues are found 
     'related_agents.columns: "Later" isn\'t listed under columns',
   ]);
   assert.deepEqual(parseBoardRules({ columns, related_agents: ["Ready"] }).errors, ['"related_agents" must be a map with "columns"']);
+  assert.deepEqual(parseBoardRules({ columns, archive: { columns: ["Done"], after_days: 14 } }).archive, { columns: ["Done"], afterDays: 14 });
+  assert.deepEqual(parseBoardRules({ columns, archive: { columns: ["Done"] } }).archive, { columns: ["Done"], afterDays: 7 });
+  assert.equal(parseBoardRules({ columns }).archive, null);
+  assert.deepEqual(parseBoardRules({ columns, archive: { columns: ["Later"], after_days: -1, when: 1 } }).errors, [
+    'archive: unknown setting "when" (use columns and after_days)',
+    'archive.columns: "Later" isn\'t listed under columns',
+    "archive.after_days must be a number of days (0 or more)",
+  ]);
 
   const { relationOf } = await import("../src/runtime/related-agents.ts");
   const ref = (number: number, repo = "widgets") => toIssueRef({ id: number, number, title: `#${number}`, state: "open", html_url: "", repository_url: `https://api.github.com/repos/acme/${repo}` });

@@ -17,6 +17,12 @@ services:
       # edit them here or in the admin UI.
       - ./profiles:/profiles
     stop_grace_period: 30s
+    # Docker keeps stdout forever by default; at many tasks a day that fills the disk.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
 
   caddy:
     image: caddy:2

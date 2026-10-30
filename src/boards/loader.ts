@@ -4,7 +4,7 @@ import { parse } from "yaml";
 import { config } from "../config.ts";
 import { expandAgents, loadProfiles, parseEffort } from "../profiles/loader.ts";
 import type { Effort, ProfileSet } from "../profiles/types.ts";
-import { forbids, NO_RULES, parseBoardRules, type CardFieldSettings, type ColumnRules, type RelatedAgentSettings, type SubIssueSettings, type WorkType } from "./rules.ts";
+import { forbids, NO_RULES, parseBoardRules, type ArchiveSettings, type CardFieldSettings, type ColumnRules, type RelatedAgentSettings, type SubIssueSettings, type WorkType } from "./rules.ts";
 
 /** What happens when a card lands in one column of a project board. */
 export type ColumnMode = "pool" | "all" | "label";
@@ -43,7 +43,8 @@ export interface Board {
   statusField: string;
   /** Where cards go when a loop guard trips. */
   needsHuman: string | null;
-  pollSeconds: number;
+  /** As set in the file; null: every 10 minutes for organization projects (they send webhooks), every minute otherwise. */
+  pollSeconds: number | null;
   /** Name of an environment variable holding a token for the project, when the App can't reach it. */
   tokenEnv: string | null;
   /** maxRunning: most of this board's cards agents work at once (null: no limit beyond MAX_CONCURRENT_TASKS). */
@@ -57,6 +58,8 @@ export interface Board {
   fields: CardFieldSettings;
   /** Columns whose agents an agent on a related issue may start. */
   relatedAgents: RelatedAgentSettings;
+  /** Cards archived after sitting in these columns a while. */
+  archive: ArchiveSettings | null;
   errors: string[];
 }
 
@@ -134,7 +137,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
     projectNumber: Number(match?.[2] ?? 0),
     statusField: String(data.status_field ?? "Status"),
     needsHuman,
-    pollSeconds: data.poll_seconds === undefined ? 60 : Number(data.poll_seconds),
+    pollSeconds: data.poll_seconds === undefined || data.poll_seconds === null ? null : Number(data.poll_seconds),
     tokenEnv: data.token_env ? String(data.token_env) : null,
     limits: {
       movesPerIssue: Number(limits.moves_per_issue ?? 10),
@@ -147,6 +150,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
     subIssues: rules.subIssues,
     fields: rules.fields,
     relatedAgents: rules.relatedAgents,
+    archive: rules.archive,
     errors,
   };
 }

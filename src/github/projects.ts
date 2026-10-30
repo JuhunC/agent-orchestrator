@@ -16,6 +16,8 @@ export interface ProjectInfo {
   url: string;
   fieldId: string;
   options: { id: string; name: string }[];
+  /** Organization projects send webhooks; user projects only change when polled. */
+  ownerType: "organization" | "user";
 }
 
 export interface ProjectItem {
@@ -87,6 +89,7 @@ export async function resolveProject(gh: GitHubClient, owner: string, number: nu
     { owner, number, field },
   ).catch(() => null);
   let project = data?.organization?.projectV2;
+  const ownerType: ProjectInfo["ownerType"] = project ? "organization" : "user";
   if (!project) {
     const user = await gh.graphql<any>(`query ResolveUserProject($owner: String!, $number: Int!, $field: String!) { user(login: $owner) { ${fragment} } }`, { owner, number, field });
     project = user?.user?.projectV2;
@@ -97,7 +100,7 @@ export async function resolveProject(gh: GitHubClient, owner: string, number: nu
     );
   }
   if (!project.field?.id) throw new Error(`Project ${owner}/${number} has no single-select field called "${field}"`);
-  return { id: project.id, title: project.title, url: project.url, fieldId: project.field.id, options: project.field.options };
+  return { id: project.id, title: project.title, url: project.url, fieldId: project.field.id, options: project.field.options, ownerType };
 }
 
 export async function getProjectItem(gh: GitHubClient, itemId: string, field: string, names?: FieldNames): Promise<ProjectItem | null> {
@@ -129,6 +132,11 @@ export async function listProjectItems(gh: GitHubClient, projectId: string, fiel
     after = connection.pageInfo.endCursor;
   }
   return items;
+}
+
+/** Archives a card (it disappears from the board's views and from listings, and can be restored on GitHub). */
+export async function archiveItem(gh: GitHubClient, projectId: string, itemId: string): Promise<void> {
+  await gh.graphql(`mutation ArchiveBoardItem($project: ID!, $item: ID!) { archiveProjectV2Item(input: { projectId: $project, itemId: $item }) { item { id } } }`, { project: projectId, item: itemId });
 }
 
 export async function setItemStatus(gh: GitHubClient, project: ProjectInfo, itemId: string, column: string): Promise<void> {

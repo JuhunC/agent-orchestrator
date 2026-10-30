@@ -16,10 +16,13 @@ import {
   tasksInRound,
   type BoardItemRow,
   type CardFieldValues,
+  deleteBoardItem,
+  listBoardItems,
 } from "../db.ts";
 import { findInstallation, findOwnerInstallation, GitHubOctokit, installationClient, type GitHubClient } from "../github/app.ts";
 import {
   addProjectItem,
+  archiveItem,
   getProjectItem,
   listProjectFields,
   listProjectItems,
@@ -75,6 +78,7 @@ async function project(board: Board): Promise<{ info: ProjectInfo; gh: GitHubCli
   const fields = hasCardFields(board.fields) ? await listProjectFields(gh, info.id) : [];
   const entry = { info, gh, fields, at: Date.now() };
   projects.set(key, entry);
+  ownerTypes.set(board.name, info.ownerType);
   setStatus(board.name, { project: { title: info.title, url: info.url, columns: info.options.map((option) => option.name) }, error: null });
   for (const column of Object.keys(board.columns)) {
     if (!info.options.some((option) => option.name.toLowerCase() === column.toLowerCase())) {
@@ -473,16 +477,62 @@ export async function syncBoard(board: Board): Promise<void> {
 
 let timer: NodeJS.Timeout | null = null;
 const lastPoll = new Map<string, number>();
+const lastArchive = new Map<string, number>();
+const ownerTypes = new Map<string, ProjectInfo["ownerType"]>();
 
-/** Polls each board every `poll_seconds` (webhooks only exist for organization projects). */
+/**
+ * How often to read a board: its poll_seconds, or by default every 10 minutes for organization
+ * projects (their webhooks bring changes as they happen; polling only catches missed ones) and
+ * every minute for user projects (no webhooks). Each poll reads every card, 100 per query.
+ */
+export function pollInterval(board: Board): number {
+  if (board.pollSeconds !== null) return board.pollSeconds;
+  return ownerTypes.get(board.name) === "organization" ? 600 : 60;
+}
+
+/**
+ * Archives cards that have sat in one of the board's archive columns (e.g. Done) for
+ * archive.after_days, so the project, and every poll of it, stays small. Hourly per board.
+ */
+export async function archiveStaleCards(board: Board, now = Date.now()): Promise<number> {
+  if (!board.archive || board.errors.length) return 0;
+  const cutoff = now - board.archive.afterDays * 86_400_000;
+  const stale = listBoardItems(board.name).filter((row) => row.status && board.archive!.columns.includes(row.status) && Date.parse(row.updatedAt) <= cutoff);
+  if (!stale.length) return 0;
+  const { info, gh } = await project(board);
+  let archived = 0;
+  for (const row of stale.slice(0, 100)) {
+    if (activeBoardTasks(board.name, row.itemId).length) continue;
+    try {
+      await archiveItem(gh, info.id, row.itemId);
+      deleteBoardItem(board.name, row.itemId);
+      archived++;
+    } catch (error) {
+      log.warn("Couldn't archive a card", { board: board.name, item: row.itemId, error: errorMessage(error) });
+    }
+  }
+  if (archived) {
+    log.info("Archived cards that sat in their column long enough", { board: board.name, archived });
+    bus.publish({ type: "boards" });
+  }
+  return archived;
+}
+
+/** Polls each board (see pollInterval), and archives stale cards hourly. */
 export function startBoards(): void {
   if (timer) return;
   const tick = async () => {
     for (const board of loadBoards().boards) {
-      if (board.errors.length || board.pollSeconds <= 0) continue;
-      if (Date.now() - (lastPoll.get(board.name) ?? 0) < board.pollSeconds * 1000) continue;
-      lastPoll.set(board.name, Date.now());
-      await syncBoard(board);
+      if (board.errors.length) continue;
+      const seconds = pollInterval(board);
+      if (seconds > 0 && Date.now() - (lastPoll.get(board.name) ?? 0) >= seconds * 1000) {
+        lastPoll.set(board.name, Date.now());
+        await syncBoard(board);
+      }
+      if (board.archive && Date.now() - (lastArchive.get(board.name) ?? 0) >= 60 * 60_000) {
+        lastArchive.set(board.name, Date.now());
+        await archiveStaleCards(board).catch((error) => log.warn("Archiving cards failed", { board: board.name, error: errorMessage(error) }));
+      }
     }
   };
   timer = setInterval(() => void tick(), 5000);

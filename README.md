@@ -226,6 +226,7 @@ columns:
 ```
 - **Move map**: the board page draws the columns and the moves agents can make between them (`moves_to` forward and back, `on_start`), with what each column requires.
 - **Sub-issues** (optional, top level): `sub_issues: { column: Backlog, moves_to: [Ready] }`. Sub-issues an agent creates on the board are added to it in `column` when its task finishes, which starts that column's agent; one that doesn't meet that column's requirements (e.g. `dependencies` while it's blocked) stays off the board until the parent moves it. Put `dependencies` on columns like Ready to make blocked-by relations a hard gate; without it, `move_sub_issue` still points out open blockers. An agent working a parent card may move its sub-issues' cards to the `moves_to` columns with `move_sub_issue` (or to `needs_human`); like its own move, that happens when it finishes and is checked again first. Such a move counts toward the sub-issue's loop guards. Only evidence about the sub-issue itself (`pull_request`, `merged`, `sub_issues`) can be checked for it, so a column that needs another agent's tests or review can't be entered this way.
+- **Archiving** (optional, top level): `archive: { columns: [Done], after_days: 7 }` archives cards on GitHub once they've sat in one of those columns that long (hourly), so the project stays small; they can be restored on GitHub. Each poll reads every card, so this keeps polling cheap too. Organization projects (which send webhooks) are polled every 10 minutes by default, user projects every minute (`poll_seconds` overrides it).
 - **Related-issue starts** (optional, top level): `related_agents: { columns: [In progress, Integration] }` lists the columns whose agent an agent on a related issue may start with `start_related_agent` (see [Starting the agent of a related issue](#starting-the-agent-of-a-related-issue)). Without it, every column with agents can be; `columns: []` allows none. Each start counts as the card entering its column again, toward `entries_per_column`.
 - **Dates and estimates** (optional, top level): `fields: { start: Start date, end: End date, estimate: Estimate, start_on: [In progress], end_on: [Done] }` names the project's date fields and number field. GitHub issues have no dates of their own; in a Project they live in fields like these, which the roadmap view uses. Agents set them with `set_card_fields` (and `create_sub_issue` takes them for new sub-issues), and their prompt shows the card's current values. `start_on` fills in the start date (today, UTC) when a card enters one of those columns and has none yet; `end_on` sets the end date when it enters one. That happens for people's moves too. The board page shows the values per card.
 - **Loop guards**: too many agent moves, too many visits to one column, or too much spend on a card sends it to `needs_human` with a comment. Moving a card away from a column stops the agent working on it. **Settings → Loop guards** lists every limit (global, per board and per agent) and the ones that tripped recently.
@@ -283,6 +284,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `MAX_AGENT_CHAIN` | `3` | How many agents in a row may start each other on related issues with `start_related_agent`; `0` turns it off |
 | `MAX_OPEN_AGENT_PRS_PER_REPO` | `0` (no limit) | Once a repository has this many open pull requests from agents, board stages and agent-started work that would open another one wait until some are merged or closed, so reviews keep up. People's own requests still run |
 | `REBASE_CONFLICTED_PRS` | `on` | When an agent's open pull request conflicts with its base (checked hourly), the agent that opened it is started to merge the base in and push, at most once a day per pull request |
+| `AGENT_BRANCH_CLEANUP_DAYS` | `1` | Days after an agent's pull request is merged or closed before its branch (`agent/…`, `ao/issue-…`) is deleted on GitHub, hourly. Kept while an open pull request still targets it. `0` keeps them |
 | `MAX_PULL_REQUESTS_PER_ISSUE` | `0` (no limit) | Most pull requests agents may open for one issue, counting closed ones. Past it, agents still push their branch and can update their open PR, but no new PR is opened |
 | `ALLOWED_REPOS` | any | `owner/repo` or `owner/*` |
 | `AGENT_ENV_PASSTHROUGH` | | Extra variables agents (and their MCP servers) may see |
@@ -310,6 +312,8 @@ scrape_configs:
     static_configs: [{ targets: ["orchestrator.example.com"] }]
     scheme: https
 ```
+
+Both compose files rotate the container's logs (5 files of 50 MB). If you run it another way, rotate stdout yourself: with many tasks a day, the JSON logs grow quickly.
 
 ## Backups
 

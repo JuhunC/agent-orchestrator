@@ -44,6 +44,12 @@ limits:
 #   column: Backlog
 #   moves_to: [Ready]
 #
+# Optional: archive cards that have sat in these columns for after_days, so the project (and
+# every read of it) stays small. Archived cards can be restored on GitHub.
+# archive:
+#   columns: [Done]
+#   after_days: 7
+#
 # Optional: which columns' agents an agent on a related issue (github.start_related) may start
 # with start_related_agent, e.g. a sub-issue telling its parent's agent to carry on.
 # Default: every column with agents. [] allows none.
