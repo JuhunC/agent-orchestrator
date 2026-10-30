@@ -40,6 +40,7 @@ import { chainProblem, describePlan, MAX_RELATED_STARTS_PER_TASK, planStart, REL
 import { makeSharedDir } from "./isolation.ts";
 import { checkSubIssues, describeSubIssueWork, fetchBranch, isAncestor } from "./sub-issues.ts";
 import { ensureBaseBranch, excludeFromGit, parentBranchFor, type Workspace } from "./workspace.ts";
+import { recordIncident } from "../runner/incidents.ts";
 
 /** Set when the task came from a project board column. */
 export interface BoardContext {
@@ -203,6 +204,7 @@ export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, b
       const opened = linkedThreads(source).filter((linked) => linked.kind === "pull");
       if (limit > 0 && opened.length >= limit) {
         const list = opened.map((linked) => `#${linked.number}`).join(", ");
+        recordIncident("loop_guard", "info", `${profile.name} didn't open another pull request for ${task.owner}/${task.repo}#${thread.number}: MAX_PULL_REQUESTS_PER_ISSUE (${limit}) reached.`, { taskId: task.id });
         throw new PullRequestLimitError(
           `Didn't open a pull request: ${thread.kind} #${thread.number} already has ${opened.length} from agents (${list}) and MAX_PULL_REQUESTS_PER_ISSUE is ${limit}. The commits are on the branch ${workspace.branch}.`,
         );
@@ -742,7 +744,10 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             const { owner, repo, threadKind, threadNumber } = ctx.task;
             if (threadKind !== "issue") return fail(`Relations are between issues; this task is on a ${threadKind === "pull" ? "pull request" : "discussion"}.`);
             const chain = chainProblem(ctx.task);
-            if (chain) return fail(chain);
+            if (chain) {
+              recordIncident("loop_guard", "info", `${profile.name} on ${owner}/${repo}#${threadNumber} couldn't start another agent: ${chain.split(".")[0]}.`, { taskId: ctx.task.id });
+              return fail(chain);
+            }
             const [targetOwner, targetRepo] = (args.repository ?? `${owner}/${repo}`).split("/") as [string, string];
             if (!repoAllowed(`${targetOwner}/${targetRepo}`)) return fail(`${targetOwner}/${targetRepo} isn't in ALLOWED_REPOS, so agents can't be started there.`);
             const { data: me } = await ctx.gh.rest.issues.get({ owner, repo, issue_number: threadNumber });

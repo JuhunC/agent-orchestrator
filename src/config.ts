@@ -151,6 +151,14 @@ export const config = {
   modelProxy: env("MODEL_PROXY", "on").toLowerCase() === "off" ? "off" : "on",
   agentIsolation: (["auto", "required", "off"].includes(env("AGENT_ISOLATION", "auto").toLowerCase()) ? env("AGENT_ISOLATION", "auto").toLowerCase() : "auto") as "auto" | "required" | "off",
 
+  // Where to post problems (failed tasks, loop guards, limits): a Slack or Discord incoming
+  // webhook, or any URL that takes JSON. Empty: they're only shown in the admin UI and logs.
+  alertWebhookUrl: env("ALERT_WEBHOOK_URL"),
+  // info | warning | critical: the least severe problem that's posted.
+  alertMinSeverity: (["info", "warning", "critical"].includes(env("ALERT_MIN_SEVERITY", "warning")) ? env("ALERT_MIN_SEVERITY", "warning") : "warning") as "info" | "warning" | "critical",
+  // Bearer token Prometheus scrapes /metrics with. Empty: /metrics is off.
+  metricsToken: env("METRICS_TOKEN"),
+
   webhookProxyUrl: env("WEBHOOK_PROXY_URL"),
   // Testing hook: clone from `file:///…/{owner}/{repo}.git` instead of GITHUB_URL.
   gitRemoteTemplate: env("GIT_REMOTE_TEMPLATE"),

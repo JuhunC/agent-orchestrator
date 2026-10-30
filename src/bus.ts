@@ -9,7 +9,8 @@ export type BusMessage =
   | { type: "settings" }
   | { type: "sessions" }
   | { type: "limits" }
-  | { type: "boards" };
+  | { type: "boards" }
+  | { type: "incidents" };
 
 /** In-process fan-out of changes to the admin UI's live stream. */
 class Bus extends EventEmitter {

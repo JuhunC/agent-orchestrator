@@ -115,6 +115,15 @@ addColumn("tasks", "board_round", "TEXT");
 addColumn("tasks", "usage", "TEXT");
 addColumn("tasks", "started_by_task", "INTEGER");
 db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
+db.exec(`CREATE TABLE IF NOT EXISTS incidents (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  severity TEXT NOT NULL,
+  message TEXT NOT NULL,
+  task_id INTEGER,
+  url TEXT,
+  ts TEXT NOT NULL
+)`);
 db.exec(`
 CREATE TABLE IF NOT EXISTS board_items (
   board TEXT NOT NULL,
@@ -706,6 +715,69 @@ export interface UsageRow {
   at: string;
   costUsd: number;
   usage: TaskUsage | null;
+}
+
+// ---------- incidents ----------
+
+export interface IncidentRow {
+  id: number;
+  kind: string;
+  severity: "info" | "warning" | "critical";
+  message: string;
+  taskId: number | null;
+  url: string | null;
+  ts: string;
+}
+
+const toIncident = (row: Row): IncidentRow => ({
+  id: Number(row.id),
+  kind: String(row.kind),
+  severity: String(row.severity) as IncidentRow["severity"],
+  message: String(row.message),
+  taskId: row.task_id === null ? null : Number(row.task_id),
+  url: (row.url as string | null) ?? null,
+  ts: String(row.ts),
+});
+
+export function addIncident(entry: Omit<IncidentRow, "id" | "ts">): IncidentRow {
+  const ts = now();
+  const result = db.prepare("INSERT INTO incidents (kind, severity, message, task_id, url, ts) VALUES (?, ?, ?, ?, ?, ?)").run(entry.kind, entry.severity, entry.message.slice(0, 2000), entry.taskId, entry.url, ts);
+  db.prepare("DELETE FROM incidents WHERE id <= ?").run(Number(result.lastInsertRowid) - 1000);
+  return { ...entry, id: Number(result.lastInsertRowid), ts };
+}
+
+export function listIncidents(limit = 100, kind?: string): IncidentRow[] {
+  const rows = (kind ? db.prepare("SELECT * FROM incidents WHERE kind = ? ORDER BY id DESC LIMIT ?").all(kind, limit) : db.prepare("SELECT * FROM incidents ORDER BY id DESC LIMIT ?").all(limit)) as Row[];
+  return rows.map(toIncident);
+}
+
+export function incidentCounts(): Record<string, number> {
+  const rows = db.prepare("SELECT kind, COUNT(*) AS count FROM incidents GROUP BY kind").all() as Row[];
+  return Object.fromEntries(rows.map((row) => [String(row.kind), Number(row.count)]));
+}
+
+/** For /metrics: tasks by agent and status, with their cost and tokens. */
+export function taskTotals(): { agent: string; status: string; count: number; costUsd: number }[] {
+  const rows = db.prepare("SELECT agent, status, COUNT(*) AS count, COALESCE(SUM(cost_usd), 0) AS cost FROM tasks GROUP BY agent, status").all() as Row[];
+  return rows.map((row) => ({ agent: String(row.agent), status: String(row.status), count: Number(row.count), costUsd: Number(row.cost) }));
+}
+
+/** For /metrics: tokens by agent. */
+export function tokenTotals(): { agent: string; input: number; output: number; cacheRead: number; cacheWrite: number }[] {
+  const rows = db
+    .prepare(
+      `SELECT agent, COALESCE(SUM(json_extract(usage, '$.inputTokens')), 0) AS input, COALESCE(SUM(json_extract(usage, '$.outputTokens')), 0) AS output,
+         COALESCE(SUM(json_extract(usage, '$.cacheReadTokens')), 0) AS cache_read, COALESCE(SUM(json_extract(usage, '$.cacheWriteTokens')), 0) AS cache_write
+       FROM tasks WHERE usage IS NOT NULL GROUP BY agent`,
+    )
+    .all() as Row[];
+  return rows.map((row) => ({ agent: String(row.agent), input: Number(row.input), output: Number(row.output), cacheRead: Number(row.cache_read), cacheWrite: Number(row.cache_write) }));
+}
+
+/** For /metrics: webhook deliveries by decision (the last 2000 are kept). */
+export function deliveryCounts(): Record<string, number> {
+  const rows = db.prepare("SELECT decision, COUNT(*) AS count FROM deliveries GROUP BY decision").all() as Row[];
+  return Object.fromEntries(rows.map((row) => [String(row.decision), Number(row.count)]));
 }
 
 /** What tasks cost since `since` (ISO time), by when they finished (or started). */

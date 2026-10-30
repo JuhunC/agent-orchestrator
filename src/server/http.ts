@@ -10,6 +10,7 @@ import { handleWebhook } from "../triggers.ts";
 import { registerApi } from "./api.ts";
 import { registerAuth } from "./auth.ts";
 import { sessionSecret } from "./secrets.ts";
+import { recordIncident } from "../runner/incidents.ts";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -58,6 +59,7 @@ export async function buildServer(): Promise<FastifyInstance> {
     const signature = request.headers["x-hub-signature-256"] as string | undefined;
     if (!verifySignature(credentials.webhookSecret, request.rawBody ?? Buffer.alloc(0), signature)) {
       log.warn("Rejected webhook with a bad signature", { delivery: request.headers["x-github-delivery"] });
+      recordIncident("webhook_signature", "warning", "Rejected a webhook with a bad signature: check that GITHUB_WEBHOOK_SECRET matches the App's webhook secret, or someone else is posting to the webhook URL.");
       return reply.code(401).send({ error: "Bad signature" });
     }
     const event = String(request.headers["x-github-event"] ?? "");

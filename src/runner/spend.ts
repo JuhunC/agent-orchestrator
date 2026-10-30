@@ -2,6 +2,7 @@ import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { getSetting, setSetting, spendSince } from "../db.ts";
 import { log } from "../log.ts";
+import { recordIncident } from "./incidents.ts";
 
 /**
  * Spending limits for all agents together, per UTC day and month. When one is reached, queued
@@ -75,8 +76,13 @@ export function spendStatus(now = new Date()): SpendStatus {
   const notice = blocked ? `blocked:${blocked.period}:${blocked.until}` : warning ? `warn:${dayStart.toISOString()}:${warning}` : "";
   if (notice && notice !== lastWarning) {
     lastWarning = notice;
-    if (blocked) log.warn("Spending limit reached; new tasks wait", { period: blocked.period, spent: blocked.spent, limit: blocked.limit, until: blocked.until });
-    else log.warn("Spending is near its limit", { warning });
+    if (blocked) {
+      log.warn("Spending limit reached; new tasks wait", { period: blocked.period, spent: blocked.spent, limit: blocked.limit, until: blocked.until });
+      recordIncident("spend_limit", "warning", spendBlockReason({ ...limits, today, month, blocked, warning })!);
+    } else {
+      log.warn("Spending is near its limit", { warning });
+      recordIncident("spend_warning", "info", warning!);
+    }
   }
   return { ...limits, today, month, blocked, warning };
 }

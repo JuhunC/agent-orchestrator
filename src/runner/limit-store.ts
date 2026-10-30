@@ -1,5 +1,6 @@
 import { bus } from "../bus.ts";
 import { getSetting, setSetting } from "../db.ts";
+import { recordIncident } from "./incidents.ts";
 
 /**
  * Usage limits of the model service. Every agent shares one account (your ANTHROPIC_* settings),
@@ -20,6 +21,7 @@ export function getLimit(): UsageLimit | null {
 
 export function setLimit(until: Date, reason: string): void {
   setSetting(KEY, JSON.stringify({ until: until.toISOString(), reason: reason.slice(0, 300) }));
+  recordIncident("usage_limit", "warning", `The model service's usage limit was reached (${reason.slice(0, 200)}). Tasks continue at ${until.toISOString().replace("T", " ").slice(0, 16)} UTC.`);
   bus.publish({ type: "limits" });
 }
 

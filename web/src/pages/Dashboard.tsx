@@ -183,6 +183,29 @@ export function Dashboard() {
         </div>
       </div>
 
+      {data.incidents.length > 0 && (
+        <Panel title="Recent problems" hint="last 7 days · set ALERT_WEBHOOK_URL to get them in chat" tight>
+          <div className="incidents">
+            {data.incidents.slice(0, 8).map((incident) => (
+              <div key={incident.id} className="incident">
+                <Pill tone={incident.severity === "critical" ? "failed" : incident.severity === "warning" ? "queued" : "cancelled"}>{incident.severity}</Pill>
+                <span className="grow">
+                  {incident.message}{" "}
+                  {incident.taskId ? (
+                    <a href={href(`/tasks/${incident.taskId}`)}>task #{incident.taskId}</a>
+                  ) : incident.url ? (
+                    <a href={incident.url} target="_blank" rel="noreferrer">
+                      on GitHub ↗
+                    </a>
+                  ) : null}
+                </span>
+                <span className="meta nowrap">{new Date(incident.ts).toLocaleString()}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+      )}
+
       <Panel
         title="Agents"
         hint={`${data.agents.filter((agent) => agent.enabled).length} of ${data.agents.length} on`}

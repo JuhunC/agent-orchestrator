@@ -272,6 +272,21 @@ See [`.env.example`](.env.example) for everything. The main ones:
 
 Agents see only the model settings (with a per-session stand-in for the key), `AGENT_ENV_PASSTHROUGH` and their profile's `env` in their environment. In the Docker image they also run as a separate user that can't read the orchestrator's files or processes (see [Security](#security)).
 
+## Monitoring
+
+Problems an administrator should hear about are recorded as incidents: failed tasks, loop guards that stopped agents (board guards, `MAX_AGENT_CHAIN`, `MAX_PULL_REQUESTS_PER_ISSUE`), spending limits reached or near, the model service's usage limits, agents that aren't isolated, and webhooks with a bad signature. The Dashboard lists the last 7 days under **Recent problems** (`GET /api/incidents` has the last 1000).
+
+- **Alerts:** set `ALERT_WEBHOOK_URL` to a Slack or Discord incoming webhook (or any URL that takes JSON) and each one is posted there, at most once per 10 minutes for the same problem. The JSON has `text` (Slack), `content` (Discord), and `kind`, `severity`, `message`, `url`, `task` and `at`. `ALERT_MIN_SEVERITY` (`info`, `warning` (default) or `critical`) sets the least severe that's posted.
+- **Metrics:** set `METRICS_TOKEN` and Prometheus can scrape `GET /metrics` with it as a bearer token. It has tasks by agent and status (`ao_tasks_total`), estimated spend and tokens by agent (`ao_cost_usd_total`, `ao_tokens_total`), running and queued tasks, whether the queue is paused or usage-limited, open sessions, today's and this month's spend, whether agents are isolated, incidents by kind and webhook deliveries by decision.
+
+```yaml
+scrape_configs:
+  - job_name: agent-orchestrator
+    authorization: { credentials: <METRICS_TOKEN> }
+    static_configs: [{ targets: ["orchestrator.example.com"] }]
+    scheme: https
+```
+
 ## Deploying
 
 `.github/workflows/deploy.yml` tests, publishes `ghcr.io/juhunc/agent-orchestrator` (amd64 + arm64), and deploys over SSH when `DEPLOY_HOST` and `DEPLOY_SSH_KEY` are set:

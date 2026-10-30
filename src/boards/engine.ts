@@ -39,6 +39,8 @@ import type { Profile } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
 import { loadBoards, type Board, type BoardColumn } from "./loader.ts";
 import { hasCardFields } from "./rules.ts";
+import { recordIncident } from "../runner/incidents.ts";
+import { config } from "../config.ts";
 
 /** Live state of each board, for the admin UI. */
 export interface BoardStatus {
@@ -388,6 +390,7 @@ export async function addIssueToBoard(
 
 async function escalate(board: Board, row: BoardItemRow, reason: string): Promise<void> {
   log.warn("Board loop guard tripped", { board: board.name, item: row.itemId, reason });
+  recordIncident("loop_guard", "warning", `${board.name} board, ${row.owner}/${row.repo}#${row.number}: ${reason}`, { url: `${config.github.url}/${row.owner}/${row.repo}/${row.kind === "pull" ? "pull" : "issues"}/${row.number}` });
   try {
     const { gh } = await project(board);
     if (board.needsHuman && row.status !== board.needsHuman) await moveCard(board, row.itemId, board.needsHuman, { agentMove: false, trigger: false });

@@ -25,6 +25,7 @@ import { settleInbox } from "./inbox.ts";
 import { retryTime, type DetectedLimit } from "./limits.ts";
 import { setLimit } from "./limit-store.ts";
 import { ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
+import { recordIncident } from "./incidents.ts";
 
 function patch(taskId: number, changes: Partial<Task>): Task {
   const task = updateTask(taskId, changes);
@@ -400,6 +401,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     state.finishedAt = Date.now();
     state.note = status === "succeeded" ? "" : reason;
     task = patch(task.id, { status, finishedAt: new Date(state.finishedAt).toISOString(), error: status === "succeeded" ? null : reason, resultText: text || task.resultText });
+    if (status === "failed") recordIncident("task_failed", "warning", `${task.agent} failed on ${task.owner}/${task.repo}#${task.threadNumber}: ${reason.split("\n")[0]!.slice(0, 300)}`, { taskId: task.id });
     // Mentions that arrived too late for the agent to see become a follow-up run.
     settleInbox(task, status !== "cancelled");
     emit(task.id, "status", status === "succeeded" ? "Finished" : status === "cancelled" ? "Cancelled" : `Failed: ${reason}`);

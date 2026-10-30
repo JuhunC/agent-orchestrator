@@ -4,6 +4,7 @@ import { dirname, join, resolve, sep } from "node:path";
 import type { SpawnedProcess, SpawnOptions } from "@anthropic-ai/claude-agent-sdk";
 import { config } from "../config.ts";
 import { errorMessage, log } from "../log.ts";
+import { recordIncident } from "../runner/incidents.ts";
 
 /**
  * Runs agents as a separate OS user (AGENT_USER) that can't read the orchestrator's own data: the
@@ -124,7 +125,10 @@ function lockDown(): void {
 export function setupIsolation(): Promise<IsolationStatus> {
   setup ??= Promise.resolve().then(() => {
     status = check();
-    if (status.problem && config.agentIsolation !== "off") log.warn("Agents aren't isolated from the orchestrator's data", { problem: status.problem });
+    if (status.problem && config.agentIsolation !== "off") {
+      log.warn("Agents aren't isolated from the orchestrator's data", { problem: status.problem });
+      recordIncident("isolation", status.required ? "critical" : "warning", `${status.required ? "Agents won't run" : "Agents can read the orchestrator's secrets"}: ${status.problem}`);
+    }
     else if (status.mode !== "off") log.info("Agents run as a separate user", { user: status.user, mode: status.mode });
     return status;
   });

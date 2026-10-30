@@ -358,6 +358,18 @@ export interface Overview {
   model: ModelInfo;
   settings: Settings;
   configured: boolean;
+  /** Problems from the last 7 days, newest first. */
+  incidents: Incident[];
+}
+
+export interface Incident {
+  id: number;
+  kind: string;
+  severity: "info" | "warning" | "critical";
+  message: string;
+  taskId: number | null;
+  url: string | null;
+  ts: string;
 }
 
 export interface ThreadSummary {
@@ -389,7 +401,8 @@ export type BusMessage =
   | { type: "settings" }
   | { type: "sessions" }
   | { type: "limits" }
-  | { type: "boards" };
+  | { type: "boards" }
+  | { type: "incidents" };
 
 export class ApiError extends Error {
   status: number;

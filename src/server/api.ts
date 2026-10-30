@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { accessSync, constants, existsSync, rmSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { FastifyInstance } from "fastify";
@@ -28,6 +28,7 @@ import { cleanUpWorkspaces, lastCleanup } from "../runtime/cleanup.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { queueOrder } from "../runner/queue-order.ts";
+import { listIncidents, renderMetrics } from "../runner/incidents.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import { configReference } from "../profiles/reference.ts";
@@ -195,6 +196,7 @@ export function registerApi(app: FastifyInstance): void {
       model: modelView(),
       running: listTasks({ status: "running", limit: 50 }),
       queued: queueOrder(listTasks({ status: "queued", limit: 100 })),
+      incidents: listIncidents(20).filter((incident) => Date.now() - Date.parse(incident.ts) < 7 * 86_400_000),
       recent: listTasks({ status: "succeeded,failed,cancelled", limit: 15 }),
       settings: settingsView(),
       configured: Boolean(getCredentials()),
@@ -565,6 +567,28 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   app.post("/api/workspaces/cleanup", async () => cleanUpWorkspaces());
+
+  app.get<{ Querystring: { limit?: string; kind?: string } }>("/api/incidents", async (request) => listIncidents(Math.min(500, Number(request.query.limit) || 100), request.query.kind || undefined));
+
+  // Prometheus scrapes this with METRICS_TOKEN as a bearer token (outside /api, so no sign-in).
+  app.get("/metrics", async (request, reply) => {
+    if (!config.metricsToken) return reply.code(404).send({ error: "Set METRICS_TOKEN to turn on /metrics" });
+    const given = Buffer.from(String(request.headers.authorization ?? ""));
+    const wanted = Buffer.from(`Bearer ${config.metricsToken}`);
+    if (given.length !== wanted.length || !timingSafeEqual(given, wanted)) return reply.code(401).send({ error: "Send METRICS_TOKEN as a bearer token" });
+    const spend = spendStatus();
+    reply.type("text/plain; version=0.0.4");
+    return renderMetrics({
+      running: scheduler.runningIds().length,
+      queued: listTasks({ status: "queued", limit: 10_000 }).length,
+      paused: scheduler.paused,
+      sessions: sessions.list().length,
+      limited: Boolean(getLimit()),
+      spendToday: spend.today,
+      spendMonth: spend.month,
+      isolated: isolationStatus().mode !== "off",
+    });
+  });
 
   app.get("/api/installations", async (_request, reply) => {
     if (!getCredentials()) return [];
