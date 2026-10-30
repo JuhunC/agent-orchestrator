@@ -25,6 +25,7 @@ import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount,
 import { errorMessage } from "../log.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
+import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import { configReference } from "../profiles/reference.ts";
@@ -87,6 +88,8 @@ function settingsView() {
     maxLiveSessions: sessions.maxLive,
     usageLimitRetries: config.usageLimitRetries,
     isolation: isolationStatus(),
+    spend: spendStatus(),
+    spendBlocked: spendBlockReason(),
   };
 }
 
@@ -544,8 +547,15 @@ export function registerApi(app: FastifyInstance): void {
   // ---------- settings ----------
   app.get("/api/settings", async () => ({ ...settingsView(), setup: await setupView() }));
 
-  app.put<{ Body: { paused?: boolean; maxConcurrent?: number; liveIdleMinutes?: number; maxLiveSessions?: number } }>("/api/settings", async (request) => {
+  app.put<{ Body: { paused?: boolean; maxConcurrent?: number; liveIdleMinutes?: number; maxLiveSessions?: number; spendLimitDailyUsd?: number | null; spendLimitMonthlyUsd?: number | null } }>("/api/settings", async (request) => {
     if (typeof request.body?.paused === "boolean") scheduler.setPaused(request.body.paused);
+    const limits: { dailyUsd?: number | null; monthlyUsd?: number | null } = {};
+    if (request.body && "spendLimitDailyUsd" in request.body) limits.dailyUsd = Number(request.body.spendLimitDailyUsd) || null;
+    if (request.body && "spendLimitMonthlyUsd" in request.body) limits.monthlyUsd = Number(request.body.spendLimitMonthlyUsd) || null;
+    if (Object.keys(limits).length) {
+      setSpendLimits(limits);
+      scheduler.kick();
+    }
     if (typeof request.body?.maxConcurrent === "number") scheduler.setMaxConcurrent(request.body.maxConcurrent);
     sessions.configure({ idleMinutes: request.body?.liveIdleMinutes, maxLive: request.body?.maxLiveSessions });
     return settingsView();

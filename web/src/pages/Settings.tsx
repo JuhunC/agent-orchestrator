@@ -115,6 +115,35 @@ function Installations({ setup }: { setup: Setup }) {
 }
 
 /** The App's settings on GitHub don't match PUBLIC_URL: say what to change, and fix the webhook URL for them. */
+/** Spending limits for all agents together: new tasks wait once one is reached. */
+function SpendLimits({ spend, blocked, onSave }: { spend: SettingsData["spend"]; blocked: string | null; onSave: (body: Partial<{ spendLimitDailyUsd: number | null; spendLimitMonthlyUsd: number | null }>) => void }) {
+  const [daily, setDaily] = useState(spend.dailyUsd ? String(spend.dailyUsd) : "");
+  const [monthly, setMonthly] = useState(spend.monthlyUsd ? String(spend.monthlyUsd) : "");
+  const clean = (value: string) => value.replace(/[^\d.]/g, "");
+  const same = (value: string, current: number | null) => (Number(value) || null) === current;
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <div className="row" style={{ gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+        <div className="field" style={{ maxWidth: 160 }}>
+          <label htmlFor="spend-daily">Daily limit (US$)</label>
+          <input id="spend-daily" inputMode="decimal" placeholder="none" value={daily} onChange={(event) => setDaily(clean(event.target.value))} />
+        </div>
+        <div className="field" style={{ maxWidth: 160 }}>
+          <label htmlFor="spend-monthly">Monthly limit (US$)</label>
+          <input id="spend-monthly" inputMode="decimal" placeholder="none" value={monthly} onChange={(event) => setMonthly(clean(event.target.value))} />
+        </div>
+        <button disabled={same(daily, spend.dailyUsd) && same(monthly, spend.monthlyUsd)} onClick={() => onSave({ spendLimitDailyUsd: Number(daily) || null, spendLimitMonthlyUsd: Number(monthly) || null })}>
+          Save limits
+        </button>
+      </div>
+      <div className="meta">
+        Spent ${spend.today.toFixed(2)} today and ${spend.month.toFixed(2)} this month (UTC, Claude Code's estimates). When a limit is reached, new tasks wait until the next day or month; running ones finish.
+      </div>
+      {blocked && <div className="banner error">{blocked}</div>}
+    </div>
+  );
+}
+
 function AddressProblems({ setup, onFixed }: { setup: Setup; onFixed: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -168,7 +197,7 @@ export function Settings() {
   const { setup } = data;
   const setupResult = route.query.get("setup");
 
-  const update = async (body: Partial<SettingsData>) => {
+  const update = async (body: Partial<SettingsData> | Partial<{ spendLimitDailyUsd: number | null; spendLimitMonthlyUsd: number | null }>) => {
     await api.put("/api/settings", body);
     void reload();
   };
@@ -243,6 +272,7 @@ export function Settings() {
                 </button>
               </div>
             </div>
+            <SpendLimits spend={data.spend} blocked={data.spendBlocked} onSave={(body) => void update(body)} />
             <div>
               <button
                 className="danger"

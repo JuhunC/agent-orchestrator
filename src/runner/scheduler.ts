@@ -7,6 +7,7 @@ import { loadProfiles } from "../profiles/loader.ts";
 import { sessions } from "../runtime/manager.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { clearLimit, getLimit } from "./limit-store.ts";
+import { spendStatus } from "./spend.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
 import { executeTask, markInterrupted } from "./run-task.ts";
 
@@ -55,6 +56,14 @@ class Scheduler {
     const now = Date.now();
     let wakeAt = Infinity;
     const queued = queuedTasks();
+    // Over a spending limit, nothing new starts until the period ends (or the limit is raised).
+    const spend = queued.length ? spendStatus() : null;
+    if (spend?.blocked) {
+      if (this.wakeTimer) clearTimeout(this.wakeTimer);
+      this.wakeTimer = setTimeout(() => this.kick(), Math.min(Math.max(1000, Date.parse(spend.blocked.until) - now + 1000), 2 ** 31 - 1));
+      this.wakeTimer.unref();
+      return;
+    }
     const profiles = queued.length ? loadProfiles().agents : [];
     const limit = getLimit();
     const busy = new Set([...this.running.values()].map((entry) => entry.workspace));

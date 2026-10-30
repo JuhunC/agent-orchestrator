@@ -298,6 +298,10 @@ export interface Settings {
   liveIdleMinutes: number;
   maxLiveSessions: number;
   usageLimitRetries: number;
+  /** Spending (Claude Code's estimates) against the daily and monthly limits, UTC. */
+  spend: { dailyUsd: number | null; monthlyUsd: number | null; today: number; month: number; blocked: { period: "day" | "month"; spent: number; limit: number; until: string } | null; warning: string | null };
+  /** Why new tasks wait for a spending limit, or null. */
+  spendBlocked: string | null;
   /** Whether agents run as a separate OS user that can't read the orchestrator's data. */
   isolation: { mode: "off" | "sudo" | "direct"; user: string | null; required: boolean; problem: string | null };
 }

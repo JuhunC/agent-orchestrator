@@ -128,6 +128,10 @@ export const config = {
   claudeCodeExecutable: executable("CLAUDE_CODE_EXECUTABLE"),
   // Most pull requests agents may open for one issue (or discussion), open or closed. 0 = no limit.
   maxPullRequestsPerIssue: Math.max(0, int("MAX_PULL_REQUESTS_PER_ISSUE", 0)),
+  // Spending limits for all agents together (US dollars, Claude Code's estimates; UTC days and
+  // months). When one is reached, new tasks wait until the next day or month. Settings can change them.
+  spendLimitDailyUsd: Number(env("SPEND_LIMIT_DAILY_USD", "0")) || 0,
+  spendLimitMonthlyUsd: Number(env("SPEND_LIMIT_MONTHLY_USD", "0")) || 0,
   // How many times in a row agents may start each other on related issues (start_related_agent):
   // a task started that way may start another only while the chain is shorter than this. 0 = never.
   maxAgentChain: Math.max(0, int("MAX_AGENT_CHAIN", 3)),

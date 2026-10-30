@@ -702,6 +702,12 @@ export interface UsageRow {
   usage: TaskUsage | null;
 }
 
+/** What tasks cost since `since` (ISO time), by when they finished (or started). */
+export function spendSince(since: string): number {
+  const row = db.prepare("SELECT COALESCE(SUM(cost_usd), 0) AS total FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ?").get(since) as Row;
+  return Number(row.total ?? 0);
+}
+
 /** Tasks that ran since `since` (ISO time), for one agent or all. */
 export function usageRows(since: string, agent?: string): UsageRow[] {
   const rows = db

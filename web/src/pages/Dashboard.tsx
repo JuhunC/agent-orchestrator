@@ -135,6 +135,23 @@ export function Dashboard() {
         </div>
       )}
 
+      {data.settings.spendBlocked ? (
+        <div className="banner error">
+          <span className="grow">
+            <b>Spending limit reached.</b> {data.settings.spendBlocked}
+          </span>
+          <a className="button" href={href("/settings")}>
+            Limits
+          </a>
+        </div>
+      ) : data.settings.spend.warning ? (
+        <div className="banner">
+          <span className="grow">
+            <b>Near the spending limit.</b> {data.settings.spend.warning}
+          </span>
+        </div>
+      ) : null}
+
       {data.model.limit && (
         <div className="banner">
           <span className="grow">
