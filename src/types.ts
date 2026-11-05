@@ -66,6 +66,8 @@ export interface Task {
   profileCommit: string | null;
   /** The schedule that started this run, if one did. */
   scheduleId: number | null;
+  /** Base branch asked for by whatever started the task (a schedule, the Run agent dialog, a retry); see runtime/base-branch.ts. */
+  requestedBase: string | null;
 }
 
 /**
@@ -87,6 +89,8 @@ export interface Schedule {
   threadNumber: number | null;
   /** What to do on each run. */
   prompt: string;
+  /** Branch the runs' pull requests go into; null: the board, agent or repository setting, else the default branch. */
+  baseBranch: string | null;
   enabled: boolean;
   source: "ui" | "agent" | "file";
   /** For file schedules: "<agent>/<name>", to match the file on reload. */

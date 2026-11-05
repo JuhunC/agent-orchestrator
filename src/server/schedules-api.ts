@@ -2,7 +2,9 @@ import type { FastifyInstance } from "fastify";
 import { config } from "../config.ts";
 import { getSchedule, listSchedules, scheduleTasks } from "../db.ts";
 import { findInstallation, installationClient } from "../github/app.ts";
+import { branchNameProblem } from "../github/branches.ts";
 import { errorMessage } from "../log.ts";
+import { checkBranchExists } from "../runtime/base-branch.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import { addSchedule, changeSchedule, checkTiming, describeSchedule, removeSchedule, runSchedule, syncFileSchedules, type ScheduleInput } from "../schedules/runner.ts";
 import { describeWhen, upcomingRuns } from "../schedules/when.ts";
@@ -18,6 +20,7 @@ interface ScheduleBody {
   /** Issue or pull request number; null or left out: the first run opens an issue. */
   number?: number | null;
   prompt?: string;
+  baseBranch?: string | null;
   maxRuns?: number | null;
   endsAt?: string | null;
   enabled?: boolean;
@@ -47,6 +50,20 @@ async function threadKind(owner: string, repo: string, number: number): Promise<
   } catch {
     throw new Error(`${owner}/${repo} has no issue or pull request #${number}`);
   }
+}
+
+/** A base branch typed in the UI must exist in the repository. */
+async function checkBase(owner: string, repo: string, branch: string | null | undefined): Promise<void> {
+  if (!branch?.trim()) return;
+  const problem = branchNameProblem(branch.trim());
+  if (problem) throw new Error(`Base branch: ${problem}`);
+  let installationId: number;
+  try {
+    installationId = await findInstallation(owner, repo);
+  } catch {
+    throw new Error(`The GitHub App isn't installed on ${owner}/${repo}`);
+  }
+  await checkBranchExists(await installationClient(installationId), owner, repo, branch.trim());
 }
 
 function repoOf(value: unknown): { owner: string; repo: string } {
@@ -85,6 +102,7 @@ export function registerScheduleRoutes(app: FastifyInstance): void {
       const { owner, repo } = repoOf(body.repo);
       const number = body.number ? Number(body.number) : null;
       const kind = number ? await threadKind(owner, repo, number) : null;
+      await checkBase(owner, repo, body.baseBranch);
       const schedule = addSchedule(
         {
           agent: String(body.agent ?? ""),
@@ -96,6 +114,7 @@ export function registerScheduleRoutes(app: FastifyInstance): void {
           threadKind: kind,
           threadNumber: number,
           prompt: String(body.prompt ?? ""),
+          baseBranch: body.baseBranch?.trim() || null,
           maxRuns: body.maxRuns ?? null,
           endsAt: body.endsAt || null,
           enabled: body.enabled,
@@ -124,6 +143,10 @@ export function registerScheduleRoutes(app: FastifyInstance): void {
       if (body.endsAt !== undefined) patch.endsAt = body.endsAt || null;
       if (body.enabled !== undefined) patch.enabled = Boolean(body.enabled);
       const where = body.repo !== undefined ? repoOf(body.repo) : { owner: schedule.owner, repo: schedule.repo };
+      if (body.baseBranch !== undefined) {
+        patch.baseBranch = body.baseBranch?.trim() || null;
+        if (patch.baseBranch !== schedule.baseBranch || body.repo !== undefined) await checkBase(where.owner, where.repo, patch.baseBranch);
+      }
       if (body.repo !== undefined) Object.assign(patch, where);
       if (body.number !== undefined || body.repo !== undefined) {
         const number = body.number !== undefined ? (body.number ? Number(body.number) : null) : schedule.threadNumber;

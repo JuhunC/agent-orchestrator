@@ -44,6 +44,12 @@ limits:
 #   column: Backlog
 #   moves_to: [Ready]
 #
+# Optional: the branch the board's pull requests go into, instead of the repository's default
+# branch. One for every repository, or per repository with default: for the rest. It wins over
+# the agents' own github.base_branch. Sub-issues still go into their parent issue's branch.
+# base_branch: develop
+# base_branch: { your-org/api: develop, default: main }
+#
 # Optional: archive cards that have sat in these columns for after_days, so the project (and
 # every read of it) stays small. Archived cards can be restored on GitHub.
 # archive:

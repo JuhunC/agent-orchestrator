@@ -49,6 +49,8 @@ columns:
 # sub_issues:
 #   column: Backlog            # where sub-issues that agents create land
 #   moves_to: [Ready]          # where a parent card's agent may move its sub-issues
+# base_branch: develop         # pull requests go here instead of the default branch
+#                              # (or per repository: { acme/api: develop, default: main })
 `;
 
 function NewBoardDialog({ onClose }: { onClose: () => void }) {
@@ -274,7 +276,19 @@ export function BoardDetail({ name }: { name: string }) {
         </div>
         <p className="meta">
           Loop guards: {board.limits.movesPerIssue} agent moves per card, {board.limits.entriesPerColumn} visits per column
-          {board.limits.budgetUsdPerIssue !== null && `, $${board.limits.budgetUsdPerIssue} per card`}; then the card goes to <b>{board.needsHuman ?? "nowhere (it stays)"}</b>. Agents never merge into the default branch.
+          {board.limits.budgetUsdPerIssue !== null && `, $${board.limits.budgetUsdPerIssue} per card`}; then the card goes to <b>{board.needsHuman ?? "nowhere (it stays)"}</b>. Agents open pull requests; they never merge into the base branch themselves.
+        </p>
+        <p className="meta">
+          Base branch:{" "}
+          {board.baseBranch ? (
+            <>
+              pull requests go into <code>{board.baseBranch}</code> (<code>base_branch</code>).
+            </>
+          ) : (
+            <>
+              each agent's or repository's setting, otherwise the repository's default branch. Set <code>base_branch</code> in the board file to choose one.
+            </>
+          )}
         </p>
         {board.workTypes.length > 0 && (
           <p className="meta">

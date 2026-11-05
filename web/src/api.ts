@@ -33,6 +33,8 @@ export interface GithubPermissions {
   accountTokenEnv: string | null;
   /** Mentioning or assigning its account starts it. */
   accountMentions: boolean;
+  /** github.base_branch: one branch, or per repository (owner/name in lower case). */
+  baseBranch: { all: string | null; repos: Record<string, string> } | null;
 }
 
 /** The GitHub account an agent acts as instead of the GitHub App. */
@@ -77,6 +79,8 @@ export interface Agent {
   replicas: number | null;
   /** It may set up its own schedules when asked (can_schedule). */
   canSchedule?: boolean;
+  /** github.base_branch in words ("develop", "acme/api → develop, otherwise main"). */
+  baseBranch?: string | null;
   modelFrom: "agent" | "group" | null;
   effortFrom: "agent" | "group" | null;
   stats?: AgentStats | null;
@@ -174,6 +178,8 @@ export interface Task {
   profileCommit?: string | null;
   /** The schedule that started this run. */
   scheduleId?: number | null;
+  /** Base branch asked for by whatever started it (a schedule, Run agent, a retry). */
+  requestedBase?: string | null;
 }
 
 /** A timetable an agent runs on (see the Schedules page). */
@@ -189,6 +195,8 @@ export interface ScheduleView {
   threadKind: ThreadKind | null;
   threadNumber: number | null;
   prompt: string;
+  /** Branch the runs' pull requests go into; null: as the agent's other work. */
+  baseBranch: string | null;
   enabled: boolean;
   /** ui: made here; agent: the agent made it when asked; file: in its agent.md. */
   source: "ui" | "agent" | "file";
@@ -265,6 +273,8 @@ export interface BoardInfo {
   subIssues: { column: string | null; movesTo: string[] };
   /** Project fields tracked per card, and the columns that fill in the dates. */
   fields: { start: string | null; end: string | null; estimate: string | null; startOn: string[]; endOn: string[] };
+  /** base_branch in words; null: the agent's, the repository's or the default branch. */
+  baseBranch: string | null;
   errors: string[];
   status: { project: { title: string; url: string; columns: string[] } | null; lastSyncAt: string | null; error: string | null };
   items: BoardCard[];
@@ -661,4 +671,18 @@ export function useNow(intervalMs = 1000): number {
     return () => window.clearInterval(id);
   }, [intervalMs]);
   return now;
+}
+
+/** Settings → Base branches: every base branch that's set, and where. */
+export interface BaseBranchOverview {
+  repos: { repo: string; branch: string }[];
+  boards: { name: string; branch: string | null }[];
+  agents: { name: string; branch: string | null }[];
+  schedules: { id: number; name: string; agent: string; repo: string; branch: string | null }[];
+}
+
+/** The base branch an agent's work in a repository would use; branch null: the repository's default branch. */
+export interface BaseChoice {
+  branch: string | null;
+  from: string | null;
 }

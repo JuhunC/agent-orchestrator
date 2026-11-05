@@ -1,3 +1,5 @@
+import type { BaseBranchSetting } from "../github/branches.ts";
+
 /** An MCP server in the common `mcpServers` shape. Strings may contain ${VAR} references. */
 export interface McpServer {
   type?: "stdio" | "http" | "sse";
@@ -55,6 +57,8 @@ export interface GithubPermissions {
   mergeIntoParent: boolean;
   /** On a sub-issue, branch from and open the pull request against the parent issue's branch. */
   parentBranch: boolean;
+  /** Branch its pull requests go into (one for every repository, or per repository); null: the repository's setting or default branch. */
+  baseBranch: BaseBranchSetting | null;
   /** start_related_agent: the related issues whose agents it may start (empty = none). */
   startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
   /** Environment variable with a token for the GitHub account it acts as; null = the admin UI's, or the App. */
@@ -74,6 +78,8 @@ export interface FileSchedule {
   /** The issue or pull request each run works on; null: the first run opens an issue. */
   issue: number | null;
   prompt: string;
+  /** Branch the runs' pull requests go into; null: as the agent's other work. */
+  baseBranch: string | null;
   maxRuns: number | null;
   endsAt: string | null;
 }

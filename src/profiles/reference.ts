@@ -87,8 +87,16 @@ const AGENT: FileDoc = {
       key: "github.parent_branch",
       type: "boolean",
       default: bool(GITHUB_DEFAULTS.parent_branch),
-      description: "On a sub-issue, branch from the parent issue's branch (ao/issue-<parent>) and open the pull request against it. Issues with a parent or sub-issues use the shared branch ao/issue-<n>. Off: every issue branches from and merges into the default branch.",
+      description: "On a sub-issue, branch from the parent issue's branch (ao/issue-<parent>) and open the pull request against it. Issues with a parent or sub-issues use the shared branch ao/issue-<n>. Off: every issue branches from and merges into the base branch.",
       example: "github:\n  parent_branch: false",
+    },
+    {
+      key: "github.base_branch",
+      type: "string or map",
+      default: "the repository's setting (Settings → Base branches), else its default branch",
+      description:
+        "The branch its pull requests go into, and its new branches start from: one branch, or a map of owner/name → branch with default: for other repositories. A board's base_branch, a schedule's or the Run agent dialog's wins over it. Pull requests it's asked to work on keep their base; sub-issues still go into their parent's branch. The branch must exist (a task fails and says so otherwise). When its pull request into a branch other than the default branch is merged, the orchestrator closes the issue (GitHub only does that for the default branch).",
+      example: "github:\n  base_branch: develop",
     },
     {
       key: "github.start_related",
@@ -128,7 +136,7 @@ const AGENT: FileDoc = {
       type: "list",
       default: "[]",
       description:
-        "Runs on a timetable, written in the file. Each has a name, when (a cron expression like \"0 9 * * 1-5\", a shortcut like @daily, or an interval like \"every 6h\"), repo (owner/name), prompt (what to do each run), and optionally timezone (default SCHEDULE_TIMEZONE), issue (the issue or pull request each run works on; left out, the first run opens an issue for it), max_runs and ends_at. They show in the admin UI under Schedules, where they can be paused or run now; change them here.",
+        "Runs on a timetable, written in the file. Each has a name, when (a cron expression like \"0 9 * * 1-5\", a shortcut like @daily, or an interval like \"every 6h\"), repo (owner/name), prompt (what to do each run), and optionally timezone (default SCHEDULE_TIMEZONE), issue (the issue or pull request each run works on; left out, the first run opens an issue for it), base_branch (where the runs' pull requests go; default: as the agent's other work), max_runs and ends_at. They show in the admin UI under Schedules, where they can be paused or run now; change them here.",
       example: 'schedules:\n  - name: Weekly dependency check\n    when: "0 9 * * 1"\n    timezone: Asia/Seoul\n    repo: acme/widgets\n    prompt: Check for outdated dependencies and open one pull request updating the safe ones.',
     },
     { key: "env", type: "map", default: "{}", description: "Extra environment variables for its tools and MCP servers.", example: "env:\n  NODE_ENV: test" },
@@ -221,6 +229,13 @@ const BOARD: FileDoc = {
     { key: "status_field", type: "string", default: "Status", description: "The single-select field the board's columns come from.", example: "status_field: Status" },
     { key: "needs_human", type: "string", default: "Needs human", description: "Where loop guards send cards, and where agents can always move a card they're stuck on. Empty to have none (the card stays).", example: "needs_human: Needs human" },
     { key: "poll_seconds", type: "number", default: "600 for organization projects, 60 for user projects", description: "Also read the board this often, in case a webhook is missed (organization projects send webhooks; user projects don't). Each read goes through every card, 100 per query. 0 turns polling off.", example: "poll_seconds: 300" },
+    {
+      key: "base_branch",
+      type: "string or map",
+      default: "the agent's github.base_branch, the repository's setting, else its default branch",
+      description: "The branch the board's pull requests go into, and its cards' branches start from: one branch, or a map of owner/name → branch with default: for other repositories. Wins over the agents' own github.base_branch. Sub-issues still go into their parent issue's branch, which starts from this one. The branch must exist in each repository.",
+      example: "base_branch: develop",
+    },
     { key: "archive.columns", type: "list", default: "[] (nothing archived)", description: "Columns whose cards are archived on GitHub once they've sat there for archive.after_days, so the project (and every read of it) stays small. Archived cards can be restored on GitHub.", example: "archive:\n  columns: [Done]" },
     { key: "archive.after_days", type: "number", default: "7", description: "Days a card stays in an archive column before it's archived.", example: "  after_days: 14" },
     { key: "token_env", type: "string", description: "Only when the GitHub App can't reach the project (e.g. a user-owned one): the environment variable holding a token with project access.", example: "token_env: PROJECT_TOKEN" },

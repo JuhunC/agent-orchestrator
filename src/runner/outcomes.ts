@@ -25,6 +25,8 @@ import { scheduler } from "./scheduler.ts";
 import { loadBoards } from "../boards/loader.ts";
 import { findInstallation, installationClient } from "../github/app.ts";
 import { errorMessage, log } from "../log.ts";
+import { isIssueBranch } from "../github/relations.ts";
+import { signed } from "../github/threads.ts";
 
 /**
  * What agents' work came to, beside what it cost: tasks that succeeded or failed, pull requests
@@ -146,6 +148,33 @@ export function notePullEvent(payload: Record<string, any>): void {
   if (state && setPullState(owner, repo, Number(pr.number), state, pr.merged_at ?? pr.closed_at ?? undefined)) {
     bus.publish({ type: "settings" });
     scheduler.kick(); // work held back by MAX_OPEN_AGENT_PRS_PER_REPO may start now
+    if (state === "merged") {
+      void closeIssuesAfterMerge(payload, owner, repo).catch((error) => log.warn("Couldn't close the issue of a merged pull request", { pull: `${owner}/${repo}#${pr.number}`, error: errorMessage(error) }));
+    }
+  }
+}
+
+const CLOSING = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi;
+
+/**
+ * GitHub closes the issues a pull request says it closes ("Closes #12") only when it merges into
+ * the default branch. An agent's pull request into another base branch (base_branch) closes them
+ * here instead. Pull requests into a parent issue's branch don't: the parent's work isn't done.
+ */
+async function closeIssuesAfterMerge(payload: Record<string, any>, owner: string, repo: string): Promise<void> {
+  const pr = payload.pull_request;
+  const base = String(pr.base?.ref ?? "");
+  const defaultBranch = String(payload.repository?.default_branch ?? "");
+  if (!base || !defaultBranch || base === defaultBranch || isIssueBranch(base)) return;
+  const numbers = [...new Set([...String(pr.body ?? "").matchAll(CLOSING)].map((match) => Number(match[1])))];
+  if (!numbers.length) return;
+  const gh = await installationClient(Number(payload.installation?.id) || (await findInstallation(owner, repo)));
+  for (const number of numbers) {
+    const { data: issue } = await gh.rest.issues.get({ owner, repo, issue_number: number });
+    if (issue.state !== "open" || issue.pull_request) continue;
+    await gh.rest.issues.createComment({ owner, repo, issue_number: number, body: signed(`Closing: pull request #${pr.number} was merged into \`${base}\`. (GitHub only closes issues for pull requests into \`${defaultBranch}\`.)`) });
+    await gh.rest.issues.update({ owner, repo, issue_number: number, state: "closed", state_reason: "completed" });
+    log.info("Closed the issue of a merged pull request", { issue: `${owner}/${repo}#${number}`, pull: Number(pr.number), base });
   }
 }
 

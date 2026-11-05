@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { AuditLog } from "../components/AuditLog.tsx";
 import { Backups } from "../components/Backups.tsx";
+import { BaseBranches } from "../components/BaseBranches.tsx";
 import { Guards } from "../components/Guards.tsx";
 import { api, useApi, type Installation, type ModelInfo, type Settings as SettingsData, type Setup } from "../api.ts";
 import { Empty, Panel, Switch } from "../components/ui.tsx";
@@ -342,6 +343,7 @@ export function Settings() {
 
       <div className="grid-2">
         <LivePanel settings={data} onSave={update} />
+        <BaseBranches />
         <Workspaces info={data.workspaces} onDone={() => void reload()} />
         <Guards />
         <Backups />

@@ -1,3 +1,5 @@
+import { parseBaseBranch, type BaseBranchSetting } from "../github/branches.ts";
+
 /**
  * Optional, machine-checked rules for agent moves on a board: what an agent must show before it
  * moves a card into a column (evidence and handoff fields), and which columns a work type may
@@ -21,7 +23,7 @@ export const EVIDENCE_TEXT: Record<Evidence, string> = {
   tests: "a test run that passed after your last change",
   review: "your review verdict (approve or request changes) on the pull request",
   approval: "your approval of the pull request",
-  merged: "your branch merged into the branch it targets (a sub-issue's parent branch, otherwise the default branch)",
+  merged: "your branch merged into the branch it targets (a sub-issue's parent branch, otherwise the base branch: the repository's default branch unless base_branch is set)",
   sub_issues: "every sub-issue's branch merged into this card's branch (or the sub-issue closed)",
   merged_into_parent: "for a sub-issue, its branch merged into the parent issue's branch (cards without a parent, and sub-issues with nothing to merge, pass)",
   dependencies: "every issue this card is blocked by is closed",
@@ -278,6 +280,7 @@ export function parseBoardRules(data: Record<string, unknown>): {
   fields: CardFieldSettings;
   relatedAgents: RelatedAgentSettings;
   archive: ArchiveSettings | null;
+  baseBranch: BaseBranchSetting | null;
   errors: string[];
 } {
   const errors: string[] = [];
@@ -295,7 +298,8 @@ export function parseBoardRules(data: Record<string, unknown>): {
   const fields = parseCardFields(data.fields, Object.keys(rawColumns), needsHuman, errors);
   const relatedAgents = parseRelatedAgents(data.related_agents, Object.keys(rawColumns), errors);
   const archive = parseArchive(data.archive, Object.keys(rawColumns), errors);
-  return { columns, workTypes, subIssues, fields, relatedAgents, archive, errors };
+  const baseBranch = parseBaseBranch(data.base_branch, "base_branch", errors);
+  return { columns, workTypes, subIssues, fields, relatedAgents, archive, baseBranch, errors };
 }
 
 /** The first work type (in file order) with one of the card's labels. */

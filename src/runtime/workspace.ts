@@ -6,16 +6,22 @@ import { commitIdentityFor, gitTokenFor, noteOwnWrite } from "../github/accounts
 import { makeSharedDir, shareWritten } from "./isolation.ts";
 import { updateMirror } from "./mirrors.ts";
 import { repoRemoteUrl } from "../github/app.ts";
-import { issueBranch, sameRepo } from "../github/relations.ts";
+import { isIssueBranch, issueBranch, sameRepo } from "../github/relations.ts";
 import type { ThreadContext } from "../github/threads.ts";
 import type { Profile } from "../profiles/types.ts";
 import { git, refExists } from "../runner/git.ts";
 import type { Task } from "../types.ts";
+import type { BaseChoice } from "./base-branch.ts";
 
 export interface Workspace {
   dir: string;
   branch: string;
+  /** Where this branch's pull request goes: the PR's base, a sub-issue's parent branch, or targetBranch. */
   baseBranch: string;
+  /** Where work goes when it isn't a sub-issue's: the configured base branch, else the repository's default branch. */
+  targetBranch: string;
+  /** Where targetBranch was set, in words ("on the product board"); null when it's the default branch. */
+  targetFrom: string | null;
   /** False for pull requests from forks. */
   canPush: boolean;
   /** The agent may push (its profile allows it and the branch is pushable). */
@@ -57,9 +63,10 @@ export function parentBranchFor(profile: Pick<Profile, "github">, thread: Thread
  * Clones (or refreshes) the agent's checkout for a thread and puts it on the right branch:
  * the PR's head branch for pull requests; the shared `ao/issue-<n>` for board cards and for
  * issues with a parent or sub-issues (a sub-issue starts from its parent's branch and merges
- * into it); `agent/<name>/<kind>-<n>` otherwise.
+ * into it); `agent/<name>/<kind>-<n>` otherwise. New branches start from `base` (see
+ * runtime/base-branch.ts), or the repository's default branch when none is set.
  */
-export async function prepareWorkspace(task: Task, profile: Profile, thread: ThreadContext): Promise<Workspace> {
+export async function prepareWorkspace(task: Task, profile: Profile, thread: ThreadContext, base: BaseChoice = { branch: null, from: null }): Promise<Workspace> {
   const dir = workspaceDir(task);
   const token = await gitTokenFor(task);
   const remote = repoRemoteUrl(task.owner, task.repo);
@@ -96,8 +103,12 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   let baseBranch: string;
   let startPoint: string;
   let canPush = true;
+  const configured = base.branch && base.branch !== thread.defaultBranch ? base.branch : null;
+  let targetBranch = configured ?? thread.defaultBranch;
   if (thread.kind === "pull" && thread.pull) {
+    // A pull request keeps the base it has; one into a parent's branch still belongs to the configured base.
     baseBranch = thread.pull.baseRef;
+    if (!isIssueBranch(baseBranch)) targetBranch = baseBranch;
     if (!thread.pull.isFork) {
       branch = thread.pull.headRef;
       startPoint = `origin/${branch}`;
@@ -108,15 +119,18 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
       canPush = false;
     }
   } else {
+    if (configured && !(await refExists(dir, `refs/remotes/origin/${configured}`))) {
+      throw new Error(`The base branch \`${configured}\` (set ${base.from ?? "for this task"}) isn't in ${task.owner}/${task.repo}. Create it on GitHub, or change the setting.`);
+    }
     const parentBranch = parentBranchFor(profile, thread, task);
     const inTree = profile.github.parentBranch && thread.kind === "issue" && (parentBranch !== null || thread.relations.subIssues.length > 0);
-    baseBranch = parentBranch ?? thread.defaultBranch;
+    baseBranch = parentBranch ?? targetBranch;
     // Board stages share one branch per issue, so the tester checks out the developer's work;
     // so does a sub-issue tree, so the parent's agent can see (and check) its sub-issues' work.
     const own = `agent/${profile.name}/${thread.kind}-${thread.number}`;
     branch = task.board || inTree ? issueBranch(thread.number, thread.kind === "discussion" ? "discussion" : "issue") : own;
-    const candidates = [branch, ...(inTree && !task.board ? [own] : []), baseBranch, thread.defaultBranch];
-    startPoint = `origin/${thread.defaultBranch}`;
+    const candidates = [branch, ...(inTree && !task.board ? [own] : []), baseBranch, targetBranch];
+    startPoint = `origin/${targetBranch}`;
     for (const candidate of candidates) {
       if (await refExists(dir, `refs/remotes/origin/${candidate}`)) {
         startPoint = `origin/${candidate}`;
@@ -124,7 +138,8 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
       }
     }
   }
-  if (branch === thread.defaultBranch) canPush = false;
+  // Never push straight to the branch work is meant to merge into.
+  if (branch === thread.defaultBranch || branch === targetBranch) canPush = false;
   if (!(await refExists(dir, startPoint))) throw new Error(`Branch ${startPoint.replace("origin/", "")} not found (is the repository empty?)`);
 
   // After a usage-limit pause, keep the interrupted attempt's work so the agent can carry on.
@@ -140,18 +155,19 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   await git(dir, ["config", "user.email", identity.email]);
   const startSha = keepWork && task.startSha ? task.startSha : await git(dir, ["rev-parse", "HEAD"]);
 
-  return { dir, branch, baseBranch, canPush, willPush: canPush && profile.github.push, startSha };
+  return { dir, branch, baseBranch, targetBranch, targetFrom: configured && targetBranch === configured ? base.from : null, canPush, willPush: canPush && profile.github.push, startSha };
 }
 
 /**
  * A sub-issue's pull request goes into its parent's branch. If that branch isn't on GitHub yet,
- * create it where this branch left the default branch, so the pull request shows only this work.
+ * create it where this branch left the base branch, so the pull request shows only this work.
+ * Only issue branches (ao/issue-<n>) are ever created: a configured base branch must already exist.
  */
-export async function ensureBaseBranch(task: Pick<Task, "installationId" | "agent" | "owner" | "repo">, workspace: Workspace, defaultBranch: string): Promise<boolean> {
-  if (workspace.baseBranch === defaultBranch) return false;
+export async function ensureBaseBranch(task: Pick<Task, "installationId" | "agent" | "owner" | "repo">, workspace: Workspace): Promise<boolean> {
+  if (!isIssueBranch(workspace.baseBranch) || workspace.baseBranch === workspace.targetBranch) return false;
   const token = await gitTokenFor(task);
   if ((await git(workspace.dir, ["ls-remote", "--heads", "origin", workspace.baseBranch], { token })).trim()) return false;
-  const fork = await git(workspace.dir, ["merge-base", "HEAD", `refs/remotes/origin/${defaultBranch}`]);
+  const fork = await git(workspace.dir, ["merge-base", "HEAD", `refs/remotes/origin/${workspace.targetBranch}`]);
   try {
     noteOwnWrite(`${task.owner}/${task.repo}@${workspace.baseBranch}`);
     await git(workspace.dir, ["push", "origin", `${fork}:refs/heads/${workspace.baseBranch}`], { token });

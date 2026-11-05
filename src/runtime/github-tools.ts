@@ -187,11 +187,13 @@ function oneAtATime<T>(key: string, run: () => Promise<T>): Promise<T> {
  */
 export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, body: string, draft = false): Promise<{ number: number; url: string; created: boolean }> {
   const { task, thread, workspace, gh, profile } = ctx;
-  const parent = workspace.baseBranch !== thread.defaultBranch ? thread.relations.parent : null;
+  const parent = isIssueBranch(workspace.baseBranch) && workspace.baseBranch !== workspace.targetBranch ? thread.relations.parent : null;
+  // GitHub only closes the issue itself for pull requests into the default branch; for others the orchestrator does (runner/outcomes.ts).
+  const into = !parent && workspace.baseBranch !== thread.defaultBranch ? ` · into \`${workspace.baseBranch}\`${workspace.targetFrom ? ` (the base branch set ${workspace.targetFrom})` : ""}` : "";
   const link =
     thread.kind === "issue"
-      ? `Closes #${thread.number}${parent ? ` · part of #${parent.number} (merges into \`${workspace.baseBranch}\`, the parent issue's branch)` : ""}`
-      : `From discussion #${thread.number}: ${thread.url}`;
+      ? `Closes #${thread.number}${parent ? ` · part of #${parent.number} (merges into \`${workspace.baseBranch}\`, the parent issue's branch)` : into}`
+      : `From discussion #${thread.number}: ${thread.url}${into}`;
   const footer = `<sub>Opened by **${profile.name}** for ${mention(task.requestedBy)} · orchestrator task #${task.id}. Mention @${profile.handle} here to ask for changes.</sub>`;
   const fullBody = [body.trim(), "", link, "", footer].join("\n");
   const source = { owner: task.owner, repo: task.repo, kind: thread.kind, number: thread.number };
@@ -211,7 +213,7 @@ export async function openOrUpdatePullRequest(ctx: ToolContext, title: string, b
           `Didn't open a pull request: ${thread.kind} #${thread.number} already has ${opened.length} from agents (${list}) and MAX_PULL_REQUESTS_PER_ISSUE is ${limit}. The commits are on the branch ${workspace.branch}.`,
         );
       }
-      if (thread.kind === "issue" && (await ensureBaseBranch(task, workspace, thread.defaultBranch))) {
+      if (thread.kind === "issue" && (await ensureBaseBranch(task, workspace))) {
         ctx.onEvent("system", `Created \`${workspace.baseBranch}\` on GitHub for the parent issue's work`);
       }
       const created = await openPull(gh, { owner: task.owner, repo: task.repo, head: workspace.branch, base: workspace.baseBranch, title, body: fullBody, draft });
@@ -799,11 +801,11 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
                   : `#${threadNumber} has no open parent issue in this repository${profile.github.parentBranch ? "" : " (or github.parent_branch is off for this agent)"}, so there's no parent branch to merge into.`,
               );
             }
-            if (base === thread.defaultBranch || !isIssueBranch(base)) return fail(`merge_into_parent only merges into a parent issue's branch (ao/issue-<n>), never into \`${base}\`.`);
+            if (base === thread.defaultBranch || base === workspace.targetBranch || !isIssueBranch(base)) return fail(`merge_into_parent only merges into a parent issue's branch (ao/issue-<n>), never into \`${base}\`.`);
             const head = await git(workspace.dir, ["rev-parse", "HEAD"]);
             const pushed = await fetchBranch(ctx, workspace.branch);
             if (pushed !== head) return fail(`Push your work first with commit_and_push: \`${workspace.branch}\` is ${pushed ? `at ${pushed.slice(0, 10)}` : "not"} on GitHub${pushed ? `, your checkout at ${head.slice(0, 10)}` : ""}.`);
-            if (await ensureBaseBranch(ctx.task, { ...workspace, baseBranch: base }, thread.defaultBranch)) ctx.onEvent("system", `Created \`${base}\` on GitHub`);
+            if (await ensureBaseBranch(ctx.task, { ...workspace, baseBranch: base })) ctx.onEvent("system", `Created \`${base}\` on GitHub`);
             const before = await fetchBranch(ctx, base);
             let how = "it was already merged";
             if (!before || !(await isAncestor(workspace.dir, head, before))) {

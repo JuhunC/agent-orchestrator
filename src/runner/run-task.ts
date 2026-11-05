@@ -19,6 +19,7 @@ import { isolationStatus } from "../runtime/isolation.ts";
 import { RELATION_NAME, runRelatedStart } from "../runtime/related-agents.ts";
 import { addUsage } from "../runtime/usage.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
+import { baseForTask } from "../runtime/base-branch.ts";
 import type { EventKind, Task, ThreadRef } from "../types.ts";
 import { git } from "./git.ts";
 import { settleInbox } from "./inbox.ts";
@@ -146,9 +147,9 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
 
     emit(task.id, "status", "Preparing workspace");
-    const workspace = await prepareWorkspace(task, profile, thread);
+    const workspace = await prepareWorkspace(task, profile, thread, baseForTask(task, profile, boardContext?.board ?? null));
     task = patch(task.id, { branch: workspace.branch, baseBranch: workspace.baseBranch, startSha: workspace.startSha });
-    onEvent("system", `Checked out \`${workspace.branch}\``);
+    onEvent("system", `Checked out \`${workspace.branch}\`${workspace.targetFrom ? ` (work goes into \`${workspace.targetBranch}\`, the base branch set ${workspace.targetFrom})` : ""}`);
 
     const history = threadHistory(ref, profile.name, task.id);
     if (history.length) onEvent("system", `Loaded ${history.length} earlier run${history.length === 1 ? "" : "s"} as context`);

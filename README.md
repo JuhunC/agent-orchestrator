@@ -93,6 +93,7 @@ github:
   relations: false             # link_issue: blocked-by, blocking, parent and sub-issue links
   merge_into_parent: false     # merge_into_parent: merge a sub-issue into its parent's branch
   parent_branch: true          # a sub-issue branches from and merges into its parent's branch
+  # base_branch: develop       # optional: pull requests go here instead of the default branch (see below)
   start_related: false         # start_related_agent: true, or some of [parent, sub_issue, blocked_by, blocks]
   # account_token_env: CODER_GITHUB_TOKEN  # optional: act as this GitHub account (see below)
 max_turns: 300
@@ -160,7 +161,22 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 
 Each agent works in a full clone of the repository, refreshed from GitHub when a task starts, so git commands in its shell (log, diff, blame, merge) never need GitHub access. The shell has no GitHub credentials; `fetch_from_github` fetches for it. Workspaces made by older versions as blob-less clones are converted the next time they're used.
 
-Agents push only to `agent/<name>/issue-<n>` or `ao/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to or merge into the default branch.
+Agents push only to `agent/<name>/issue-<n>` or `ao/issue-<n>` branches, or to the PR's own branch when called on a PR. They never push to or merge into the default branch or the base branch.
+
+### Base branches
+
+Agents' pull requests go into the repository's default branch unless a **base branch** is set: `develop`, say, or a release branch. Their branches then start from it, their pull requests target it, and their prompt says so. Set it in any of these places; the most specific wins:
+
+1. **A run**: the **Base branch** field when you start an agent with **Run agent**, or on a **schedule** (the admin UI, `base_branch:` on a schedule in agent.md, or `base_branch` in the agent's `create_schedule`). A retry keeps its task's base branch.
+2. **A board**: `base_branch: develop` in the board file, for every card on it.
+3. **An agent**: `github.base_branch: develop` in its agent.md.
+4. **A repository**: **Settings → Base branches** in the admin UI, which also lists everything else that sets one.
+
+In a board file or agent.md, a map sets it per repository: `base_branch: { acme/api: develop, default: main }` (`default` covers the repositories not listed). The admin UI checks that a branch exists when you set it there; a branch named in a file is checked when a task starts, and a task whose base branch isn't in the repository fails and says so. Names of the orchestrator's own branches (`ao/…`, `agent/…`) can't be base branches.
+
+- A **pull request** an agent is asked to work on keeps its own base.
+- A **sub-issue** still goes into its parent issue's branch; that branch starts from the base branch, and the parent's pull request goes into it.
+- GitHub only closes the issue a pull request says it closes ("Closes #12") when it merges into the default branch. When an agent's pull request into another base branch is merged, the orchestrator closes the issue and comments why.
 
 ### A GitHub account per agent
 
@@ -180,7 +196,7 @@ By default every agent acts on GitHub as the orchestrator's GitHub App (`your-ap
 
 GitHub sub-issues split an issue into parts. The orchestrator gives each issue in such a tree the shared branch `ao/issue-<n>`:
 
-- A sub-issue's branch starts from its **parent's branch**, and its pull request targets that branch instead of the default branch. If the parent's branch doesn't exist yet, it's created where the sub-issue's branch left the default branch. The parent's own pull request then takes all of it to the default branch, through a person. Set `parent_branch: false` on an agent to have it treat sub-issues like any other issue. Only open parents in the same repository count.
+- A sub-issue's branch starts from its **parent's branch**, and its pull request targets that branch instead of the default branch. If the parent's branch doesn't exist yet, it's created where the sub-issue's branch left the base branch (the default branch unless [one is set](#base-branches)). The parent's own pull request then takes all of it to the base branch, through a person. Set `parent_branch: false` on an agent to have it treat sub-issues like any other issue. Only open parents in the same repository count.
 - `list_sub_issues` checks each sub-issue's branch: its head must be an **ancestor** of the parent's branch on GitHub. A squash or rebase merge copies commits, so that work shows as not merged; `merge_into_parent` always uses a merge commit.
 - The agent's prompt lists the issue's parent, sub-issues and dependencies, and says where its work merges.
 
@@ -200,7 +216,7 @@ An agent can run again and again on a timetable: a daily report, a weekly depend
 There are three ways to make one:
 
 - **Ask the agent.** "@coder every Monday at 9 Seoul time, check for outdated dependencies." The agent sets it up with `create_schedule`, on that thread. It can also list, change, pause and delete its own schedules, and a run can delete its schedule once the job is done. `can_schedule: false` in agent.md takes these tools away. A scheduled run can't make more schedules.
-- **In the admin UI.** **Schedules** in the sidebar, or the agent's page. Pick the agent, a timing (with a preview of the next runs), the repository, and optionally an issue or pull request number. Leave the number out and the first run opens an issue for the schedule.
+- **In the admin UI.** **Schedules** in the sidebar, or the agent's page. Pick the agent, a timing (with a preview of the next runs), the repository, and optionally an issue or pull request number and a [base branch](#base-branches) for the runs' pull requests. Leave the number out and the first run opens an issue for the schedule.
 - **In agent.md**, under `schedules:`. These are kept in step with the file. The admin UI can pause them and run them now, but changes go in the file.
 
 ```yaml
@@ -211,6 +227,7 @@ schedules:
     repo: acme/widgets
     issue: 12                  # optional: left out, the first run opens an issue
     prompt: Check for outdated dependencies and open one pull request updating the safe ones.
+    base_branch: develop       # optional: where the runs' pull requests go
     max_runs: 10               # optional
     ends_at: 2026-12-31        # optional
 ```
@@ -253,6 +270,7 @@ columns:
 ```
 - **Move map**: the board page draws the columns and the moves agents can make between them (`moves_to` forward and back, `on_start`), with what each column requires.
 - **Sub-issues** (optional, top level): `sub_issues: { column: Backlog, moves_to: [Ready] }`. Sub-issues an agent creates on the board are added to it in `column` when its task finishes, which starts that column's agent; one that doesn't meet that column's requirements (e.g. `dependencies` while it's blocked) stays off the board until the parent moves it. Put `dependencies` on columns like Ready to make blocked-by relations a hard gate; without it, `move_sub_issue` still points out open blockers. An agent working a parent card may move its sub-issues' cards to the `moves_to` columns with `move_sub_issue` (or to `needs_human`); like its own move, that happens when it finishes and is checked again first. Such a move counts toward the sub-issue's loop guards. Only evidence about the sub-issue itself (`pull_request`, `merged`, `sub_issues`) can be checked for it, so a column that needs another agent's tests or review can't be entered this way.
+- **Base branch** (optional, top level): `base_branch: develop` sends the board's pull requests to `develop` instead of the default branch, or `base_branch: { acme/api: develop, default: main }` per repository. It wins over the agents' own `github.base_branch`; see [Base branches](#base-branches).
 - **Archiving** (optional, top level): `archive: { columns: [Done], after_days: 7 }` archives cards on GitHub once they've sat in one of those columns that long (hourly), so the project stays small; they can be restored on GitHub. Each poll reads every card, so this keeps polling cheap too. Organization projects (which send webhooks) are polled every 10 minutes by default, user projects every minute (`poll_seconds` overrides it).
 - **Related-issue starts** (optional, top level): `related_agents: { columns: [In progress, Integration] }` lists the columns whose agent an agent on a related issue may start with `start_related_agent` (see [Starting the agent of a related issue](#starting-the-agent-of-a-related-issue)). Without it, every column with agents can be; `columns: []` allows none. Each start counts as the card entering its column again, toward `entries_per_column`.
 - **Dates and estimates** (optional, top level): `fields: { start: Start date, end: End date, estimate: Estimate, start_on: [In progress], end_on: [Done] }` names the project's date fields and number field. GitHub issues have no dates of their own; in a Project they live in fields like these, which the roadmap view uses. Agents set them with `set_card_fields` (and `create_sub_issue` takes them for new sub-issues), and their prompt shows the card's current values. `start_on` fills in the start date (today, UTC) when a card enters one of those columns and has none yet; `end_on` sets the end date when it enters one. That happens for people's moves too. The board page shows the values per card.
@@ -371,7 +389,7 @@ The image includes git, Python and common CLI tools. For project toolchains, bui
 - Agents run with permission prompts off (`bypassPermissions`), and what they read on GitHub can be a prompt injection, so their shell is treated as untrusted. **In the Docker image they run as their own user, `agent`**, which can't read the orchestrator's data or processes: the GitHub App key, admin token, database, `data-key`, agents' GitHub tokens and the orchestrator's environment variables. They share only their workspaces, their home (`DATA_DIR/agent-home`) and their skills with it, through the `agent` group; the rest of `DATA_DIR` is private to the orchestrator. **Settings** says whether this works. It needs `sudo` in the container, so don't run it with `no-new-privileges`. Outside Docker, create a user and group for agents, add the orchestrator's user to that group, allow it with a sudoers rule like `orchestrator ALL=(agent) NOPASSWD:SETENV: ALL`, and set `AGENT_USER=agent` (or run the orchestrator as root, which switches user itself). Set `AGENT_ISOLATION=required` to refuse to run agents that aren't isolated.
 - All agents share one OS user, so one agent could change another's workspace. Agents still have network access; restrict outbound traffic at the container or network level if your repositories are sensitive.
 - Thread content is untrusted input: only write-access users can start agents, but anyone can comment on public repos. Use `ALLOWED_REPOS`.
-- GitHub credentials stay in the orchestrator, including agents' account tokens; agents act on GitHub only through its tools, on agent branches. The only merge an agent can make is `merge_into_parent` (off by default), which merges a sub-issue into its parent issue's `ao/issue-<n>` branch, never into the default branch.
+- GitHub credentials stay in the orchestrator, including agents' account tokens; agents act on GitHub only through its tools, on agent branches. The only merge an agent can make is `merge_into_parent` (off by default), which merges a sub-issue into its parent issue's `ao/issue-<n>` branch, never into the default branch or a base branch.
 
 ## Development
 

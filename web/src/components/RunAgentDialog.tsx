@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Agent, type Installation } from "../api.ts";
+import { api, type Agent, type BaseChoice, type Installation } from "../api.ts";
 import { navigate } from "../router.ts";
 import { Dialog } from "./ui.tsx";
 
@@ -10,6 +10,8 @@ export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agen
   const [number, setNumber] = useState("");
   const [kind, setKind] = useState("auto");
   const [instruction, setInstruction] = useState("");
+  const [baseBranch, setBaseBranch] = useState("");
+  const [usual, setUsual] = useState<BaseChoice | null>(null);
   const [repos, setRepos] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -25,11 +27,24 @@ export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agen
       .catch(() => undefined);
   }, []);
 
+  // What a pull request would go into without a base branch here (boards aren't involved in a run started here).
+  useEffect(() => {
+    if (!agent || !/^[^/\s]+\/[^/\s]+$/.test(repo)) return setUsual(null);
+    let current = true;
+    api
+      .get<BaseChoice>(`/api/base-branches/resolve?agent=${encodeURIComponent(agent)}&repo=${encodeURIComponent(repo)}`)
+      .then((choice) => current && setUsual(choice))
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [agent, repo]);
+
   const submit = async () => {
     setBusy(true);
     setError(null);
     try {
-      const { id } = await api.post<{ id: number }>("/api/tasks", { agent, repo, number: Number(number), kind, instruction });
+      const { id } = await api.post<{ id: number }>("/api/tasks", { agent, repo, number: Number(number), kind, instruction, baseBranch: baseBranch || null });
       onClose();
       navigate(`/tasks/${id}`);
     } catch (err) {
@@ -84,6 +99,21 @@ export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agen
             <option value="auto">Issue or PR (detect)</option>
             <option value="discussion">Discussion</option>
           </select>
+        </div>
+        <div className="field full">
+          <label htmlFor="run-base">Base branch (optional)</label>
+          <input id="run-base" placeholder={usual?.branch ?? "the repository's default branch"} value={baseBranch} onChange={(event) => setBaseBranch(event.target.value.trim())} />
+          <span className="help">
+            Where a pull request from this run goes.{" "}
+            {usual?.branch ? (
+              <>
+                Left empty: <code>{usual.branch}</code> (set {usual.from}).
+              </>
+            ) : (
+              "Left empty: the repository's default branch."
+            )}{" "}
+            A pull request you start it on keeps its own base.
+          </span>
         </div>
         <div className="field full">
           <label htmlFor="run-instruction">Instruction</label>

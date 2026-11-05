@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, useApi, type AgentsResponse, type Installation, type ScheduleView, type SchedulesResponse } from "../api.ts";
+import { api, useApi, type AgentsResponse, type BaseChoice, type Installation, type ScheduleView, type SchedulesResponse } from "../api.ts";
 import { href } from "../router.ts";
 import { Dialog, Empty, Panel, Pill, Switch, who } from "./ui.tsx";
 
@@ -94,6 +94,12 @@ export function Schedules({ agent }: { agent?: string }) {
                 </div>
                 <div className="meta">
                   On {target(schedule)} {schedule.threadNumber ? `(${schedule.threadKind === "pull" ? "pull request" : schedule.threadKind ?? "issue or pull request"})` : "(the first run opens an issue)"}
+                  {schedule.baseBranch && (
+                    <>
+                      {" · pull requests into "}
+                      <code>{schedule.baseBranch}</code>
+                    </>
+                  )}
                   {schedule.enabled && schedule.nextRunAt ? ` · next ${localTime(schedule.nextRunAt)}, ${fromNow(schedule.nextRunAt)}` : ""}
                 </div>
                 <div className="meta">
@@ -211,7 +217,9 @@ function ScheduleDialog({ schedule, agent, defaultTimezone, onClose, onSaved }: 
     prompt: schedule?.prompt ?? "",
     maxRuns: schedule?.maxRuns ? String(schedule.maxRuns) : "",
     endsAt: schedule?.endsAt ? schedule.endsAt.slice(0, 10) : "",
+    baseBranch: schedule?.baseBranch ?? "",
   });
+  const [usual, setUsual] = useState<BaseChoice | null>(null);
   const [repos, setRepos] = useState<string[]>([]);
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -246,6 +254,19 @@ function ScheduleDialog({ schedule, agent, defaultTimezone, onClose, onSaved }: 
     return () => clearTimeout(timer);
   }, [form.when, zone]);
 
+  // What the runs' pull requests go into when the schedule doesn't name a base branch.
+  useEffect(() => {
+    if (!form.agent || !/^[^/\s]+\/[^/\s]+$/.test(form.repo)) return setUsual(null);
+    let current = true;
+    api
+      .get<BaseChoice>(`/api/base-branches/resolve?agent=${encodeURIComponent(form.agent)}&repo=${encodeURIComponent(form.repo)}`)
+      .then((choice) => current && setUsual(choice))
+      .catch(() => undefined);
+    return () => {
+      current = false;
+    };
+  }, [form.agent, form.repo]);
+
   const save = async () => {
     setBusy(true);
     setError(null);
@@ -259,6 +280,7 @@ function ScheduleDialog({ schedule, agent, defaultTimezone, onClose, onSaved }: 
       prompt: form.prompt,
       maxRuns: form.maxRuns ? Number(form.maxRuns) : null,
       endsAt: form.endsAt || null,
+      baseBranch: form.baseBranch.trim() || null,
     };
     try {
       onSaved(schedule ? await api.patch<ScheduleView>(`/api/schedules/${schedule.id}`, body) : await api.post<ScheduleView>("/api/schedules", body));
@@ -355,6 +377,21 @@ function ScheduleDialog({ schedule, agent, defaultTimezone, onClose, onSaved }: 
             <input type="date" aria-label="End date" value={form.endsAt} onChange={(event) => set("endsAt")(event.target.value)} />
           </div>
           <span className="help">Optional: a number of runs, an end date, or both.</span>
+        </div>
+        <div className="field">
+          <label htmlFor="schedule-base">Base branch</label>
+          <input id="schedule-base" placeholder={usual?.branch ?? "default branch"} value={form.baseBranch} onChange={(event) => set("baseBranch")(event.target.value.trim())} />
+          <span className="help">
+            Where the runs' pull requests go. Empty:{" "}
+            {usual?.branch ? (
+              <>
+                <code>{usual.branch}</code> (set {usual.from})
+              </>
+            ) : (
+              "the repository's default branch"
+            )}
+            .
+          </span>
         </div>
         <div className="field full">
           <label htmlFor="schedule-prompt">What to do each run</label>

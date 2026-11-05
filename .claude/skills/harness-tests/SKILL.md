@@ -25,6 +25,8 @@ Checking what a tool returned: read the `tool_result` blocks in `request.body.me
 - `fake.userTokens.set("ghp_x", { login, id, name?, expires? })`: requests with that token act as the user; an unknown `ghp_` token gets 401.
 - `fake.requests` (`{ method, path, body, actor }`), `fake.reactionsBy`, `fake.repoLabels`, `fake.mergeBranches`, `fake.branchSha`, `fake.deleteBranch`.
 - Pull requests: `fake.issues.get(n)!.pull` (`{ head, base, merged?, mergeableState? }`); `GET /pulls/:n` and `?base=`/`?head=` lists work. `fake.secondaryLimit = n` makes the next n comment writes get GitHub's "secondary rate limit" (retry after 1 s).
+- A new pull request is numbered one past the highest issue, and `fake.addIssue` with that number replaces it: space test issues apart (10, 20, …) when later tests read earlier PRs.
+- Other branches on the remote: `h.run(h.root, "--git-dir", join(h.remotes, "acme", "widgets.git"), "commit-tree", "main^{tree}", "-p", "main", "-m", "x")` then `update-ref refs/heads/<b> <sha>` (test/base-branch.test.ts). `GET /repos/acme/widgets/branches/:b` answers from the remote.
 - Responses can carry headers (`{ status, body, headers }` in `handle`), e.g. token expiry on `GET /user`.
 - Board card: `const id = fake.addItem(n)`, set `fake.items.get(id)!.status` and push to `.history`, then send a `projects_v2_item` webhook (copy `humanMoves` from test/sub-issues.test.ts).
 

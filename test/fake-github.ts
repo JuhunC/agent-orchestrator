@@ -343,6 +343,11 @@ export class FakeGitHub {
       this.deleteBranch(branch);
       return { status: 204, body: null };
     }
+    if (method === "GET" && (match = path.match(/^\/repos\/acme\/widgets\/branches\/(.+)$/))) {
+      const branch = decodeURIComponent(match[1]!);
+      const sha = this.branchSha(branch);
+      return sha ? { status: 200, body: { name: branch, commit: { sha } } } : { status: 404, body: { message: "Branch not found" } };
+    }
     if (method === "POST" && path === "/repos/acme/widgets/pulls") {
       const number = Math.max(0, ...this.issues.keys()) + 1;
       this.issues.set(number, { number, title: body.title, body: body.body, user: { login: actor.login }, comments: [], pull: { head: body.head, base: body.base } });

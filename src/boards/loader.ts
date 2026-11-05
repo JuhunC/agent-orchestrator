@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { parse } from "yaml";
 import { config } from "../config.ts";
 import { expandAgents, loadProfiles, parseEffort } from "../profiles/loader.ts";
+import type { BaseBranchSetting } from "../github/branches.ts";
 import type { Effort, ProfileSet } from "../profiles/types.ts";
 import { forbids, NO_RULES, parseBoardRules, type ArchiveSettings, type CardFieldSettings, type ColumnRules, type RelatedAgentSettings, type SubIssueSettings, type WorkType } from "./rules.ts";
 
@@ -60,6 +61,8 @@ export interface Board {
   relatedAgents: RelatedAgentSettings;
   /** Cards archived after sitting in these columns a while. */
   archive: ArchiveSettings | null;
+  /** Branch the board's pull requests go into (one for every repository, or per repository); null: the agent's, the repository's or the default branch. */
+  baseBranch: BaseBranchSetting | null;
   errors: string[];
 }
 
@@ -151,6 +154,7 @@ function loadBoard(file: string, profiles: ProfileSet): Board {
     fields: rules.fields,
     relatedAgents: rules.relatedAgents,
     archive: rules.archive,
+    baseBranch: rules.baseBranch,
     errors,
   };
 }

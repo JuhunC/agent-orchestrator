@@ -110,12 +110,12 @@ async function evidenceProblems(ctx: ToolContext, rules: ColumnRules): Promise<s
     } else if (item === "merged_into_parent") {
       const base = ctx.workspace.baseBranch;
       // Only a sub-issue (one that branches from its parent's branch) has a parent to merge into.
-      if (base === ctx.thread.defaultBranch || !isIssueBranch(base)) continue;
+      if (base === ctx.workspace.targetBranch || !isIssueBranch(base)) continue;
       const sha = await git(dir, ["rev-parse", "HEAD"]);
       const baseSha = await fetchBranch(ctx, base);
       if (baseSha && (await isAncestor(dir, sha, baseSha))) continue;
       // Nothing to merge yet: no commits of its own (e.g. docs done in the wiki).
-      if (!baseSha && (await isAncestor(dir, sha, `refs/remotes/origin/${ctx.thread.defaultBranch}`))) continue;
+      if (!baseSha && (await isAncestor(dir, sha, `refs/remotes/origin/${ctx.workspace.targetBranch}`))) continue;
       const how = ctx.profile.github.mergeIntoParent ? "Push it with commit_and_push, then call merge_into_parent." : "It counts once your pull request into it is merged (with a merge commit).";
       problems.push(`${need}: your branch (at ${sha.slice(0, 10)}) isn't merged into the parent's branch \`${base}\` yet. ${how}`);
     } else if (item === "dependencies") {
@@ -179,7 +179,7 @@ export async function cardMoveProblems(ctx: ToolContext, card: IssueRef, target:
       if (!head) continue; // no branch: nothing to merge
       const intoSha = await fetchBranch(ctx, into);
       if (intoSha && (await isAncestor(ctx.workspace.dir, head, intoSha))) continue;
-      if (!intoSha && (await isAncestor(ctx.workspace.dir, head, `refs/remotes/origin/${ctx.thread.defaultBranch}`))) continue;
+      if (!intoSha && (await isAncestor(ctx.workspace.dir, head, `refs/remotes/origin/${ctx.workspace.targetBranch}`))) continue;
       problems.push(`${need}: \`${branch}\` (at ${head.slice(0, 10)}) isn't merged into \`${into}\` yet`);
     } else if (item === "dependencies") {
       for (const blocker of (await listBlockedBy(ctx.gh, owner, repo, card)).filter((issue) => issue.state === "open")) {

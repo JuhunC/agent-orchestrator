@@ -4,6 +4,7 @@ import type { ScheduleRun } from "../agents/prompt.ts";
 import { createSchedule, createTask, deleteSchedule, dueSchedules, getSchedule, listSchedules, scheduleCount, scheduleRunsBefore, scheduleTasks, updateSchedule, type NewSchedule } from "../db.ts";
 import { clientFor } from "../github/accounts.ts";
 import { findInstallation, installationClient } from "../github/app.ts";
+import { branchNameProblem } from "../github/branches.ts";
 import { signed } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
@@ -50,6 +51,8 @@ export interface ScheduleInput {
   threadKind?: ThreadKind | null;
   threadNumber?: number | null;
   prompt: string;
+  /** Branch the runs' pull requests go into; null: as the agent's other work. */
+  baseBranch?: string | null;
   maxRuns?: number | null;
   endsAt?: string | null;
   enabled?: boolean;
@@ -62,6 +65,8 @@ function checkFields(input: Partial<ScheduleInput>): void {
   if (input.maxRuns !== undefined && input.maxRuns !== null && (!Number.isInteger(input.maxRuns) || input.maxRuns < 1)) throw new Error("max runs must be a whole number, 1 or more");
   if (input.endsAt && Number.isNaN(Date.parse(input.endsAt))) throw new Error(`"${input.endsAt}" isn't a date (use a date like 2026-12-31 or 2026-12-31T18:00:00Z)`);
   if (input.threadNumber !== undefined && input.threadNumber !== null && (!Number.isInteger(input.threadNumber) || input.threadNumber < 1)) throw new Error("The issue or pull request number must be a positive whole number");
+  const problem = input.baseBranch ? branchNameProblem(input.baseBranch.trim()) : null;
+  if (problem) throw new Error(`Base branch: ${problem}`);
 }
 
 const endOf = (value: string | null | undefined): string | null => {
@@ -95,6 +100,7 @@ export function addSchedule(input: ScheduleInput, by: { login: string; source: S
     threadKind: input.threadNumber ? (input.threadKind ?? null) : null,
     threadNumber: input.threadNumber ?? null,
     prompt: input.prompt.trim(),
+    baseBranch: input.baseBranch?.trim() || null,
     enabled: input.enabled !== false,
     source: by.source,
     fileKey: by.fileKey ?? null,
@@ -122,6 +128,7 @@ export function changeSchedule(schedule: Schedule, patch: Partial<Omit<ScheduleI
   }
   if (patch.threadNumber !== undefined) Object.assign(next, { threadNumber: patch.threadNumber ?? null, threadKind: patch.threadNumber ? (patch.threadKind ?? null) : null });
   if (patch.maxRuns !== undefined) next.maxRuns = patch.maxRuns ?? null;
+  if (patch.baseBranch !== undefined) next.baseBranch = patch.baseBranch?.trim() || null;
   if (patch.endsAt !== undefined) next.endsAt = endOf(patch.endsAt);
   if (patch.enabled !== undefined) next.enabled = patch.enabled;
   const merged = { ...schedule, ...next };
@@ -162,7 +169,7 @@ export function scheduleLine(schedule: Schedule): string {
   const target = schedule.threadNumber ? `${schedule.owner}/${schedule.repo}#${schedule.threadNumber}` : `${schedule.owner}/${schedule.repo} (an issue is opened on the first run)`;
   const state = schedule.enabled ? (schedule.nextRunAt ? `next run ${schedule.nextRunAt.slice(0, 16).replace("T", " ")} UTC` : "no run due") : `paused${schedule.note ? `: ${schedule.note}` : ""}`;
   const last = scheduleTasks(schedule.id, 1)[0];
-  return `#${schedule.id} "${schedule.name}": ${description}, on ${target}; ${state}; ${schedule.runs} run${schedule.runs === 1 ? "" : "s"} so far${last ? ` (last: task #${last.id}, ${last.status})` : ""}${schedule.source === "file" ? "; from agent.md" : ""}`;
+  return `#${schedule.id} "${schedule.name}": ${description}, on ${target}${schedule.baseBranch ? ` (pull requests into ${schedule.baseBranch})` : ""}; ${state}; ${schedule.runs} run${schedule.runs === 1 ? "" : "s"} so far${last ? ` (last: task #${last.id}, ${last.status})` : ""}${schedule.source === "file" ? "; from agent.md" : ""}`;
 }
 
 /** What a scheduled run's prompt says about its schedule; null for other tasks. */
@@ -204,7 +211,7 @@ export function syncFileSchedules(agents: Profile[] = loadProfiles().agents): vo
   for (const [key, { agent, index }] of wanted) {
     const entry = agent.schedules[index]!;
     const [owner, repo] = entry.repo.split("/") as [string, string];
-    const fields: Partial<ScheduleInput> & Pick<ScheduleInput, "name" | "when" | "owner" | "repo" | "prompt"> = { name: entry.name, when: entry.when, timezone: entry.timezone ?? config.scheduleTimezone, owner, repo, prompt: entry.prompt, maxRuns: entry.maxRuns, endsAt: endOf(entry.endsAt) };
+    const fields: Partial<ScheduleInput> & Pick<ScheduleInput, "name" | "when" | "owner" | "repo" | "prompt"> = { name: entry.name, when: entry.when, timezone: entry.timezone ?? config.scheduleTimezone, owner, repo, prompt: entry.prompt, baseBranch: entry.baseBranch, maxRuns: entry.maxRuns, endsAt: endOf(entry.endsAt) };
     // Without an issue in the file, the first run opens one and the schedule keeps it.
     if (entry.issue) fields.threadNumber = entry.issue;
     const existing = known.get(key);
@@ -318,6 +325,7 @@ export async function runSchedule(scheduleId: number, why: "due" | "now", at = n
     requestText: schedule.prompt,
     requestUrl: "",
     scheduleId: schedule.id,
+    requestedBase: schedule.baseBranch,
   });
   const runs = schedule.runs + 1;
   const done = schedule.maxRuns !== null && runs >= schedule.maxRuns;

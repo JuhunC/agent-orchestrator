@@ -1,4 +1,4 @@
-import { describeRelations } from "../github/relations.ts";
+import { describeRelations, isIssueBranch } from "../github/relations.ts";
 import type { ThreadContext } from "../github/threads.ts";
 import type { GithubPermissions } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
@@ -8,6 +8,9 @@ type Agent = { name: string; handle: string; github?: Pick<GithubPermissions, "s
 export interface WorkspaceInfo {
   branch: string;
   baseBranch: string;
+  /** Where work goes when it isn't a sub-issue's (the configured base branch, else the default branch), and where that was set. */
+  targetBranch?: string;
+  targetFrom?: string | null;
   canPush: boolean;
   /** False when the agent is configured not to push or open PRs. */
   willPush: boolean;
@@ -87,6 +90,9 @@ function workspaceSection(repo: string, thread: ThreadContext, workspace: Worksp
         thread.kind === "pull"
           ? "Publish with the github tool commit_and_push; that updates this pull request."
           : "Publish with the github tools: commit_and_push, then open_pull_request.",
+        ...(thread.kind !== "pull" && workspace.targetFrom && workspace.baseBranch === workspace.targetBranch
+          ? [`Work in this repository goes into \`${workspace.targetBranch}\` (the base branch set ${workspace.targetFrom}), not the default branch \`${thread.defaultBranch}\`: open_pull_request targets it, so compare with and merge from \`origin/${workspace.targetBranch}\`.`]
+          : []),
         "Don't change branches or rewrite history that's already pushed.",
       ].join("\n")
     : [
@@ -103,10 +109,11 @@ function relatedSection(task: Task, thread: ThreadContext, workspace: WorkspaceI
   if (!lines.length) return "";
   const github = agent?.github;
   const parent = thread.relations.parent;
-  if (parent && workspace.baseBranch !== thread.defaultBranch) {
+  const target = workspace.targetBranch ?? thread.defaultBranch;
+  if (parent && isIssueBranch(workspace.baseBranch) && workspace.baseBranch !== target) {
     lines.push(
       "",
-      `This is a sub-issue of #${parent.number}: your branch \`${workspace.branch}\` starts from the parent's branch \`${workspace.baseBranch}\`, and your work merges into that branch, not into \`${thread.defaultBranch}\`${workspace.willPush ? " (open_pull_request targets it)" : ""}.${github?.mergeIntoParent ? " When your work is pushed and done, merge it there with merge_into_parent." : ""}`,
+      `This is a sub-issue of #${parent.number}: your branch \`${workspace.branch}\` starts from the parent's branch \`${workspace.baseBranch}\`, and your work merges into that branch, not into \`${target}\`${workspace.willPush ? " (open_pull_request targets it)" : ""}.${github?.mergeIntoParent ? " When your work is pushed and done, merge it there with merge_into_parent." : ""}`,
     );
   }
   if (thread.relations.subIssues.length && github && github.subIssues !== "none") {

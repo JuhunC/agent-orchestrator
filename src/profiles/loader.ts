@@ -3,6 +3,7 @@ import { basename, join } from "node:path";
 import { parse } from "yaml";
 import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
+import { branchNameProblem, parseBaseBranch } from "../github/branches.ts";
 import { RELATIONS, type Relation } from "../github/relations.ts";
 import { normaliseMcpServers } from "./mcp.ts";
 import { checkTimezone, parseWhen, shortestGapMinutes } from "../schedules/when.ts";
@@ -119,6 +120,7 @@ export const GITHUB_DEFAULTS = {
   relations: false,
   merge_into_parent: false,
   parent_branch: true,
+  base_branch: null,
   start_related: false,
   account_token_env: null,
   account_mentions: true,
@@ -189,12 +191,15 @@ function parseSchedules(value: unknown, errors: string[]): FileSchedule[] {
     if (issue !== null && (!Number.isInteger(issue) || issue < 1)) problems.push('"issue" must be an issue or pull request number');
     const prompt = String(entry.prompt ?? "").trim();
     if (!prompt) problems.push('needs "prompt": what to do on each run');
+    const baseBranch = entry.base_branch === undefined || entry.base_branch === null || entry.base_branch === "" ? null : String(entry.base_branch).trim();
+    const baseProblem = baseBranch === null ? null : branchNameProblem(baseBranch);
+    if (baseProblem) problems.push(`"base_branch": ${baseProblem}`);
     const maxRuns = entry.max_runs === undefined || entry.max_runs === null ? null : Number(entry.max_runs);
     if (maxRuns !== null && (!Number.isInteger(maxRuns) || maxRuns < 1)) problems.push('"max_runs" must be a whole number, 1 or more');
     const endsAt = entry.ends_at === undefined || entry.ends_at === null ? null : String(entry.ends_at instanceof Date ? entry.ends_at.toISOString() : entry.ends_at);
     if (endsAt && Number.isNaN(Date.parse(endsAt))) problems.push('"ends_at" must be a date like 2026-12-31');
     if (problems.length) errors.push(`${where} ${problems.join("; ")}`);
-    else schedules.push({ name, when, timezone, repo, issue, prompt, maxRuns, endsAt: endsAt && /^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/.test(endsAt) && entry.ends_at instanceof Date ? endsAt.slice(0, 10) : endsAt });
+    else schedules.push({ name, when, timezone, repo, issue, prompt, baseBranch, maxRuns, endsAt: endsAt && /^\d{4}-\d{2}-\d{2}T00:00:00\.000Z$/.test(endsAt) && entry.ends_at instanceof Date ? endsAt.slice(0, 10) : endsAt });
   });
   return schedules;
 }
@@ -318,6 +323,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
       relations: github.relations === true,
       mergeIntoParent: github.merge_into_parent === true,
       parentBranch: github.parent_branch !== false,
+      baseBranch: parseBaseBranch(github.base_branch, "github.base_branch", errors),
       startRelated: parseRelations(github.start_related, "start_related", errors),
       accountTokenEnv: parseTokenEnv(github.account_token_env, errors),
       accountMentions: github.account_mentions !== false,

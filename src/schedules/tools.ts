@@ -4,6 +4,7 @@ import { config } from "../config.ts";
 import { getSchedule, listSchedules } from "../db.ts";
 import { errorMessage } from "../log.ts";
 import type { Profile } from "../profiles/types.ts";
+import { checkBranchExists } from "../runtime/base-branch.ts";
 import type { ToolContext } from "../runtime/github-tools.ts";
 import type { Schedule } from "../types.ts";
 import { addSchedule, changeSchedule, describeSchedule, removeSchedule, scheduleLine } from "./runner.ts";
@@ -19,6 +20,11 @@ const WHEN = z
 const TIMEZONE = z.string().optional().describe(`Time zone for cron times, e.g. "Asia/Seoul" or "America/New_York" (default ${config.scheduleTimezone})`);
 const ENDS = z.string().nullable().optional().describe("Stop after this date or time, e.g. 2026-12-31 (null: no end)");
 const MAX_RUNS = z.number().int().positive().nullable().optional().describe("Stop after this many runs (null: no limit)");
+const BASE = z
+  .string()
+  .nullable()
+  .optional()
+  .describe("Branch the runs' pull requests go into, e.g. develop, when someone asks for one (null or left out: the same branch as your other work here)");
 
 /** The schedule tools an agent gets (can_schedule in agent.md): make, list, change and stop its own repeating runs. */
 export function scheduleTools(profile: Profile, current: () => ToolContext | null): SdkMcpToolDefinition<any>[] {
@@ -42,7 +48,7 @@ export function scheduleTools(profile: Profile, current: () => ToolContext | nul
   const summary = (schedule: Schedule) => {
     const { description, upcoming } = describeSchedule(schedule);
     const target = schedule.threadNumber ? `${schedule.threadKind === "pull" ? "pull request" : "issue"} #${schedule.threadNumber}` : "a new issue (opened on the first run)";
-    return `#${schedule.id} "${schedule.name}" runs ${description}${schedule.maxRuns ? `, ${schedule.maxRuns} times at most` : ""}${schedule.endsAt ? `, until ${schedule.endsAt.slice(0, 16).replace("T", " ")} UTC` : ""}. Each run works on ${target} in ${schedule.owner}/${schedule.repo} and posts its result there.${upcoming.length ? ` Next runs (UTC): ${upcoming.map((time) => time.slice(0, 16).replace("T", " ")).join(", ")}.` : schedule.enabled ? "" : " It's paused."}`;
+    return `#${schedule.id} "${schedule.name}" runs ${description}${schedule.maxRuns ? `, ${schedule.maxRuns} times at most` : ""}${schedule.endsAt ? `, until ${schedule.endsAt.slice(0, 16).replace("T", " ")} UTC` : ""}. Each run works on ${target} in ${schedule.owner}/${schedule.repo} and posts its result there${schedule.baseBranch ? `; its pull requests go into ${schedule.baseBranch}` : ""}.${upcoming.length ? ` Next runs (UTC): ${upcoming.map((time) => time.slice(0, 16).replace("T", " ")).join(", ")}.` : schedule.enabled ? "" : " It's paused."}`;
   };
 
   return [
@@ -55,13 +61,15 @@ export function scheduleTools(profile: Profile, current: () => ToolContext | nul
         timezone: TIMEZONE,
         prompt: z.string().min(1).describe("What to do on each run, as a complete instruction"),
         issue: z.number().int().positive().optional().describe("The issue or pull request number in this repository each run works on (default: this thread)"),
+        base_branch: BASE,
         max_runs: MAX_RUNS,
         ends_at: ENDS,
       },
       (args) =>
-        run((ctx) => {
+        run(async (ctx) => {
           const { task } = ctx;
           if (task.triggerKind === "schedule") return fail("A scheduled run can't make more schedules. You can change or stop this one with update_schedule or delete_schedule.");
+          if (args.base_branch) await checkBranchExists(ctx.gh, task.owner, task.repo, args.base_branch.trim());
           const schedule = addSchedule(
             {
               agent: profile.name,
@@ -73,6 +81,7 @@ export function scheduleTools(profile: Profile, current: () => ToolContext | nul
               threadKind: args.issue && args.issue !== task.threadNumber ? null : task.threadKind,
               threadNumber: args.issue ?? task.threadNumber,
               prompt: args.prompt,
+              baseBranch: args.base_branch ?? null,
               maxRuns: args.max_runs ?? null,
               endsAt: args.ends_at ?? null,
             },
@@ -91,7 +100,7 @@ export function scheduleTools(profile: Profile, current: () => ToolContext | nul
     ),
     tool(
       "update_schedule",
-      "Change one of your schedules: its timing, prompt, name or end, or pause and resume it. Leave out what stays the same.",
+      "Change one of your schedules: its timing, prompt, name, base branch or end, or pause and resume it. Leave out what stays the same.",
       {
         id: z.number().int().positive().describe("The schedule's id (see list_schedules)"),
         name: z.string().min(1).max(120).optional(),
@@ -99,13 +108,15 @@ export function scheduleTools(profile: Profile, current: () => ToolContext | nul
         timezone: TIMEZONE,
         prompt: z.string().min(1).optional().describe("The new instruction for each run"),
         paused: z.boolean().optional().describe("true pauses it, false starts it again"),
+        base_branch: BASE,
         max_runs: MAX_RUNS,
         ends_at: ENDS,
       },
       (args) =>
-        run((ctx) => {
+        run(async (ctx) => {
           const schedule = own(args.id, "change");
           if (typeof schedule === "string") return fail(schedule);
+          if (args.base_branch) await checkBranchExists(ctx.gh, schedule.owner, schedule.repo, args.base_branch.trim());
           const updated = changeSchedule(schedule, {
             ...(args.name !== undefined ? { name: args.name } : {}),
             ...(args.when !== undefined ? { when: args.when } : {}),
@@ -114,6 +125,7 @@ export function scheduleTools(profile: Profile, current: () => ToolContext | nul
             ...(args.paused !== undefined ? { enabled: !args.paused } : {}),
             ...(args.max_runs !== undefined ? { maxRuns: args.max_runs } : {}),
             ...(args.ends_at !== undefined ? { endsAt: args.ends_at } : {}),
+            ...(args.base_branch !== undefined ? { baseBranch: args.base_branch } : {}),
           });
           ctx.onEvent("tool", `Changed schedule #${updated.id} "${updated.name}"`);
           return ok(`Changed: ${summary(updated)}${!updated.enabled && updated.note ? ` (${updated.note})` : ""}`);

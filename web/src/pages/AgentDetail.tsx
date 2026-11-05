@@ -130,12 +130,24 @@ export function AgentDetail({ name }: { name: string }) {
             <dd>
               <Chips items={permissions} empty="read only" />
             </dd>
+            <dt>Base branch</dt>
+            <dd>
+              {agent.baseBranch ? (
+                <span title="github.base_branch">
+                  pull requests go into <code>{agent.baseBranch}</code> (a board, schedule or run can name another)
+                </span>
+              ) : (
+                <span className="meta" title="github.base_branch">
+                  the repository's setting (<a href={href("/settings")}>Settings</a>) or default branch, unless a board, schedule or run names one
+                </span>
+              )}
+            </dd>
             <dt>Sub-issues</dt>
             <dd>
               {agent.github.parentBranch ? (
                 <span title="github.parent_branch">branch from and merge into the parent issue's branch</span>
               ) : (
-                <span className="meta" title="github.parent_branch: false">merge into the default branch, like any issue</span>
+                <span className="meta" title="github.parent_branch: false">merge into the base branch, like any issue</span>
               )}
             </dd>
             <dt>Limits</dt>

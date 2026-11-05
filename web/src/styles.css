@@ -1300,3 +1300,18 @@ button.link:hover {
     align-items: flex-start;
   }
 }
+
+/* Settings → Base branches: repository, branch, Set */
+.base-branch-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr) auto;
+  gap: 8px;
+}
+@media (max-width: 640px) {
+  .base-branch-form {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .base-branch-form input:first-child {
+    grid-column: 1 / -1;
+  }
+}

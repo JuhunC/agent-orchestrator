@@ -58,6 +58,9 @@ import { clearLimit, getLimit } from "../runner/limit-store.ts";
 import { startManualTask } from "../triggers.ts";
 import { usageReport } from "../runner/usage-report.ts";
 import { registerScheduleRoutes } from "./schedules-api.ts";
+import { registerBaseBranchRoutes } from "./base-branch-api.ts";
+import { branchNameProblem, describeBaseSetting, pickBase } from "../github/branches.ts";
+import { checkBranchExists } from "../runtime/base-branch.ts";
 import type { Task, ThreadKind, ThreadRef } from "../types.ts";
 
 const KINDS: ThreadKind[] = ["issue", "pull", "discussion"];
@@ -68,6 +71,8 @@ function agentView(profile: Profile) {
     ...rest,
     ownMcp: Object.keys(ownMcp),
     ownSkills: profile.ownSkills.map((skill) => ({ name: skill.name, description: skill.description })),
+    /** github.base_branch in words, for the agent's page. */
+    baseBranch: describeBaseSetting(profile.github.baseBranch),
     dir: undefined,
   };
 }
@@ -208,6 +213,7 @@ function appManifest(name: string) {
 
 export function registerApi(app: FastifyInstance): void {
   registerScheduleRoutes(app);
+  registerBaseBranchRoutes(app);
   // ---------- live stream ----------
   app.get("/api/stream", (request, reply) => {
     reply.hijack();
@@ -278,6 +284,8 @@ export function registerApi(app: FastifyInstance): void {
       requestUrl: original.requestUrl,
       retryOf: original.id,
       dryRun: original.dryRun,
+      // A retry isn't a board task, so it keeps the board's base branch (as the board has it now) itself.
+      requestedBase: original.requestedBase ?? (original.board ? pickBase(loadBoards().boards.find((board) => board.name === original.board)?.baseBranch, original.owner, original.repo) : null),
     });
     bus.publish({ type: "task", task });
     scheduler.kick();
@@ -310,18 +318,23 @@ export function registerApi(app: FastifyInstance): void {
       boardColumn: original.boardColumn,
       boardItemId: original.boardItemId,
       dryRun: true,
+      requestedBase: original.requestedBase,
     });
     bus.publish({ type: "task", task });
     scheduler.kick();
     return task;
   });
 
-  app.post<{ Body: { agent: string; repo: string; number: number; kind?: ThreadKind | "auto"; instruction: string } }>("/api/tasks", async (request, reply) => {
+  app.post<{ Body: { agent: string; repo: string; number: number; kind?: ThreadKind | "auto"; instruction: string; baseBranch?: string | null } }>("/api/tasks", async (request, reply) => {
     const { agent, repo, number, instruction } = request.body ?? ({} as never);
     const [owner, name] = String(repo ?? "").split("/");
     if (!owner || !name || !number || !instruction?.trim()) return reply.code(400).send({ error: "Agent, owner/repo, number and instruction are required" });
+    const baseBranch = request.body.baseBranch?.trim() || null;
+    const baseProblem = baseBranch ? branchNameProblem(baseBranch) : null;
+    if (baseProblem) return reply.code(400).send({ error: `Base branch: ${baseProblem}` });
     try {
       const installationId = await findInstallation(owner, name);
+      if (baseBranch) await checkBranchExists(await installationClient(installationId), owner, name, baseBranch);
       let kind = request.body.kind && request.body.kind !== "auto" ? request.body.kind : null;
       if (!kind) {
         const gh = await installationClient(installationId);
@@ -337,6 +350,7 @@ export function registerApi(app: FastifyInstance): void {
         instruction: instruction.trim(),
         requestedBy: request.adminLogin ?? "admin",
         installationId,
+        baseBranch,
       });
       return { id };
     } catch (error) {
@@ -505,6 +519,7 @@ export function registerApi(app: FastifyInstance): void {
         workTypes: board.workTypes,
         subIssues: board.subIssues,
         fields: board.fields,
+        baseBranch: describeBaseSetting(board.baseBranch),
         errors: board.errors,
         status: boardStatus(board.name),
         items: listBoardItems(board.name).slice(0, 200),

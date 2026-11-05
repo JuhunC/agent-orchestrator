@@ -122,6 +122,8 @@ addColumn("tasks", "profile_commit", "TEXT");
 // Set for runs a schedule started (see schedules/runner.ts).
 addColumn("tasks", "schedule_id", "INTEGER");
 db.exec("CREATE INDEX IF NOT EXISTS tasks_schedule ON tasks (schedule_id, id)");
+// The base branch a schedule, the Run agent dialog or a retry asked for (see runtime/base-branch.ts).
+addColumn("tasks", "requested_base", "TEXT");
 db.exec("CREATE INDEX IF NOT EXISTS deliveries_delivery_id ON deliveries (delivery_id)");
 // Time-range queries (spending, usage, outcomes) use exactly this expression, so it's indexed.
 db.exec("CREATE INDEX IF NOT EXISTS tasks_ended ON tasks (COALESCE(finished_at, started_at, created_at))");
@@ -240,6 +242,7 @@ function toTask(row: Row): Task {
     profileVersion: (row.profile_version as string | null) ?? null,
     profileCommit: (row.profile_commit as string | null) ?? null,
     scheduleId: row.schedule_id === null || row.schedule_id === undefined ? null : Number(row.schedule_id),
+    requestedBase: (row.requested_base as string | null) ?? null,
   };
 }
 
@@ -264,14 +267,15 @@ export interface NewTask {
   startedByTask?: number | null;
   dryRun?: boolean;
   scheduleId?: number | null;
+  requestedBase?: string | null;
 }
 
 export function createTask(input: NewTask): Task {
   const result = db
     .prepare(
       `INSERT INTO tasks (agent, installation_id, owner, repo, thread_kind, thread_number, thread_title, thread_url,
-         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task, dry_run, schedule_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task, dry_run, schedule_id, requested_base)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.agent,
@@ -295,6 +299,7 @@ export function createTask(input: NewTask): Task {
       input.startedByTask ?? null,
       input.dryRun ? 1 : 0,
       input.scheduleId ?? null,
+      input.requestedBase ?? null,
     );
   return getTask(Number(result.lastInsertRowid))!;
 }
@@ -1148,6 +1153,7 @@ db.exec(`CREATE TABLE IF NOT EXISTS schedules (
   note TEXT
 )`);
 db.exec("CREATE INDEX IF NOT EXISTS schedules_due ON schedules (enabled, next_run_at)");
+addColumn("schedules", "base_branch", "TEXT");
 
 function toSchedule(row: Row): Schedule {
   const number = (value: SQLInputValue) => (value === null || value === undefined ? null : Number(value));
@@ -1163,6 +1169,7 @@ function toSchedule(row: Row): Schedule {
     threadKind: (row.thread_kind as ThreadKind | null) ?? null,
     threadNumber: number(row.thread_number),
     prompt: String(row.prompt),
+    baseBranch: (row.base_branch as string | null) ?? null,
     enabled: Boolean(row.enabled),
     source: String(row.source) as Schedule["source"],
     fileKey: (row.file_key as string | null) ?? null,
@@ -1191,6 +1198,7 @@ const SCHEDULE_COLUMNS: Record<string, string> = {
   threadKind: "thread_kind",
   threadNumber: "thread_number",
   prompt: "prompt",
+  baseBranch: "base_branch",
   enabled: "enabled",
   source: "source",
   fileKey: "file_key",

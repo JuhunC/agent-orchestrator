@@ -354,6 +354,8 @@ export async function startManualTask(input: {
   instruction: string;
   requestedBy: string;
   installationId: number;
+  /** Base branch for this run's pull request; null: the usual one (see runtime/base-branch.ts). */
+  baseBranch?: string | null;
 }): Promise<number> {
   const agent = loadProfiles().agents.find((candidate) => candidate.name === input.agentName);
   if (!agent) throw new Error(`Unknown agent ${input.agentName}`);
@@ -370,6 +372,7 @@ export async function startManualTask(input: {
     requestedBy: input.requestedBy,
     requestText: input.instruction,
     requestUrl: "",
+    requestedBase: input.baseBranch ?? null,
   });
   bus.publish({ type: "task", task });
   scheduler.kick();
