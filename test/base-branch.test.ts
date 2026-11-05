@@ -32,7 +32,8 @@ const remote = join(h.remotes, "acme", "widgets.git");
 const git = (...args: string[]) => h.run(h.root, "--git-dir", remote, ...args);
 const tips: Record<string, string> = {};
 for (const branch of ["develop", "release", "staging"]) {
-  tips[branch] = git("commit-tree", "main^{tree}", "-p", "main", "-m", `${branch} line`);
+  // Its own identity: CI machines have no git user configured.
+  tips[branch] = h.run(h.root, "-c", "user.name=Test", "-c", "user.email=test@example.com", "--git-dir", remote, "commit-tree", "main^{tree}", "-p", "main", "-m", `${branch} line`);
   git("update-ref", `refs/heads/${branch}`, tips[branch]!);
 }
 
