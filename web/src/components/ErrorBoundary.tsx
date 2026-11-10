@@ -1,4 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { Button } from "@astryxdesign/core";
+import { Notice } from "./ui.tsx";
 
 /** Shows a page's error instead of a blank screen, and recovers when you navigate elsewhere. */
 export class ErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, { error: Error | null }> {
@@ -19,12 +21,9 @@ export class ErrorBoundary extends Component<{ children: ReactNode; resetKey: st
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div className="banner error">
-        <span className="grow">
-          <b>This page couldn't be shown.</b> {this.state.error.message}
-        </span>
-        <button onClick={() => window.location.reload()}>Reload</button>
-      </div>
+      <Notice tone="error" title="This page couldn't be shown." action={<Button label="Reload" onClick={() => window.location.reload()} />}>
+        {this.state.error.message}
+      </Notice>
     );
   }
 }

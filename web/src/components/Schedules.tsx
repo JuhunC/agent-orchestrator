@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { Button, Code, DateInput, Divider, Field, Grid, GridSpan, HStack, Selector, StackItem, Text, TextArea, TextInput, VStack, type ISODateString } from "@astryxdesign/core";
 import { api, useApi, type AgentsResponse, type BaseChoice, type Installation, type ScheduleView, type SchedulesResponse } from "../api.ts";
 import { href } from "../router.ts";
-import { Dialog, Empty, Panel, Pill, Switch, who } from "./ui.tsx";
+import { A, Dialog, Empty, ErrorText, LinkButton, Meta, Notice, Panel, Pill, SuggestInput, Switch, Tag, who } from "./ui.tsx";
 
 const PRESETS: { label: string; when: string }[] = [
   { label: "Every hour", when: "@hourly" },
@@ -54,133 +55,135 @@ export function Schedules({ agent }: { agent?: string }) {
 
   const schedules = data?.schedules ?? [];
   return (
-    <Panel
-      title="Schedules"
-      hint="times in your time zone"
-      actions={
-        <button className="small primary" onClick={() => setEditing("new")}>
-          New schedule
-        </button>
-      }
-      tight={schedules.length > 0}
-    >
+    <Panel title="Schedules" hint="times in your time zone" actions={<Button label="New schedule" size="sm" variant="primary" onClick={() => setEditing("new")} />} tight={schedules.length > 0}>
       {(error || notice) && (
-        <div className={schedules.length ? "schedule-banners" : undefined}>
-          {error && <div className="banner error">{error}</div>}
-          {notice && <div className="banner info">{notice}</div>}
-        </div>
+        <VStack gap={2} padding={schedules.length ? 4 : 0} paddingBlockEnd={0}>
+          {error && <Notice tone="error" title={error} />}
+          {notice && <Notice tone="info" title={notice} />}
+        </VStack>
       )}
       {!data ? (
         <Empty>Loading…</Empty>
       ) : !schedules.length ? (
         <Empty>
-          No schedules yet. Make one here, list them under <code>schedules:</code> in {agent ? "this agent's" : "an agent's"} agent.md, or ask {agent ? "the agent" : "an agent"} on GitHub, e.g. "every Monday at 9, check
-          for outdated dependencies".
+          No schedules yet. Make one here, list them under <Code size="inherit">schedules:</Code> in {agent ? "this agent's" : "an agent's"} agent.md, or ask {agent ? "the agent" : "an agent"} on GitHub, e.g. "every Monday at 9, check for
+          outdated dependencies".
         </Empty>
       ) : (
-        <div className="schedule-list">
-          {schedules.map((schedule) => (
-            <div key={schedule.id} className={`schedule-item${schedule.enabled ? "" : " paused"}`}>
-              <div className="schedule-main">
-                <div className="row" style={{ gap: 8 }}>
-                  <span className="title">{schedule.name}</span>
-                  <span className="badge">{SOURCE[schedule.source]}</span>
-                  {!schedule.enabled && <Pill tone="off">paused</Pill>}
-                </div>
-                <div className="meta">
-                  Runs {schedule.description}
-                  {schedule.maxRuns ? ` · ${schedule.runs} of ${schedule.maxRuns} runs` : schedule.runs ? ` · ${schedule.runs} run${schedule.runs === 1 ? "" : "s"} so far` : ""}
-                  {schedule.endsAt ? ` · until ${new Date(schedule.endsAt).toLocaleDateString(undefined, { timeZone: "UTC" })}` : ""}
-                </div>
-                <div className="meta">
-                  On {target(schedule)} {schedule.threadNumber ? `(${schedule.threadKind === "pull" ? "pull request" : schedule.threadKind ?? "issue or pull request"})` : "(the first run opens an issue)"}
-                  {schedule.baseBranch && (
-                    <>
-                      {" · pull requests into "}
-                      <code>{schedule.baseBranch}</code>
-                    </>
-                  )}
-                  {schedule.enabled && schedule.nextRunAt ? ` · next ${localTime(schedule.nextRunAt)}, ${fromNow(schedule.nextRunAt)}` : ""}
-                </div>
-                <div className="meta">
-                  {!agent && (
-                    <>
-                      <a href={href(`/agents/${schedule.agent}`)}>{schedule.agent}</a>
-                      {" · "}
-                    </>
-                  )}
-                  {schedule.source === "file" ? "written in agent.md" : <>set up by {who(schedule.createdBy)}</>}
-                  {schedule.createdByTask && (
-                    <>
-                      {" in "}
-                      <a href={href(`/tasks/${schedule.createdByTask}`)}>task #{schedule.createdByTask}</a>
-                    </>
-                  )}
-                </div>
-                {schedule.agentMissing && <div className="error-text">There's no agent called {schedule.agent} any more.</div>}
-                {schedule.error && <div className="error-text">{schedule.error}</div>}
-                {schedule.note && <div className={schedule.enabled ? "meta" : "warn-text"}>{schedule.note}</div>}
-              </div>
-              <div className="schedule-side">
-                <div className="row" style={{ gap: 5 }} aria-label="Recent runs, newest first">
-                  {schedule.recent.length ? (
-                    <>
-                      <span className="meta">Recent:</span>
-                      {schedule.recent.map((run) => (
-                        <a
-                          key={run.id}
-                          className={`run-dot ${run.status}`}
-                          href={href(`/tasks/${run.id}`)}
-                          title={`Task #${run.id}: ${run.status}, ${new Date(run.createdAt).toLocaleString()}`}
-                          aria-label={`Task #${run.id}, ${run.status}`}
-                        />
+        <VStack gap={0}>
+          {schedules.map((schedule, index) => (
+            <VStack key={schedule.id} gap={0}>
+              {index > 0 && <Divider />}
+              <HStack gap={4} padding={4} wrap="wrap" vAlign="start">
+                <StackItem size="fill">
+                  <VStack gap={1}>
+                    <HStack gap={2} vAlign="center" wrap="wrap">
+                      <Text weight="semibold" color={schedule.enabled ? undefined : "secondary"}>
+                        {schedule.name}
+                      </Text>
+                      <Tag>{SOURCE[schedule.source]}</Tag>
+                      {!schedule.enabled && <Pill tone="off">paused</Pill>}
+                    </HStack>
+                    <Meta block>
+                      Runs {schedule.description}
+                      {schedule.maxRuns ? ` · ${schedule.runs} of ${schedule.maxRuns} runs` : schedule.runs ? ` · ${schedule.runs} run${schedule.runs === 1 ? "" : "s"} so far` : ""}
+                      {schedule.endsAt ? ` · until ${new Date(schedule.endsAt).toLocaleDateString(undefined, { timeZone: "UTC" })}` : ""}
+                    </Meta>
+                    <Meta block>
+                      On {target(schedule)} {schedule.threadNumber ? `(${schedule.threadKind === "pull" ? "pull request" : (schedule.threadKind ?? "issue or pull request")})` : "(the first run opens an issue)"}
+                      {schedule.baseBranch && (
+                        <>
+                          {" · pull requests into "}
+                          <Code size="inherit">{schedule.baseBranch}</Code>
+                        </>
+                      )}
+                      {schedule.enabled && schedule.nextRunAt ? ` · next ${localTime(schedule.nextRunAt)}, ${fromNow(schedule.nextRunAt)}` : ""}
+                    </Meta>
+                    <Meta block>
+                      {!agent && (
+                        <>
+                          <A to={`/agents/${schedule.agent}`}>{schedule.agent}</A>
+                          {" · "}
+                        </>
+                      )}
+                      {schedule.source === "file" ? "written in agent.md" : <>set up by {who(schedule.createdBy)}</>}
+                      {schedule.createdByTask && (
+                        <>
+                          {" in "}
+                          <A to={`/tasks/${schedule.createdByTask}`}>task #{schedule.createdByTask}</A>
+                        </>
+                      )}
+                    </Meta>
+                    {schedule.agentMissing && <ErrorText>There's no agent called {schedule.agent} any more.</ErrorText>}
+                    {schedule.error && <ErrorText>{schedule.error}</ErrorText>}
+                    {schedule.note &&
+                      (schedule.enabled ? (
+                        <Meta block>{schedule.note}</Meta>
+                      ) : (
+                        <Text display="block" className="ao-warn-text">
+                          {schedule.note}
+                        </Text>
                       ))}
-                    </>
-                  ) : (
-                    <span className="meta">No runs yet</span>
-                  )}
-                </div>
-                <div className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
-                  <Switch
-                    label={schedule.enabled ? `Pause ${schedule.name}` : `Resume ${schedule.name}`}
-                    checked={schedule.enabled}
-                    onChange={(enabled) => void act(() => api.patch(`/api/schedules/${schedule.id}`, { enabled }))}
-                  />
-                  <button
-                    className="small"
-                    onClick={() =>
-                      void act(async () => {
-                        const result = await api.post<{ task: number }>(`/api/schedules/${schedule.id}/run`);
-                        setNotice(`Started task #${result.task}.`);
-                      })
-                    }
-                  >
-                    Run now
-                  </button>
-                  {schedule.source !== "file" ? (
-                    <>
-                      <button className="small" onClick={() => setEditing(schedule)}>
-                        Edit
-                      </button>
-                      <button
-                        className="small danger"
-                        onClick={() => {
-                          if (window.confirm(`Delete the schedule "${schedule.name}"? It won't run again.`)) void act(() => api.del(`/api/schedules/${schedule.id}`), `Deleted "${schedule.name}".`);
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  ) : (
-                    <a className="button small" href={href(`/agents/${schedule.agent}`)} title="Schedules from agent.md are changed in the file">
-                      Edit agent.md
-                    </a>
-                  )}
-                </div>
-              </div>
-            </div>
+                  </VStack>
+                </StackItem>
+                <VStack gap={2} hAlign="end">
+                  <HStack gap={1.5} vAlign="center" aria-label="Recent runs, newest first">
+                    {schedule.recent.length ? (
+                      <>
+                        <Meta>Recent:</Meta>
+                        {schedule.recent.map((run) => (
+                          <a
+                            key={run.id}
+                            className={`ao-run-dot ${run.status}`}
+                            href={href(`/tasks/${run.id}`)}
+                            title={`Task #${run.id}: ${run.status}, ${new Date(run.createdAt).toLocaleString()}`}
+                            aria-label={`Task #${run.id}, ${run.status}`}
+                          />
+                        ))}
+                      </>
+                    ) : (
+                      <Meta>No runs yet</Meta>
+                    )}
+                  </HStack>
+                  <HStack gap={2} vAlign="center" wrap="wrap" hAlign="end">
+                    <Switch
+                      label={schedule.enabled ? `Pause ${schedule.name}` : `Resume ${schedule.name}`}
+                      checked={schedule.enabled}
+                      onChange={(enabled) => void act(() => api.patch(`/api/schedules/${schedule.id}`, { enabled }))}
+                    />
+                    <Button
+                      label="Run now"
+                      size="sm"
+                      onClick={() =>
+                        void act(async () => {
+                          const result = await api.post<{ task: number }>(`/api/schedules/${schedule.id}/run`);
+                          setNotice(`Started task #${result.task}.`);
+                        })
+                      }
+                    />
+                    {schedule.source !== "file" ? (
+                      <>
+                        <Button label="Edit" size="sm" onClick={() => setEditing(schedule)} />
+                        <Button
+                          label="Delete"
+                          size="sm"
+                          variant="destructive"
+                          onClick={() => {
+                            if (window.confirm(`Delete the schedule "${schedule.name}"? It won't run again.`)) void act(() => api.del(`/api/schedules/${schedule.id}`), `Deleted "${schedule.name}".`);
+                          }}
+                        />
+                      </>
+                    ) : (
+                      <span title="Schedules from agent.md are changed in the file">
+                        <LinkButton to={`/agents/${schedule.agent}`} label="Edit agent.md" size="sm" />
+                      </span>
+                    )}
+                  </HStack>
+                </VStack>
+              </HStack>
+            </VStack>
           ))}
-        </div>
+        </VStack>
       )}
       {editing && data && (
         <ScheduleDialog
@@ -292,114 +295,100 @@ function ScheduleDialog({ schedule, agent, defaultTimezone, onClose, onSaved }: 
   };
 
   const valid = form.agent && form.name.trim() && form.when.trim() && /^[^/\s]+\/[^/\s]+$/.test(form.repo) && form.prompt.trim() && !preview?.error;
+  const pickAgent = !agent && !schedule;
   return (
     <Dialog
       title={schedule ? `Edit "${schedule.name}"` : "New schedule"}
+      width={680}
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!valid || busy} onClick={() => void save()}>
-            {busy ? "Saving…" : schedule ? "Save" : "Create schedule"}
-          </button>
+          <Button label="Cancel" onClick={onClose} />
+          <Button label={busy ? "Saving…" : schedule ? "Save" : "Create schedule"} variant="primary" isDisabled={!valid || busy} onClick={() => void save()} />
         </>
       }
     >
-      <div className="form-grid">
-        {!agent && !schedule && (
-          <div className="field">
-            <label htmlFor="schedule-agent">Agent</label>
-            <select id="schedule-agent" value={form.agent} onChange={(event) => set("agent")(event.target.value)}>
-              {agents.map((candidate) => (
-                <option key={candidate.name} value={candidate.name}>
-                  {candidate.name} (@{candidate.handle})
-                </option>
-              ))}
-            </select>
-          </div>
+      <Grid columns={{ minWidth: 240 }} gap={4}>
+        {pickAgent && (
+          <Selector
+            label="Agent"
+            options={agents.map((candidate) => ({ value: candidate.name, label: `${candidate.name} (@${candidate.handle})` }))}
+            value={form.agent}
+            onChange={(value) => set("agent")(value ?? "")}
+          />
         )}
-        <div className={`field${!agent && !schedule ? "" : " full"}`}>
-          <label htmlFor="schedule-name">Name</label>
-          <input id="schedule-name" placeholder="Weekly dependency check" value={form.name} onChange={(event) => set("name")(event.target.value)} />
-        </div>
-        <div className="field full">
-          <label htmlFor="schedule-when">When</label>
-          <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
-            {PRESETS.map((preset) => (
-              <button key={preset.when} type="button" className={`small${form.when === preset.when ? " primary" : ""}`} onClick={() => set("when")(preset.when)}>
-                {preset.label}
-              </button>
-            ))}
-          </div>
-          <input id="schedule-when" value={form.when} onChange={(event) => set("when")(event.target.value)} placeholder='0 9 * * 1-5, @daily or "every 6h"' />
-          <span className="help">
+        <GridSpan columns={pickAgent ? 1 : "full"}>
+          <TextInput label="Name" placeholder="Weekly dependency check" value={form.name} onChange={set("name")} />
+        </GridSpan>
+        <GridSpan columns="full">
+          <VStack gap={2}>
+            <TextInput label="When" value={form.when} onChange={set("when")} placeholder='0 9 * * 1-5, @daily or "every 6h"' />
+            <HStack gap={1.5} wrap="wrap">
+              {PRESETS.map((preset) => (
+                <Button key={preset.when} label={preset.label} size="sm" variant={form.when === preset.when ? "primary" : "secondary"} onClick={() => set("when")(preset.when)} />
+              ))}
+            </HStack>
             {preview?.error ? (
-              <span className="error-text">{preview.error}</span>
+              <ErrorText>{preview.error}</ErrorText>
             ) : preview?.description ? (
-              <>
+              <Meta block>
                 Runs {preview.description}. Next: {preview.upcoming.map(localTime).join(", ")} (your time).
-              </>
+              </Meta>
             ) : (
-              "A cron expression (minute hour day month weekday), a shortcut like @daily, or an interval like every 6h."
+              <Meta block>A cron expression (minute hour day month weekday), a shortcut like @daily, or an interval like every 6h.</Meta>
             )}
-          </span>
-        </div>
-        <div className="field">
-          <label htmlFor="schedule-timezone">Time zone</label>
-          <input id="schedule-timezone" placeholder={defaultTimezone} value={form.timezone} onChange={(event) => set("timezone")(event.target.value)} />
-          <span className="help">
-            For cron times. Empty: {defaultTimezone}.{" "}
-            {browserZone && browserZone !== zone && (
-              <button type="button" className="link" onClick={() => set("timezone")(browserZone)}>
-                Use {browserZone}
-              </button>
-            )}
-          </span>
-        </div>
-        <div className="field">
-          <label htmlFor="schedule-repo">Repository</label>
-          <input id="schedule-repo" list="schedule-repos" placeholder="owner/repo" value={form.repo} onChange={(event) => set("repo")(event.target.value.trim())} />
-          <datalist id="schedule-repos">
-            {repos.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        </div>
-        <div className="field">
-          <label htmlFor="schedule-number">Issue or PR number</label>
-          <input id="schedule-number" inputMode="numeric" placeholder="optional" value={form.number} onChange={(event) => set("number")(event.target.value.replace(/\D/g, ""))} />
-          <span className="help">Each run works and replies there. Empty: the first run opens an issue for this schedule.</span>
-        </div>
-        <div className="field">
-          <label htmlFor="schedule-max">Stop after</label>
-          <div className="row" style={{ gap: 6 }}>
-            <input id="schedule-max" inputMode="numeric" placeholder="runs" value={form.maxRuns} onChange={(event) => set("maxRuns")(event.target.value.replace(/\D/g, ""))} style={{ width: 80 }} />
-            <input type="date" aria-label="End date" value={form.endsAt} onChange={(event) => set("endsAt")(event.target.value)} />
-          </div>
-          <span className="help">Optional: a number of runs, an end date, or both.</span>
-        </div>
-        <div className="field">
-          <label htmlFor="schedule-base">Base branch</label>
-          <input id="schedule-base" placeholder={usual?.branch ?? "default branch"} value={form.baseBranch} onChange={(event) => set("baseBranch")(event.target.value.trim())} />
-          <span className="help">
-            Where the runs' pull requests go. Empty:{" "}
-            {usual?.branch ? (
-              <>
-                <code>{usual.branch}</code> (set {usual.from})
-              </>
-            ) : (
-              "the repository's default branch"
-            )}
-            .
-          </span>
-        </div>
-        <div className="field full">
-          <label htmlFor="schedule-prompt">What to do each run</label>
-          <textarea id="schedule-prompt" rows={5} placeholder="Check for outdated dependencies. Open one pull request updating the ones that are safe to update, and list the rest." value={form.prompt} onChange={(event) => set("prompt")(event.target.value)} />
-          <span className="help">The same request every run, so write it to make sense on its own. The agent sees its earlier runs on the thread.</span>
-        </div>
-      </div>
-      {error && <p className="error-text">{error}</p>}
+          </VStack>
+        </GridSpan>
+        <VStack gap={1}>
+          <TextInput label="Time zone" placeholder={defaultTimezone} value={form.timezone} onChange={set("timezone")} description={`For cron times. Empty: ${defaultTimezone}.`} />
+          {browserZone && browserZone !== zone && (
+            <HStack>
+              <Button label={`Use ${browserZone}`} size="sm" variant="ghost" onClick={() => set("timezone")(browserZone)} />
+            </HStack>
+          )}
+        </VStack>
+        <SuggestInput label="Repository" placeholder="owner/repo" suggestions={repos} value={form.repo} onChange={(value) => set("repo")(value.trim())} />
+        <TextInput
+          label="Issue or PR number"
+          placeholder="optional"
+          value={form.number}
+          onChange={(value) => set("number")(value.replace(/\D/g, ""))}
+          description="Each run works and replies there. Empty: the first run opens an issue for this schedule."
+        />
+        <Field label="Stop after" inputID="schedule-max" description="Optional: a number of runs, an end date, or both.">
+          <HStack gap={2} vAlign="start">
+            <TextInput label="Runs" isLabelHidden placeholder="runs" width={90} value={form.maxRuns} onChange={(value) => set("maxRuns")(value.replace(/\D/g, ""))} id="schedule-max" />
+            <DateInput label="End date" isLabelHidden hasClear value={(form.endsAt || undefined) as ISODateString | undefined} onChange={(value) => set("endsAt")(value ?? "")} placeholder="end date" />
+          </HStack>
+        </Field>
+        <GridSpan columns="full">
+          <VStack gap={1}>
+            <TextInput label="Base branch" placeholder={usual?.branch ?? "default branch"} value={form.baseBranch} onChange={(value) => set("baseBranch")(value.trim())} />
+            <Meta block>
+              Where the runs' pull requests go. Empty:{" "}
+              {usual?.branch ? (
+                <>
+                  <Code size="inherit">{usual.branch}</Code> (set {usual.from})
+                </>
+              ) : (
+                "the repository's default branch"
+              )}
+              .
+            </Meta>
+          </VStack>
+        </GridSpan>
+        <GridSpan columns="full">
+          <TextArea
+            label="What to do each run"
+            rows={5}
+            placeholder="Check for outdated dependencies. Open one pull request updating the ones that are safe to update, and list the rest."
+            value={form.prompt}
+            onChange={set("prompt")}
+            description="The same request every run, so write it to make sense on its own. The agent sees its earlier runs on the thread."
+          />
+        </GridSpan>
+      </Grid>
+      {error && <ErrorText>{error}</ErrorText>}
     </Dialog>
   );
 }

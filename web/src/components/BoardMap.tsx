@@ -12,7 +12,7 @@ interface Edge {
   kind: EdgeKind;
 }
 
-const STROKE: Record<EdgeKind, string> = { forward: "var(--accent)", back: "var(--queued)", start: "var(--muted)" };
+const STROKE: Record<EdgeKind, string> = { forward: "var(--map-forward)", back: "var(--map-back)", start: "var(--map-start)" };
 
 function clip(text: string, max = 22): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -60,14 +60,15 @@ export function BoardMap({ board }: { board: BoardInfo }) {
   });
 
   const lines = columns.map((column) => nodeLines(board, column));
-  const nodeH = 30 + Math.max(...lines.map((items) => items.length)) * LINE;
+  const needsHumanNode = board.needsHuman && !position.has(board.needsHuman) ? board.needsHuman : null;
+  // The needs-human box has two lines of its own.
+  const nodeH = 30 + Math.max(...lines.map((items) => items.length), needsHumanNode ? 2 : 0) * LINE;
   const arc = (edge: Edge) => 26 + 22 * (Math.abs(edge.to - edge.from) - 1);
   const straight = (edge: Edge) => edge.kind === "forward" && edge.to === edge.from + 1;
   const above = edges.filter((edge) => edge.kind !== "back" && !straight(edge));
   const below = edges.filter((edge) => edge.kind === "back");
   const top = PAD + (above.length ? Math.max(...above.map(arc)) * 0.75 + 8 : 0);
   const bottom = top + nodeH;
-  const needsHumanNode = board.needsHuman && !position.has(board.needsHuman) ? board.needsHuman : null;
   const count = columns.length + (needsHumanNode ? 1 : 0);
   const width = PAD * 2 + count * NODE_W + (count - 1) * GAP;
   const height = bottom + (below.length ? Math.max(...below.map(arc)) * 0.75 + 8 : 0) + PAD;
@@ -90,8 +91,8 @@ export function BoardMap({ board }: { board: BoardInfo }) {
   };
 
   return (
-    <div className="board-map">
-      <div className="board-map-scroll">
+    <div className="ao-board-map">
+      <div>
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`Where agents can move cards on the ${board.name} board`}>
           <defs>
             {(Object.keys(STROKE) as EdgeKind[]).map((kind) => (
@@ -120,18 +121,18 @@ export function BoardMap({ board }: { board: BoardInfo }) {
                   height={nodeH}
                   rx={9}
                   style={{
-                    fill: column.agents.length ? "var(--panel)" : "var(--panel-2)",
-                    stroke: missing ? "var(--failed)" : column.agents.length ? "var(--accent-border)" : "var(--border-strong)",
+                    fill: column.agents.length ? "var(--map-node)" : "var(--map-node-idle)",
+                    stroke: missing ? "var(--map-error)" : column.agents.length ? "var(--map-border-agent)" : "var(--map-border)",
                     strokeWidth: column.agents.length ? 1.5 : 1,
                     strokeDasharray: column.agents.length ? undefined : "4 3",
                   }}
                 />
-                <text x={10} y={20} style={{ fill: "var(--text)", fontSize: 13, fontWeight: 600 }}>
+                <text x={10} y={20} style={{ fill: "var(--map-text)", fontSize: 13, fontWeight: 600 }}>
                   {clip(column.name, 17)}
-                  {counts[column.name] ? <tspan style={{ fill: "var(--muted)", fontWeight: 400 }}>{` · ${counts[column.name]}`}</tspan> : null}
+                  {counts[column.name] ? <tspan style={{ fill: "var(--map-muted)", fontWeight: 400 }}>{` · ${counts[column.name]}`}</tspan> : null}
                 </text>
                 {lines[index]!.map((line, row) => (
-                  <text key={row} x={10} y={38 + row * LINE} style={{ fill: line.tone === "accent" ? "var(--accent)" : line.tone === "muted" ? "var(--muted)" : "var(--text)", fontSize: 11.5 }}>
+                  <text key={row} x={10} y={38 + row * LINE} style={{ fill: line.tone === "accent" ? "var(--map-forward)" : line.tone === "muted" ? "var(--map-muted)" : "var(--map-text)", fontSize: 11.5 }}>
                     {clip(line.text, 25)}
                   </text>
                 ))}
@@ -141,22 +142,22 @@ export function BoardMap({ board }: { board: BoardInfo }) {
           {needsHumanNode && (
             <g transform={`translate(${left(columns.length)} ${top})`}>
               <title>{`${needsHumanNode}: agents can always move a card here, and loop guards send cards here.`}</title>
-              <rect width={NODE_W} height={nodeH} rx={9} style={{ fill: "var(--queued-bg)", stroke: "var(--queued-border)", strokeDasharray: "4 3" }} />
-              <text x={10} y={20} style={{ fill: "var(--queued)", fontSize: 13, fontWeight: 600 }}>
+              <rect width={NODE_W} height={nodeH} rx={9} style={{ fill: "var(--map-human-bg)", stroke: "var(--map-human)", strokeDasharray: "4 3" }} />
+              <text x={10} y={20} style={{ fill: "var(--map-human)", fontSize: 13, fontWeight: 600 }}>
                 {clip(needsHumanNode, 17)}
                 {counts[needsHumanNode] ? <tspan style={{ fontWeight: 400 }}>{` · ${counts[needsHumanNode]}`}</tspan> : null}
               </text>
-              <text x={10} y={38} style={{ fill: "var(--muted)", fontSize: 11.5 }}>
+              <text x={10} y={38} style={{ fill: "var(--map-muted)", fontSize: 11.5 }}>
                 from any agent column
               </text>
-              <text x={10} y={38 + LINE} style={{ fill: "var(--muted)", fontSize: 11.5 }}>
+              <text x={10} y={38 + LINE} style={{ fill: "var(--map-muted)", fontSize: 11.5 }}>
                 and from loop guards
               </text>
             </g>
           )}
         </svg>
       </div>
-      <div className="board-map-legend">
+      <div className="ao-legend">
         <span>
           <svg width="28" height="10" aria-hidden="true">
             <line x1="1" y1="5" x2="27" y2="5" style={{ stroke: STROKE.forward, strokeWidth: 2 }} />
@@ -177,7 +178,7 @@ export function BoardMap({ board }: { board: BoardInfo }) {
         </span>
         <span>
           <svg width="28" height="12" aria-hidden="true">
-            <rect x="1" y="1" width="26" height="10" rx="3" style={{ fill: "var(--panel-2)", stroke: "var(--border-strong)", strokeDasharray: "3 2" }} />
+            <rect x="1" y="1" width="26" height="10" rx="3" style={{ fill: "var(--map-node-idle)", stroke: "var(--map-border)", strokeDasharray: "3 2" }} />
           </svg>
           no agent: people move cards on
         </span>

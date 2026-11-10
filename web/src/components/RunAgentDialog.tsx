@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { Button, Code, Grid, GridSpan, Selector, TextArea, TextInput, VStack } from "@astryxdesign/core";
 import { api, type Agent, type BaseChoice, type Installation } from "../api.ts";
 import { navigate } from "../router.ts";
-import { Dialog } from "./ui.tsx";
+import { Dialog, ErrorText, Meta, SuggestInput } from "./ui.tsx";
 
 export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agent[]; initialAgent?: string; onClose: () => void }) {
   const enabled = agents.filter((agent) => agent.enabled);
@@ -59,69 +60,56 @@ export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agen
   return (
     <Dialog
       title="Run an agent"
+      width={640}
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!valid || busy} onClick={submit}>
-            {busy ? "Starting…" : "Start agent"}
-          </button>
+          <Button label="Cancel" onClick={onClose} />
+          <Button label={busy ? "Starting…" : "Start agent"} variant="primary" isDisabled={!valid || busy} onClick={() => void submit()} />
         </>
       }
     >
-      <div className="form-grid">
-        <div className="field">
-          <label htmlFor="run-agent">Agent</label>
-          <select id="run-agent" value={agent} onChange={(event) => setAgent(event.target.value)}>
-            {enabled.map((candidate) => (
-              <option key={candidate.name} value={candidate.name}>
-                {candidate.name} (@{candidate.handle})
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="field">
-          <label htmlFor="run-repo">Repository</label>
-          <input id="run-repo" list="run-repos" placeholder="owner/repo" value={repo} onChange={(event) => setRepo(event.target.value.trim())} />
-          <datalist id="run-repos">
-            {repos.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-        </div>
-        <div className="field">
-          <label htmlFor="run-number">Issue, PR or discussion number</label>
-          <input id="run-number" inputMode="numeric" placeholder="42" value={number} onChange={(event) => setNumber(event.target.value.replace(/\D/g, ""))} />
-        </div>
-        <div className="field">
-          <label htmlFor="run-kind">Type</label>
-          <select id="run-kind" value={kind} onChange={(event) => setKind(event.target.value)}>
-            <option value="auto">Issue or PR (detect)</option>
-            <option value="discussion">Discussion</option>
-          </select>
-        </div>
-        <div className="field full">
-          <label htmlFor="run-base">Base branch (optional)</label>
-          <input id="run-base" placeholder={usual?.branch ?? "the repository's default branch"} value={baseBranch} onChange={(event) => setBaseBranch(event.target.value.trim())} />
-          <span className="help">
-            Where a pull request from this run goes.{" "}
-            {usual?.branch ? (
-              <>
-                Left empty: <code>{usual.branch}</code> (set {usual.from}).
-              </>
-            ) : (
-              "Left empty: the repository's default branch."
-            )}{" "}
-            A pull request you start it on keeps its own base.
-          </span>
-        </div>
-        <div className="field full">
-          <label htmlFor="run-instruction">Instruction</label>
-          <textarea id="run-instruction" rows={5} placeholder="What should the agent do?" value={instruction} onChange={(event) => setInstruction(event.target.value)} />
-          <span className="help">The agent posts its progress and reply on the thread, as if it had been mentioned there.</span>
-        </div>
-      </div>
-      {error && <p className="error-text">{error}</p>}
+      <Grid columns={{ minWidth: 230 }} gap={4}>
+        <Selector label="Agent" options={enabled.map((candidate) => ({ value: candidate.name, label: `${candidate.name} (@${candidate.handle})` }))} value={agent} onChange={(value) => setAgent(value ?? "")} />
+        <SuggestInput label="Repository" placeholder="owner/repo" suggestions={repos} value={repo} onChange={(value) => setRepo(value.trim())} />
+        <TextInput label="Issue, PR or discussion number" placeholder="42" value={number} onChange={(value) => setNumber(value.replace(/\D/g, ""))} />
+        <Selector
+          label="Type"
+          options={[
+            { value: "auto", label: "Issue or PR (detect)" },
+            { value: "discussion", label: "Discussion" },
+          ]}
+          value={kind}
+          onChange={(value) => setKind(value ?? "auto")}
+        />
+        <GridSpan columns="full">
+          <VStack gap={1}>
+            <TextInput label="Base branch" isOptional placeholder={usual?.branch ?? "the repository's default branch"} value={baseBranch} onChange={(value) => setBaseBranch(value.trim())} />
+            <Meta block>
+              Where a pull request from this run goes.{" "}
+              {usual?.branch ? (
+                <>
+                  Left empty: <Code size="inherit">{usual.branch}</Code> (set {usual.from}).
+                </>
+              ) : (
+                "Left empty: the repository's default branch."
+              )}{" "}
+              A pull request you start it on keeps its own base.
+            </Meta>
+          </VStack>
+        </GridSpan>
+        <GridSpan columns="full">
+          <TextArea
+            label="Instruction"
+            rows={5}
+            placeholder="What should the agent do?"
+            value={instruction}
+            onChange={setInstruction}
+            description="The agent posts its progress and reply on the thread, as if it had been mentioned there."
+          />
+        </GridSpan>
+      </Grid>
+      {error && <ErrorText>{error}</ErrorText>}
     </Dialog>
   );
 }

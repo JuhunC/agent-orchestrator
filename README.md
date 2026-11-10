@@ -399,5 +399,7 @@ npm test            # unit tests + end-to-end runs of the real Agent SDK against
 npm run typecheck
 npm run build       # admin UI → web/dist
 npm run dev         # server on :3000
-npm run dev:web     # UI with hot reload on :5173 (the build also emits a polyfilled bundle for older browsers: Chrome 61+, Firefox 60+, Safari 11+, Edge 79+)
+npm run dev:web     # UI with hot reload on :5173
 ```
+
+The admin UI is built with [Astryx](https://github.com/meta/astryx), Meta's React design system (`@astryxdesign/core` with the Neutral theme), and follows the system's light or dark setting. It needs a browser from 2024 or later: Chrome or Edge 123+, Firefox 125+, Safari 17.5+. Its font (Figtree) is bundled, so the UI loads nothing from other sites.

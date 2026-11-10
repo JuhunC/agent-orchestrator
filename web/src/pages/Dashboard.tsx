@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
+import { Button, Card, Divider, Grid, HStack, StackItem, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, VStack } from "@astryxdesign/core";
 import { ago, api, duration, useApi, useNow, useStream, type Agent, type Overview, type Task, type TaskEvent } from "../api.ts";
 import { RunAgentDialog } from "../components/RunAgentDialog.tsx";
-import { Empty, Panel, Pill, StatusPill, StepText, Switch, ThreadCell, who } from "../components/ui.tsx";
-import { href, navigate } from "../router.ts";
+import { A, DataTable, Empty, LinkButton, Meta, Notice, Panel, Pill, StatGrid, StatTile, StatusPill, StepText, Switch, ThreadCell, who, Columns } from "../components/ui.tsx";
+import { navigate } from "../router.ts";
 import { UsageSummary } from "../components/Usage.tsx";
 
 function AgentCard({ agent, running, onRun, onToggle }: { agent: Agent; running: number; onRun: () => void; onToggle: (enabled: boolean) => void }) {
@@ -12,35 +13,39 @@ function AgentCard({ agent, running, onRun, onToggle }: { agent: Agent; running:
   else if (agent.errors.length) state = <Pill tone="failed">Profile has problems</Pill>;
   else if (running) state = <Pill tone="running">Working on {running}</Pill>;
   else if (stats?.queued) state = <Pill tone="queued">{stats.queued} queued</Pill>;
+  const config = [agent.model ?? "default model", agent.effort ? `effort ${agent.effort}` : null, `${agent.skills.length + agent.ownSkills.length} skills`, `${agent.mcp.length + agent.ownMcp.length + 1} MCP`, agent.live ? "live" : null]
+    .filter(Boolean)
+    .join(" · ");
   return (
-    <div className={`panel agent-card${agent.enabled ? "" : " off"}`}>
-      <div className="row">
-        <div className="grow">
-          <div className="name">{agent.name}</div>
-          <div className="handle">@{agent.handle}</div>
-        </div>
-        <Switch checked={agent.enabled} onChange={onToggle} label={`Turn ${agent.name} ${agent.enabled ? "off" : "on"}`} />
-      </div>
-      <div className="row">{state}</div>
-      <div className="cmd" title={agent.description}>
-        {[agent.model ?? "default model", agent.effort ? `effort ${agent.effort}` : null, `${agent.skills.length + agent.ownSkills.length} skills`, `${agent.mcp.length + agent.ownMcp.length + 1} MCP`, agent.live ? "live" : null]
-          .filter(Boolean)
-          .join(" · ")}
-      </div>
-      <div className="row">
-        <div className="counts grow">
-          <span>
-            <b>{stats?.succeeded ?? 0}</b> done
-          </span>
-          <span>
-            <b>{stats?.failed ?? 0}</b> failed
-          </span>
-        </div>
-        <button className="small" disabled={!agent.enabled} onClick={onRun}>
-          Run…
-        </button>
-      </div>
-    </div>
+    <Card variant={agent.enabled ? "default" : "muted"}>
+      <VStack gap={2}>
+        <HStack gap={2} vAlign="start">
+          <StackItem size="fill">
+            <VStack gap={0.5}>
+              <Text weight="semibold" maxLines={1}>
+                <A to={`/agents/${agent.name}`}>{agent.name}</A>
+              </Text>
+              <Meta>@{agent.handle}</Meta>
+            </VStack>
+          </StackItem>
+          <Switch checked={agent.enabled} onChange={onToggle} label={`Turn ${agent.name} ${agent.enabled ? "off" : "on"}`} />
+        </HStack>
+        <HStack>{state}</HStack>
+        <span title={agent.description}>
+          <Text type="supporting" maxLines={1} display="block">
+            {config}
+          </Text>
+        </span>
+        <HStack gap={2} vAlign="center">
+          <StackItem size="fill">
+            <Meta>
+              <b>{stats?.succeeded ?? 0}</b> done · <b>{stats?.failed ?? 0}</b> failed
+            </Meta>
+          </StackItem>
+          <Button label="Run…" size="sm" isDisabled={!agent.enabled} onClick={onRun} />
+        </HStack>
+      </VStack>
+    </Card>
   );
 }
 
@@ -51,34 +56,38 @@ function RunningTask({ task, events, now }: { task: Task; events: TaskEvent[]; n
     if (confirm(`Stop ${task.agent} on ${task.owner}/${task.repo}#${task.threadNumber}?`)) void api.post(`/api/tasks/${task.id}/cancel`);
   };
   return (
-    <div className="run-card">
-      <div className="row">
+    <VStack gap={2} padding={4}>
+      <HStack gap={2} vAlign="center" wrap="wrap">
         <StatusPill status={task.status} />
-        <b>{task.agent}</b>
-        <span className="meta">for {who(task.requestedBy)}</span>
-        <span className="grow" />
-        <span className="meta mono">{duration(task.startedAt, null, now)}</span>
-        <a className="button small" href={href(`/tasks/${task.id}`)}>
-          Open log
-        </a>
-        <button className="small danger" onClick={cancel}>
-          Stop
-        </button>
-      </div>
+        <Text weight="semibold">{task.agent}</Text>
+        <Meta>for {who(task.requestedBy)}</Meta>
+        <StackItem size="fill">
+          <span />
+        </StackItem>
+        <Text type="supporting" hasTabularNumbers>
+          {duration(task.startedAt, null, now)}
+        </Text>
+        <LinkButton to={`/tasks/${task.id}`} label="Open log" size="sm" />
+        <Button label="Stop" size="sm" variant="destructive" onClick={cancel} />
+      </HStack>
       <ThreadCell task={task} />
-      <ul className="steps">
+      <ul className="ao-steps">
         {steps.length === 0 && <li>Starting…</li>}
         {steps.map((event) => (
           <li key={event.id}>
-            <span className="t">{event.ts.slice(11, 19)}</span>
-            <span className="msg">
+            <span className="ao-steps-time">{event.ts.slice(11, 19)}</span>
+            <span>
               <StepText text={event.message} />
             </span>
           </li>
         ))}
       </ul>
-      {lastText && <div className="meta ellipsis">💬 {lastText.message}</div>}
-    </div>
+      {lastText && (
+        <Text type="supporting" maxLines={1} display="block">
+          💬 {lastText.message}
+        </Text>
+      )}
+    </VStack>
   );
 }
 
@@ -102,7 +111,7 @@ export function Dashboard() {
     setEvents((current) => ({ ...current, [message.event.taskId]: [...(current[message.event.taskId] ?? []), message.event].slice(-40) }));
   });
 
-  if (error) return <div className="banner error">{error}</div>;
+  if (error) return <Notice tone="error" title={error} />;
   if (!data) return <Empty>Loading…</Empty>;
 
   const totals = data.agents.reduce(
@@ -116,126 +125,89 @@ export function Dashboard() {
   };
 
   return (
-    <div className="stack">
+    <VStack gap={4}>
       {!data.configured && (
-        <div className="banner">
-          <span className="grow">
-            <b>Connect a GitHub App to start.</b> Agents run when they're mentioned on GitHub, which needs the app installed on your repositories.
-          </span>
-          <a className="button primary" href={href("/settings")}>
-            Set up GitHub App
-          </a>
-        </div>
+        <Notice tone="info" title="Connect a GitHub App to start." action={<LinkButton to="/settings" label="Set up GitHub App" variant="primary" />}>
+          Agents run when they're mentioned on GitHub, which needs the app installed on your repositories.
+        </Notice>
       )}
-      {data.settings.paused && (
-        <div className="banner">
-          <span className="grow">
-            <b>The queue is paused.</b> Running agents finish, but nothing new starts.
-          </span>
-        </div>
-      )}
+      {data.settings.paused && <Notice title="The queue is paused.">Running agents finish, but nothing new starts.</Notice>}
 
       {data.settings.spendBlocked ? (
-        <div className="banner error">
-          <span className="grow">
-            <b>Spending limit reached.</b> {data.settings.spendBlocked}
-          </span>
-          <a className="button" href={href("/settings")}>
-            Limits
-          </a>
-        </div>
+        <Notice tone="error" title="Spending limit reached." action={<LinkButton to="/settings" label="Limits" />}>
+          {data.settings.spendBlocked}
+        </Notice>
       ) : data.settings.spend.warning ? (
-        <div className="banner">
-          <span className="grow">
-            <b>Near the spending limit.</b> {data.settings.spend.warning}
-          </span>
-        </div>
+        <Notice title="Near the spending limit.">{data.settings.spend.warning}</Notice>
       ) : null}
 
       {data.model.limit && (
-        <div className="banner">
-          <span className="grow">
-            <b>Usage limit reached</b> ({data.model.limit.reason}). Agents continue automatically at {new Date(data.model.limit.until).toLocaleTimeString()}.
-          </span>
-          <button onClick={() => void api.del("/api/limit")}>Try now</button>
-        </div>
+        <Notice title={`Usage limit reached (${data.model.limit.reason}).`} action={<Button label="Try now" onClick={() => void api.del("/api/limit")} />}>
+          Agents continue automatically at {new Date(data.model.limit.until).toLocaleTimeString()}.
+        </Notice>
       )}
 
-      <div className="stats">
-        <div className="panel stat">
-          <div className="label">Working now</div>
-          <div className="value">
-            {data.running.length}
-            <span className="meta"> / {data.settings.maxConcurrent}</span>
-          </div>
-        </div>
-        <div className="panel stat">
-          <div className="label">Queued</div>
-          <div className="value">{data.queued.length}</div>
-        </div>
-        <div className="panel stat">
-          <div className="label">Finished</div>
-          <div className="value">{totals.succeeded}</div>
-        </div>
-        <div className="panel stat">
-          <div className="label">Failed</div>
-          <div className="value">{totals.failed}</div>
-        </div>
-      </div>
+      <StatGrid>
+        <StatTile label="Working now" value={<>{data.running.length} <Meta>/ {data.settings.maxConcurrent}</Meta></>} />
+        <StatTile label="Queued" value={data.queued.length} />
+        <StatTile label="Finished" value={totals.succeeded} />
+        <StatTile label="Failed" value={totals.failed} />
+      </StatGrid>
 
       {data.incidents.length > 0 && (
         <Panel title="Recent problems" hint="last 7 days · set ALERT_WEBHOOK_URL to get them in chat" tight>
-          <div className="incidents">
-            {data.incidents.slice(0, 8).map((incident) => (
-              <div key={incident.id} className="incident">
-                <Pill tone={incident.severity === "critical" ? "failed" : incident.severity === "warning" ? "queued" : "cancelled"}>{incident.severity}</Pill>
-                <span className="grow">
-                  {incident.message}{" "}
-                  {incident.taskId ? (
-                    <a href={href(`/tasks/${incident.taskId}`)}>task #{incident.taskId}</a>
-                  ) : incident.url ? (
-                    <a href={incident.url} target="_blank" rel="noreferrer">
-                      on GitHub ↗
-                    </a>
-                  ) : null}
-                </span>
-                <span className="meta nowrap">{new Date(incident.ts).toLocaleString()}</span>
-              </div>
-            ))}
-          </div>
+          <DataTable>
+            <TableBody>
+              {data.incidents.slice(0, 8).map((incident) => (
+                <TableRow key={incident.id}>
+                  <TableCell>
+                    <Pill tone={incident.severity === "critical" ? "failed" : incident.severity === "warning" ? "queued" : "cancelled"}>{incident.severity}</Pill>
+                  </TableCell>
+                  <TableCell>
+                    {incident.message}{" "}
+                    {incident.taskId ? <A to={`/tasks/${incident.taskId}`}>task #{incident.taskId}</A> : incident.url ? <A to={incident.url} external>on GitHub</A> : null}
+                  </TableCell>
+                  <TableCell>
+                    <Text type="supporting" textWrap="nowrap">
+                      {new Date(incident.ts).toLocaleString()}
+                    </Text>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
         </Panel>
       )}
 
-      <Panel
-        title="Agents"
-        hint={`${data.agents.filter((agent) => agent.enabled).length} of ${data.agents.length} on`}
-        actions={
-          <a className="button small" href={href("/agents")}>
-            Manage
-          </a>
-        }
-      >
+      <Panel title="Agents" hint={`${data.agents.filter((agent) => agent.enabled).length} of ${data.agents.length} on`} actions={<LinkButton to="/agents" label="Manage" size="sm" />}>
         {data.agents.length === 0 ? (
           <Empty>
-            No agents yet. Add one on the <a href={href("/agents")}>Agents</a> page or in agents.yaml.
+            No agents yet. Add one on the <A to="/agents">Agents</A> page or in agents.yaml.
           </Empty>
         ) : (
-          <div className="grid-cards">
+          <Grid columns={{ minWidth: 230 }} gap={3}>
             {data.agents.map((agent) => (
               <AgentCard key={agent.name} agent={agent} running={runningByAgent(agent.name)} onRun={() => setRunFor(agent.name)} onToggle={(value) => void toggle(agent, value)} />
             ))}
-          </div>
+          </Grid>
         )}
       </Panel>
 
       <UsageSummary />
 
-      <div className="grid-2">
+      <Columns>
         <Panel title="Working now" hint={data.running.length ? "live" : undefined} tight>
           {data.running.length === 0 ? (
             <Empty>No agents are running. Mention one on GitHub, or use “Run…”.</Empty>
           ) : (
-            data.running.map((task) => <RunningTask key={task.id} task={task} events={events[task.id] ?? []} now={now} />)
+            <VStack gap={0}>
+              {data.running.map((task, index) => (
+                <VStack key={task.id} gap={0}>
+                  {index > 0 && <Divider />}
+                  <RunningTask task={task} events={events[task.id] ?? []} now={now} />
+                </VStack>
+              ))}
+            </VStack>
           )}
         </Panel>
 
@@ -243,133 +215,141 @@ export function Dashboard() {
           {data.queued.length === 0 ? (
             <Empty>Nothing waiting.</Empty>
           ) : (
-            <div className="table-wrap">
-              <table>
-                <tbody>
-                  {data.queued.map((task) => (
-                    <tr key={task.id} className="clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
-                      <td>
-                        <b>{task.agent}</b>
-                        <div className="meta">{ago(task.createdAt, now)}</div>
-                      </td>
-                      <td style={{ maxWidth: 320 }}>
-                        <ThreadCell task={task} />
-                      </td>
-                      <td>
-                        <button
-                          className="small danger"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void api.post(`/api/tasks/${task.id}/cancel`);
-                          }}
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <DataTable hover>
+              <TableBody>
+                {data.queued.map((task) => (
+                  <TableRow key={task.id} className="ao-clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
+                    <TableCell>
+                      <VStack gap={0.5}>
+                        <Text weight="semibold">{task.agent}</Text>
+                        <Meta>{ago(task.createdAt, now)}</Meta>
+                      </VStack>
+                    </TableCell>
+                    <TableCell>
+                      <ThreadCell task={task} />
+                    </TableCell>
+                    <TableCell>
+                      <Button
+                        label="Remove"
+                        size="sm"
+                        variant="destructive"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void api.post(`/api/tasks/${task.id}/cancel`);
+                        }}
+                      />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </DataTable>
           )}
         </Panel>
-      </div>
+      </Columns>
 
       <Panel title="Agent sessions" hint={data.sessions.length ? `${data.sessions.length} open · kept ${data.settings.liveIdleMinutes} min after the last task` : undefined} tight>
         {data.sessions.length === 0 ? (
           <Empty>No open sessions. Live agents keep their Claude session open between tasks on the same thread.</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <tbody>
-                {data.sessions.map((session) => (
-                  <tr key={session.key}>
-                    <td>
-                      <b>{session.agent}</b>
-                      <div className="meta">{session.busy ? <Pill tone="running">working</Pill> : `idle, closes at ${new Date(session.closesAt!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}</div>
-                    </td>
-                    <td>
-                      <a href={href(`/history/${session.owner}/${session.repo}/${session.threadKind}/${session.threadNumber}`)}>
+          <DataTable>
+            <TableBody>
+              {data.sessions.map((session) => (
+                <TableRow key={session.key}>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <Text weight="semibold">{session.agent}</Text>
+                      {session.busy ? (
+                        <HStack>
+                          <Pill tone="running">working</Pill>
+                        </HStack>
+                      ) : (
+                        <Meta>idle, closes at {new Date(session.closesAt!).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</Meta>
+                      )}
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <A to={`/history/${session.owner}/${session.repo}/${session.threadKind}/${session.threadNumber}`}>
                         {session.owner}/{session.repo}#{session.threadNumber}
-                      </a>
-                      <div className="meta mono">{session.sessionId?.slice(0, 8) ?? "starting"}</div>
-                    </td>
-                    <td className="num meta">
+                      </A>
+                      <Text type="code" color="secondary">
+                        {session.sessionId?.slice(0, 8) ?? "starting"}
+                      </Text>
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <Meta>
                       {session.turns} task{session.turns === 1 ? "" : "s"}
-                    </td>
-                    <td>
-                      <button
-                        className="small"
-                        disabled={session.busy}
-                        onClick={() => void api.del(`/api/sessions/${encodeURIComponent(session.key)}`)}
-                      >
-                        Close
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </Meta>
+                  </TableCell>
+                  <TableCell>
+                    <Button label="Close" size="sm" isDisabled={session.busy} onClick={() => void api.del(`/api/sessions/${encodeURIComponent(session.key)}`)} />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
         )}
       </Panel>
 
-      <Panel
-        title="Recently finished"
-        tight
-        actions={
-          <a className="button small" href={href("/tasks")}>
-            All tasks
-          </a>
-        }
-      >
+      <Panel title="Recently finished" tight actions={<LinkButton to="/tasks" label="All tasks" size="sm" />}>
         {data.recent.length === 0 ? (
           <Empty>Nothing yet.</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Status</th>
-                  <th>Agent</th>
-                  <th>Thread</th>
-                  <th>Result</th>
-                  <th>Took</th>
-                  <th>Finished</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.recent.map((task) => (
-                  <tr key={task.id} className="clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
-                    <td>
-                      <StatusPill status={task.status} />
-                    </td>
-                    <td>{task.agent}</td>
-                    <td style={{ maxWidth: 320 }}>
-                      <ThreadCell task={task} />
-                    </td>
-                    <td style={{ maxWidth: 320 }}>
-                      {task.prUrl ? (
-                        <a href={task.prUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-                          PR #{task.prNumber}
-                        </a>
-                      ) : (
-                        <span className="meta ellipsis" style={{ display: "block" }}>
+          <DataTable hover>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Status</TableHeaderCell>
+                <TableHeaderCell>Agent</TableHeaderCell>
+                <TableHeaderCell>Thread</TableHeaderCell>
+                <TableHeaderCell>Result</TableHeaderCell>
+                <TableHeaderCell>Took</TableHeaderCell>
+                <TableHeaderCell>Finished</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.recent.map((task) => (
+                <TableRow key={task.id} className="ao-clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
+                  <TableCell>
+                    <StatusPill status={task.status} />
+                  </TableCell>
+                  <TableCell>
+                    <Text textWrap="nowrap">{task.agent}</Text>
+                  </TableCell>
+                  <TableCell>
+                    <ThreadCell task={task} />
+                  </TableCell>
+                  <TableCell>
+                    {task.prUrl ? (
+                      <A to={task.prUrl} external>
+                        PR #{task.prNumber}
+                      </A>
+                    ) : (
+                      <VStack maxWidth={320}>
+                        <Text type="supporting" maxLines={1} display="block">
                           {task.error ?? task.resultText?.slice(0, 120) ?? "—"}
-                        </span>
-                      )}
-                    </td>
-                    <td className="num">{duration(task.startedAt, task.finishedAt)}</td>
-                    <td className="num meta">{ago(task.finishedAt, now)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                        </Text>
+                      </VStack>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Text hasTabularNumbers textWrap="nowrap">
+                      {duration(task.startedAt, task.finishedAt)}
+                    </Text>
+                  </TableCell>
+                  <TableCell>
+                    <Text type="supporting" textWrap="nowrap">
+                      {ago(task.finishedAt, now)}
+                    </Text>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
         )}
       </Panel>
 
       {runFor !== null && <RunAgentDialog agents={data.agents} initialAgent={runFor} onClose={() => setRunFor(null)} />}
-    </div>
+    </VStack>
   );
 }

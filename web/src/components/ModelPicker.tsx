@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { Button, Grid, HStack, Selector } from "@astryxdesign/core";
 import { api, EFFORTS, type Effort } from "../api.ts";
+import { ErrorText, Meta, SuggestInput } from "./ui.tsx";
 
-const SUGGESTED_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1", "opus", "sonnet", "haiku"];
+export const SUGGESTED_MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-fable-5-1", "opus", "sonnet", "haiku"];
 
 const EFFORT_HELP: Record<Effort, string> = {
   low: "fast and cheap; simple tasks",
@@ -35,44 +37,30 @@ export function ModelPicker({ agent, model, effort, defaultModel, onSaved }: { a
   };
 
   return (
-    <div className="stack" style={{ gap: 10 }}>
-      <div className="form-grid">
-        <div className="field">
-          <label htmlFor={`model-${agent}`}>Model</label>
-          <input
-            id={`model-${agent}`}
-            list="model-suggestions"
-            placeholder={defaultModel ? `default: ${defaultModel}` : "default model"}
-            value={nextModel}
-            onChange={(event) => (setNextModel(event.target.value), setSaved(false))}
-          />
-          <datalist id="model-suggestions">
-            {SUGGESTED_MODELS.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-          <span className="help">Any name your model service accepts. Empty uses ANTHROPIC_MODEL.</span>
-        </div>
-        <div className="field">
-          <label htmlFor={`effort-${agent}`}>Effort</label>
-          <select id={`effort-${agent}`} value={nextEffort} onChange={(event) => (setNextEffort(event.target.value), setSaved(false))}>
-            <option value="">Model default</option>
-            {EFFORTS.map((level) => (
-              <option key={level} value={level}>
-                {level} — {EFFORT_HELP[level]}
-              </option>
-            ))}
-          </select>
-          <span className="help">How hard the model thinks. Board columns can override both.</span>
-        </div>
-      </div>
-      <div className="row">
-        <button className="primary small" disabled={!dirty} onClick={save}>
-          Save model and effort
-        </button>
-        {saved && !dirty && <span className="meta">Saved to agent.md</span>}
-        {error && <span className="error-text">{error}</span>}
-      </div>
-    </div>
+    <>
+      <Grid columns={{ minWidth: 260 }} gap={4}>
+        <SuggestInput
+          label="Model"
+          suggestions={SUGGESTED_MODELS}
+          placeholder={defaultModel ? `default: ${defaultModel}` : "default model"}
+          value={nextModel}
+          onChange={(value) => (setNextModel(value), setSaved(false))}
+          description="Any name your model service accepts. Empty uses ANTHROPIC_MODEL."
+        />
+        <Selector
+          label="Effort"
+          description="How hard the model thinks. Board columns can override both."
+          options={[{ value: "", label: "Model default" }, ...EFFORTS.map((level) => ({ value: level, label: level, description: EFFORT_HELP[level] }))]}
+          value={nextEffort}
+          placeholder="Model default"
+          onChange={(value) => (setNextEffort(value ?? ""), setSaved(false))}
+        />
+      </Grid>
+      <HStack gap={2} vAlign="center" wrap="wrap">
+        <Button label="Save model and effort" size="sm" variant="primary" isDisabled={!dirty} onClick={() => void save()} />
+        {saved && !dirty && <Meta>Saved to agent.md</Meta>}
+        {error && <ErrorText>{error}</ErrorText>}
+      </HStack>
+    </>
   );
 }

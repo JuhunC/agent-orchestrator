@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { Avatar, Button, Code, HStack, StackItem, Text, TextInput, VStack } from "@astryxdesign/core";
 import { api, type Agent } from "../api.ts";
-import { Panel } from "./ui.tsx";
+import { Meta, Notice, Panel } from "./ui.tsx";
 
 type Check = { ok: boolean; problem: string | null; login?: string; repositories: { repository: string; access: string }[] };
 
@@ -46,87 +47,80 @@ export function GithubAccount({ agent, onChanged }: { agent: Agent; onChanged: (
 
   return (
     <Panel title="GitHub account" hint={account ? `acts as @${account.login || "?"}` : "acts as the GitHub App"}>
-      <div className="stack" style={{ gap: 10 }}>
-        {account ? (
-          <div className="account-row">
-            {account.avatarUrl && <img className="avatar" src={account.avatarUrl} alt="" width={36} height={36} />}
-            <div className="grow">
-              <div>
+      {account ? (
+        <HStack gap={3} vAlign="center" wrap="wrap">
+          {account.avatarUrl && <Avatar src={account.avatarUrl} name={account.login || "account"} size={36} />}
+          <StackItem size="fill">
+            <VStack gap={0.5}>
+              <Text>
                 <b>@{account.login || "unknown"}</b>
-                {account.name && <span className="meta"> · {account.name}</span>}
-              </div>
-              <div className="meta">
+                {account.name && <Meta> · {account.name}</Meta>}
+              </Text>
+              <Meta>
                 {account.source === "env" ? (
                   <>
-                    Token from <code>{account.envVar}</code> (<code>github.account_token_env</code> in agent.md)
+                    Token from <Code size="inherit">{account.envVar ?? ""}</Code> (<Code size="inherit">github.account_token_env</Code> in agent.md)
                   </>
                 ) : (
                   <>Registered here{account.savedAt ? ` on ${new Date(account.savedAt).toLocaleDateString()}` : ""}</>
                 )}
                 {account.scopes !== null && <> · scopes: {account.scopes || "none"}</>}
                 {account.expiresAt ? <> · expires {new Date(account.expiresAt).toLocaleDateString()}</> : account.login ? <> · doesn't expire</> : null}
-              </div>
-            </div>
-            {account.source === "ui" && (
-              <button className="danger" disabled={busy} onClick={() => void remove()}>
-                Remove
-              </button>
-            )}
-          </div>
-        ) : (
-          <p className="meta" style={{ margin: 0 }}>
-            {agent.name} comments, opens pull requests, reviews and pushes as the orchestrator's GitHub App (<code>app[bot]</code>). Register an account to have it do all of that as that GitHub user instead.
-          </p>
-        )}
-        {account?.problem && <div className="banner error">{account.problem}</div>}
-        {account?.expiresAt && !account.problem && Date.parse(account.expiresAt) - Date.now() < 14 * 86_400_000 && (
-          <div className="banner">The token expires on {new Date(account.expiresAt).toLocaleDateString()}. Make a new one and register it, or {agent.name}'s tasks will fail.</div>
-        )}
-        {warning && <div className="banner">{warning}</div>}
-        {error && <div className="banner error">{error}</div>}
+              </Meta>
+            </VStack>
+          </StackItem>
+          {account.source === "ui" && <Button label="Remove" variant="destructive" isDisabled={busy} onClick={() => void remove()} />}
+        </HStack>
+      ) : (
+        <Meta block>
+          {agent.name} comments, opens pull requests, reviews and pushes as the orchestrator's GitHub App (<Code size="inherit">app[bot]</Code>). Register an account to have it do all of that as that GitHub user instead.
+        </Meta>
+      )}
+      {account?.problem && <Notice tone="error" title={account.problem} />}
+      {account?.expiresAt && !account.problem && Date.parse(account.expiresAt) - Date.now() < 14 * 86_400_000 && (
+        <Notice title={`The token expires on ${new Date(account.expiresAt).toLocaleDateString()}.`}>Make a new one and register it, or {agent.name}'s tasks will fail.</Notice>
+      )}
+      {warning && <Notice title={warning} />}
+      {error && <Notice tone="error" title={error} />}
 
-        {account ? (
-          <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-            <input placeholder="owner/repository (optional)" value={repository} onChange={(event) => setRepository(event.target.value)} style={{ flex: "1 1 200px" }} />
-            <button disabled={busy} onClick={() => void test()}>
-              Check access
-            </button>
-          </div>
-        ) : (
-          <form
-            className="row"
-            style={{ gap: 8, flexWrap: "wrap" }}
-            onSubmit={(event) => {
-              event.preventDefault();
-              void register();
-            }}
-          >
-            <input type="password" autoComplete="off" placeholder="The account's personal access token" value={token} onChange={(event) => setToken(event.target.value)} style={{ flex: "1 1 260px" }} />
-            <button className="primary" disabled={busy || !token.trim()}>
-              Register account
-            </button>
-          </form>
-        )}
-        {check && (
-          <div className="stack" style={{ gap: 4 }}>
-            {check.problem ? (
-              <div className="banner error">{check.problem}</div>
-            ) : (
-              <div className="meta">The token works for @{check.login}.</div>
-            )}
-            {check.repositories.map((row) => (
-              <div key={row.repository} className="meta">
-                <code>{row.repository}</code>: {row.access === "write" ? "can push ✓" : row.access === "read" ? "read only: it can't push or open pull requests" : row.access === "none" ? "no access" : row.access}
-              </div>
-            ))}
-          </div>
-        )}
-        <p className="meta" style={{ margin: 0 }}>
-          {account
-            ? `Its comments, pull requests, reviews, issue changes, pushes and commits are made as this account. Board card moves still use the board's access.${agent.github.accountMentions ? ` Mentioning @${account.login} (or assigning it) starts ${agent.name}, like @${agent.handle}.` : ""}`
-            : "A classic token with the repo scope (add workflow to let it change GitHub Actions files), or a fine-grained token with Contents, Issues and Pull requests read and write on its repositories. It can be an account made for the agent or your own: what the orchestrator does as it is recognised as the agent's, what you do with it counts as yours. Mentioning the account starts the agent (github.account_mentions: false turns that off). The token stays on the server, encrypted."}
-        </p>
-      </div>
+      {account ? (
+        <HStack gap={2} wrap="wrap" vAlign="end">
+          <StackItem size="fill">
+            <TextInput label="Repository to check" isLabelHidden placeholder="owner/repository (optional)" value={repository} onChange={setRepository} />
+          </StackItem>
+          <Button label="Check access" isDisabled={busy} onClick={() => void test()} />
+        </HStack>
+      ) : (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void register();
+          }}
+        >
+          <HStack gap={2} wrap="wrap" vAlign="end">
+            <StackItem size="fill">
+              <TextInput label="Personal access token" isLabelHidden type="password" autoComplete="off" placeholder="The account's personal access token" value={token} onChange={setToken} />
+            </StackItem>
+            <Button label="Register account" type="submit" variant="primary" isDisabled={busy || !token.trim()} />
+          </HStack>
+        </form>
+      )}
+      {check && (
+        <VStack gap={1}>
+          {check.problem ? <Notice tone="error" title={check.problem} /> : <Meta block>The token works for @{check.login}.</Meta>}
+          {check.repositories.map((row) => (
+            <Meta key={row.repository} block>
+              <Code size="inherit">{row.repository}</Code>:{" "}
+              {row.access === "write" ? "can push ✓" : row.access === "read" ? "read only: it can't push or open pull requests" : row.access === "none" ? "no access" : row.access}
+            </Meta>
+          ))}
+        </VStack>
+      )}
+      <Meta block>
+        {account
+          ? `Its comments, pull requests, reviews, issue changes, pushes and commits are made as this account. Board card moves still use the board's access.${agent.github.accountMentions ? ` Mentioning @${account.login} (or assigning it) starts ${agent.name}, like @${agent.handle}.` : ""}`
+          : "A classic token with the repo scope (add workflow to let it change GitHub Actions files), or a fine-grained token with Contents, Issues and Pull requests read and write on its repositories. It can be an account made for the agent or your own: what the orchestrator does as it is recognised as the agent's, what you do with it counts as yours. Mentioning the account starts the agent (github.account_mentions: false turns that off). The token stays on the server, encrypted."}
+      </Meta>
     </Panel>
   );
 }

@@ -1,6 +1,9 @@
 import { useState, type FormEvent } from "react";
+import { Button, Card, Code, Divider, Heading, HStack, Icon, NavIcon, TextInput, VStack } from "@astryxdesign/core";
+import { Bot } from "lucide-react";
 import { api } from "../api.ts";
 import { useRoute } from "../router.ts";
+import { ErrorText, Meta, Notice } from "../components/ui.tsx";
 
 export function Login({
   githubLogin,
@@ -37,55 +40,49 @@ export function Login({
   };
 
   return (
-    <div className="login">
-      <section className="panel">
-        <div className="panel-head">
-          <span className="brand-mark" aria-hidden>
-            ◉
-          </span>
-          <h2>Agent Orchestrator</h2>
-        </div>
-        <div className="panel-body stack" style={{ gap: 14 }}>
+    <div className="ao-login">
+      <Card maxWidth={440} width="100%" elevation="low">
+        <VStack gap={4}>
+          <HStack gap={2} vAlign="center">
+            <NavIcon icon={<Icon icon={Bot} size="sm" />} />
+            <Heading level={1}>Agent Orchestrator</Heading>
+          </HStack>
           {githubLogin && (
             <>
               {signInProblem ? (
-                <div className="banner error">
-                  <span>
-                    {signInProblem} Until then, sign in with the admin token below.
-                  </span>
-                </div>
+                <Notice tone="error" title={signInProblem}>
+                  Until then, sign in with the admin token below.
+                </Notice>
               ) : elsewhere ? (
-                <div className="banner">
-                  <span>
-                    You opened this page at {window.location.origin}, but PUBLIC_URL is {elsewhere}, so GitHub will send you back there. Open {elsewhere}, or set PUBLIC_URL to the
-                    address you use (and update the GitHub App's Callback URL to match).
-                  </span>
-                </div>
+                <Notice title={`You opened this page at ${window.location.origin}, but PUBLIC_URL is ${elsewhere}, so GitHub will send you back there.`}>
+                  Open {elsewhere}, or set PUBLIC_URL to the address you use (and update the GitHub App's Callback URL to match).
+                </Notice>
               ) : null}
-              <a className="button primary" href="/api/auth/github" style={{ width: "100%" }}>
-                Sign in with GitHub
-              </a>
+              <Button label="Sign in with GitHub" variant="primary" href="/api/auth/github" width="100%" />
               {callbackUrl && (
-                <span className="help">
-                  If GitHub says the redirect_uri isn't associated with this application, set the App's Callback URL to <code>{callbackUrl}</code>.
-                </span>
+                <Meta block>
+                  If GitHub says the redirect_uri isn't associated with this application, set the App's Callback URL to <Code size="inherit">{callbackUrl}</Code>.
+                </Meta>
               )}
-              <div className="divider">or</div>
+              <Divider label="or" />
             </>
           )}
-          <form className="stack" style={{ gap: 10 }} onSubmit={submit}>
-            <div className="field">
-              <label htmlFor="admin-token">Admin token</label>
-              <input id="admin-token" type="password" autoComplete="current-password" value={token} onChange={(event) => setToken(event.target.value)} />
-              <span className="help">From ADMIN_TOKEN, or the admin-token file in the data directory (the first start also prints it in the logs).</span>
-            </div>
-            <button type="submit" disabled={!token.trim() || busy}>
-              {busy ? "Signing in…" : "Sign in with token"}
-            </button>
+          <form onSubmit={submit}>
+            <VStack gap={3}>
+              <TextInput
+                label="Admin token"
+                type="password"
+                autoComplete="current-password"
+                value={token}
+                onChange={setToken}
+                description="From ADMIN_TOKEN, or the admin-token file in the data directory (the first start also prints it in the logs)."
+              />
+              <Button label={busy ? "Signing in…" : "Sign in with token"} type="submit" width="100%" isDisabled={!token.trim() || busy} />
+            </VStack>
           </form>
-          {error && <p className="error-text">{error}</p>}
-        </div>
-      </section>
+          {error && <ErrorText>{error}</ErrorText>}
+        </VStack>
+      </Card>
     </div>
   );
 }

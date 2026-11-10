@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import { Blockquote, Button, CheckboxInput, Code, CodeBlock, Heading, HStack, StackItem, Text, VStack } from "@astryxdesign/core";
 import { api, duration, KIND_LABEL, useNow, useStream, type Task, type TaskEvent } from "../api.ts";
-import { Empty, Panel, StatusPill, who } from "../components/ui.tsx";
-import { href, navigate } from "../router.ts";
+import { A, Columns, Empty, KV, Meta, Notice, Panel, StatusPill, Tag, who } from "../components/ui.tsx";
+import { navigate } from "../router.ts";
 
 /** A task in a chain of agents starting each other. */
 interface ChainNode {
@@ -20,17 +21,18 @@ interface ChainNode {
 }
 
 function ChainRow({ node, depth, current }: { node: ChainNode; depth: number; current?: boolean }) {
+  const how =
+    node.triggerKind === "agent" ? "started by an agent" : node.triggerKind === "schedule" ? "scheduled run" : node.triggerKind === "board" ? `board stage${node.boardColumn ? ` (${node.boardColumn})` : ""}` : node.triggerKind;
   return (
     <>
-      <div className="chain-row" style={{ paddingLeft: depth * 18 }}>
-        <StatusPill status={node.status} />{" "}
-        {current ? <b>this task</b> : <a href={href(`/tasks/${node.id}`)}>task #{node.id}</a>} · {node.agent} on {node.owner}/{node.repo}#{node.threadNumber}
-        {node.threadTitle ? ` "${node.threadTitle}"` : ""}
-        <span className="meta">
-          {" "}
-          · {node.triggerKind === "agent" ? "started by an agent" : node.triggerKind === "schedule" ? "scheduled run" : node.triggerKind === "board" ? `board stage${node.boardColumn ? ` (${node.boardColumn})` : ""}` : node.triggerKind}
-        </span>
-      </div>
+      <HStack gap={2} vAlign="center" wrap="wrap" paddingInlineStart={depth === 0 ? 0 : depth === 1 ? 4 : depth === 2 ? 8 : 10}>
+        <StatusPill status={node.status} />
+        <Text>
+          {current ? <b>this task</b> : <A to={`/tasks/${node.id}`}>task #{node.id}</A>} · {node.agent} on {node.owner}/{node.repo}#{node.threadNumber}
+          {node.threadTitle ? ` "${node.threadTitle}"` : ""}
+        </Text>
+        <Meta>· {how}</Meta>
+      </HStack>
       {node.started?.map((child) => <ChainRow key={child.id} node={child} depth={depth + 1} />)}
     </>
   );
@@ -41,12 +43,12 @@ function Chain({ task, chain }: { task: Task; chain: { ancestors: ChainNode[]; s
   if (!chain.ancestors.length && !chain.started.length) return null;
   return (
     <Panel title="Chain" hint="agents starting agents on related issues, and board stages their moves started">
-      <div className="chain">
+      <VStack gap={1.5}>
         {chain.ancestors.map((node, index) => (
           <ChainRow key={node.id} node={node} depth={index} />
         ))}
         <ChainRow node={{ ...task, started: chain.started }} depth={chain.ancestors.length} current />
-      </div>
+      </VStack>
     </Panel>
   );
 }
@@ -87,7 +89,7 @@ export function TaskDetail({ id }: { id: number }) {
     if (follow && logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [visible.length, follow]);
 
-  if (error) return <div className="banner error">{error}</div>;
+  if (error) return <Notice tone="error" title={error} />;
   if (!task) return <Empty>Loading…</Empty>;
 
   const active = task.status === "running" || task.status === "queued";
@@ -103,181 +105,168 @@ export function TaskDetail({ id }: { id: number }) {
   const stderrCount = events.filter((event) => event.kind === "stderr").length;
 
   return (
-    <div className="stack">
-      <div className="page-head">
+    <VStack gap={4}>
+      <HStack gap={3} vAlign="center" wrap="wrap">
         <StatusPill status={task.status} />
-        <h1>
-          {task.agent} · {task.owner}/{task.repo}#{task.threadNumber}
-        </h1>
-        <span className="spacer" />
+        <StackItem size="fill">
+          <Heading level={2}>
+            {task.agent} · {task.owner}/{task.repo}#{task.threadNumber}
+          </Heading>
+        </StackItem>
         {active ? (
-          <button className="danger" onClick={cancel}>
-            {task.status === "queued" ? "Remove from queue" : "Stop agent"}
-          </button>
+          <Button label={task.status === "queued" ? "Remove from queue" : "Stop agent"} variant="destructive" onClick={cancel} />
         ) : (
-          <>
-            <button onClick={retry}>Run again</button>
-            {!task.dryRun && (
-              <button onClick={() => void replay()} title="Run the same request with the agent's current profile, without changing anything on GitHub">
-                Dry run
-              </button>
-            )}
-          </>
+          <HStack gap={2}>
+            <Button label="Run again" onClick={() => void retry()} />
+            {!task.dryRun && <Button label="Dry run" tooltip="Run the same request with the agent's current profile, without changing anything on GitHub" onClick={() => void replay()} />}
+          </HStack>
         )}
-      </div>
+      </HStack>
 
       {task.dryRun && (
-        <div className="banner info">
-          <span className="grow">
-            <b>Dry run{task.retryOf ? <> of <a href={href(`/tasks/${task.retryOf}`)}>task #{task.retryOf}</a></> : null}.</b> The agent worked with its current profile in a checkout of its own, and nothing was changed on GitHub: what it would have posted, pushed or moved is in the log as "Dry run: would …". Compare its reply with the original's to judge a profile change.
-          </span>
-        </div>
+        <Notice
+          tone="info"
+          title={
+            <>
+              Dry run{task.retryOf ? <> of <A to={`/tasks/${task.retryOf}`}>task #{task.retryOf}</A></> : null}.
+            </>
+          }
+        >
+          The agent worked with its current profile in a checkout of its own, and nothing was changed on GitHub: what it would have posted, pushed or moved is in the log as "Dry run: would …". Compare its
+          reply with the original's to judge a profile change.
+        </Notice>
       )}
 
-      {task.error && task.status !== "succeeded" && <div className="banner error">{task.error}</div>}
+      {task.error && task.status !== "succeeded" && <Notice tone="error" title={task.error} />}
       {task.status === "queued" && task.retryAt && (
-        <div className="banner">
-          <span className="grow">
-            <b>Waiting for the usage limit to reset.</b> It continues automatically at {new Date(task.retryAt).toLocaleString()} (attempt {task.attempts + 1}).
-          </span>
-          <button onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)}>Run now</button>
-        </div>
+        <Notice title="Waiting for the usage limit to reset." action={<Button label="Run now" onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)} />}>
+          It continues automatically at {new Date(task.retryAt).toLocaleString()} (attempt {task.attempts + 1}).
+        </Notice>
       )}
 
       {chain && <Chain task={task} chain={chain} />}
 
-      <div className="grid-2">
+      <Columns>
         <Panel title="Request">
-          <div className="stack" style={{ gap: 10 }}>
-            <div>
-              <span className="badge">{KIND_LABEL[task.threadKind]}</span>{" "}
-              {task.threadUrl ? (
-                <a href={task.threadUrl} target="_blank" rel="noreferrer">
-                  {task.threadTitle || `${task.owner}/${task.repo}#${task.threadNumber}`} ↗
-                </a>
-              ) : (
-                task.threadTitle
-              )}
-            </div>
-            <blockquote>{task.requestText}</blockquote>
-            <div className="meta">
-              {who(task.requestedBy)} · {task.triggerKind}
-              {task.requestUrl && (
-                <>
-                  {" · "}
-                  <a href={task.requestUrl} target="_blank" rel="noreferrer">
-                    view on GitHub ↗
-                  </a>
-                </>
-              )}
-              {task.retryOf && (
-                <>
-                  {task.dryRun ? " · dry run of " : " · retry of "}
-                  <a href={href(`/tasks/${task.retryOf}`)}>#{task.retryOf}</a>
-                </>
-              )}
-              {task.profileVersion && (
-                <span title="The version of the agent's profile that ran this task (see the agent's page for outcomes by version)">
-                  {" · profile "}
-                  <code>{task.profileVersion}</code>
-                  {task.profileCommit ? ` (commit ${task.profileCommit})` : ""}
-                </span>
-              )}
-              {task.scheduleId && (
-                <>
-                  {" · "}
-                  <a href={href(`/schedules`)}>schedule #{task.scheduleId}</a>
-                </>
-              )}
-              {task.startedByTask && (
-                <>
-                  {" · started by task "}
-                  <a href={href(`/tasks/${task.startedByTask}`)}>#{task.startedByTask}</a>
-                </>
-              )}
-            </div>
-          </div>
-        </Panel>
-        <Panel title="Details">
-          <dl className="kv">
-            <dt>Task</dt>
-            <dd>#{task.id}</dd>
-            <dt>Duration</dt>
-            <dd>{duration(task.startedAt, task.finishedAt, now)}</dd>
-            <dt>Branch</dt>
-            <dd className="mono">{task.branch ? `${task.branch}${task.baseBranch && task.baseBranch !== task.branch ? ` → ${task.baseBranch}` : ""}` : "—"}</dd>
-            <dt>Pull request</dt>
-            <dd>
-              {task.prUrl ? (
-                <a href={task.prUrl} target="_blank" rel="noreferrer">
-                  #{task.prNumber} ↗
-                </a>
-              ) : (
-                "—"
-              )}
-              {task.commits ? <span className="meta"> · {task.commits} commit{task.commits === 1 ? "" : "s"}</span> : null}
-            </dd>
-            <dt>Session</dt>
-            <dd className="mono">{task.sessionId ?? "—"}</dd>
-            <dt>Exit code</dt>
-            <dd>{task.exitCode ?? "—"}</dd>
-            {task.costUsd !== null && (
+          <HStack gap={2} vAlign="center" wrap="wrap">
+            <Tag>{KIND_LABEL[task.threadKind]}</Tag>
+            {task.threadUrl ? (
+              <A to={task.threadUrl} external>
+                {task.threadTitle || `${task.owner}/${task.repo}#${task.threadNumber}`}
+              </A>
+            ) : (
+              <Text>{task.threadTitle}</Text>
+            )}
+          </HStack>
+          <Blockquote>
+            <span className="ao-prose">{task.requestText}</span>
+          </Blockquote>
+          <Meta block>
+            {who(task.requestedBy)} · {task.triggerKind}
+            {task.requestUrl && (
               <>
-                <dt>Cost</dt>
-                <dd>${task.costUsd.toFixed(4)}</dd>
+                {" · "}
+                <A to={task.requestUrl} external>
+                  view on GitHub
+                </A>
               </>
             )}
-            <dt>Thread history</dt>
-            <dd>
-              <a href={href(`/history/${task.owner}/${task.repo}/${task.threadKind}/${task.threadNumber}`)}>All runs on this thread</a>
-            </dd>
-          </dl>
+            {task.retryOf && (
+              <>
+                {task.dryRun ? " · dry run of " : " · retry of "}
+                <A to={`/tasks/${task.retryOf}`}>#{task.retryOf}</A>
+              </>
+            )}
+            {task.profileVersion && (
+              <span title="The version of the agent's profile that ran this task (see the agent's page for outcomes by version)">
+                {" · profile "}
+                <Code size="inherit">{task.profileVersion}</Code>
+                {task.profileCommit ? ` (commit ${task.profileCommit})` : ""}
+              </span>
+            )}
+            {task.scheduleId && (
+              <>
+                {" · "}
+                <A to="/schedules">schedule #{task.scheduleId}</A>
+              </>
+            )}
+            {task.startedByTask && (
+              <>
+                {" · started by task "}
+                <A to={`/tasks/${task.startedByTask}`}>#{task.startedByTask}</A>
+              </>
+            )}
+          </Meta>
         </Panel>
-      </div>
+        <Panel title="Details">
+          <KV
+            items={[
+              ["Task", `#${task.id}`],
+              ["Duration", duration(task.startedAt, task.finishedAt, now)],
+              ["Branch", task.branch ? <Code size="inherit">{`${task.branch}${task.baseBranch && task.baseBranch !== task.branch ? ` → ${task.baseBranch}` : ""}`}</Code> : "—"],
+              [
+                "Pull request",
+                <>
+                  {task.prUrl ? (
+                    <A to={task.prUrl} external>
+                      #{task.prNumber}
+                    </A>
+                  ) : (
+                    "—"
+                  )}
+                  {task.commits ? (
+                    <Meta>
+                      {" "}
+                      · {task.commits} commit{task.commits === 1 ? "" : "s"}
+                    </Meta>
+                  ) : null}
+                </>,
+              ],
+              ["Session", task.sessionId ? <Code size="inherit">{task.sessionId}</Code> : "—"],
+              ["Exit code", task.exitCode ?? "—"],
+              ...(task.costUsd !== null ? ([["Cost", `$${task.costUsd.toFixed(4)}`]] as [string, string][]) : []),
+              ["Thread history", <A to={`/history/${task.owner}/${task.repo}/${task.threadKind}/${task.threadNumber}`}>All runs on this thread</A>],
+            ]}
+          />
+        </Panel>
+      </Columns>
 
-      <section className="panel">
-        <div className="panel-head">
-          <h2>Activity</h2>
-          <span className="hint">{active ? "live" : `${events.length} events`}</span>
-          <span className="spacer" />
-          <label className="check">
-            <input type="checkbox" checked={showStderr} onChange={(event) => setShowStderr(event.target.checked)} style={{ width: "auto" }} /> stderr ({stderrCount})
-          </label>
-          <label className="check">
-            <input type="checkbox" checked={follow} onChange={(event) => setFollow(event.target.checked)} style={{ width: "auto" }} /> Follow
-          </label>
-        </div>
-        <div className="log" ref={logRef}>
-          {visible.length === 0 && <div className="line">{task.status === "queued" ? "Waiting for a free slot…" : "No activity yet."}</div>}
+      <Panel
+        title="Activity"
+        hint={active ? "live" : `${events.length} events`}
+        tight
+        actions={
+          <HStack gap={4} vAlign="center">
+            <CheckboxInput label={`stderr (${stderrCount})`} size="sm" value={showStderr} onChange={setShowStderr} />
+            <CheckboxInput label="Follow" size="sm" value={follow} onChange={setFollow} />
+          </HStack>
+        }
+      >
+        <div className="ao-log" ref={logRef}>
+          {visible.length === 0 && <div className="ao-log-line">{task.status === "queued" ? "Waiting for a free slot…" : "No activity yet."}</div>}
           {visible.map((event) => (
-            <div key={event.id} className={`line k-${event.kind}`}>
-              <span className="ts">{event.ts.slice(11, 19)}</span>
-              <span className="kind">{event.kind}</span>
-              <span className="msg">{event.message}</span>
+            <div key={event.id} className={`ao-log-line k-${event.kind}`}>
+              <span className="ao-log-time">{event.ts.slice(11, 19)}</span>
+              <span className="ao-log-kind">{event.kind}</span>
+              <span className="ao-log-message">{event.message}</span>
             </div>
           ))}
         </div>
-      </section>
+      </Panel>
 
       {task.resultText && (
         <Panel title="Agent reply">
-          <div className="prose">{task.resultText}</div>
+          <Text display="block">
+            <span className="ao-prose">{task.resultText}</span>
+          </Text>
         </Panel>
       )}
 
       {task.prompt && (
-        <Panel
-          title="Prompt"
-          hint="what the agent was given, including its history"
-          actions={
-            <button className="small" onClick={() => setShowPrompt((value) => !value)}>
-              {showPrompt ? "Hide" : "Show"}
-            </button>
-          }
-        >
-          {showPrompt ? <pre className="block">{task.prompt}</pre> : <span className="meta">{task.prompt.length.toLocaleString()} characters</span>}
+        <Panel title="Prompt" hint="what the agent was given, including its history" actions={<Button label={showPrompt ? "Hide" : "Show"} size="sm" onClick={() => setShowPrompt((value) => !value)} />}>
+          {showPrompt ? <CodeBlock code={task.prompt} isWrapped width="100%" maxHeight={640} size="sm" /> : <Meta>{task.prompt.length.toLocaleString()} characters</Meta>}
         </Panel>
       )}
-    </div>
+    </VStack>
   );
 }

@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
+import { Button, Code, HStack, StackItem, TextArea, VStack } from "@astryxdesign/core";
 import { api } from "../api.ts";
 import { ConfigReference } from "./ConfigReference.tsx";
+import { ErrorText, Meta, Tag } from "./ui.tsx";
 
 const OPTIONS_KEY = "ao.editor.options";
 
@@ -95,39 +97,33 @@ export function FileEditor({
     }
   };
 
-  if (content === null) return <div className="meta">Loading {path}…</div>;
+  if (content === null) return <Meta>Loading {path}…</Meta>;
   const dirty = content !== saved;
   return (
-    <div className="stack" style={{ gap: 8 }}>
-      <div className="row">
-        <code className="meta">{path}</code>
-        {!exists && <span className="badge">new file</span>}
-        {dirty && <span className="badge accent">unsaved</span>}
-        <span className="grow" />
-        {status && !dirty && <span className="meta">{status}</span>}
-        <button className="small" onClick={toggleOptions} title="What this file can contain">
-          {showOptions ? "Hide options" : "Options"}
-        </button>
-        {onDeleted && exists && (
-          <button className="small danger" onClick={remove}>
-            {deleteLabel ?? "Delete"}
-          </button>
-        )}
-        <button className="small" disabled={!dirty} onClick={() => setContent(saved)}>
-          Revert
-        </button>
-        <button className="small primary" disabled={!dirty || busy} onClick={save}>
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </div>
-      <div className={showOptions ? "editor-split" : undefined}>
-        <textarea
-          className="mono"
+    <VStack gap={2}>
+      <HStack gap={2} vAlign="center" wrap="wrap">
+        <Code size="inherit" color="secondary">{path}</Code>
+        {!exists && <Tag>new file</Tag>}
+        {dirty && <Tag accent>unsaved</Tag>}
+        <StackItem size="fill">
+          <span />
+        </StackItem>
+        {status && !dirty && <Meta>{status}</Meta>}
+        <Button label={showOptions ? "Hide options" : "Options"} size="sm" tooltip="What this file can contain" onClick={toggleOptions} />
+        {onDeleted && exists && <Button label={deleteLabel ?? "Delete"} size="sm" variant="destructive" onClick={() => void remove()} />}
+        <Button label="Revert" size="sm" isDisabled={!dirty} onClick={() => setContent(saved)} />
+        <Button label={busy ? "Saving…" : "Save"} size="sm" variant="primary" isDisabled={!dirty || busy} onClick={() => void save()} />
+      </HStack>
+      <div className={showOptions ? "ao-editor-split" : undefined}>
+        <TextArea
+          label={path}
+          isLabelHidden
           rows={rows}
-          spellCheck={false}
+          hasSpellCheck={false}
+          containerClassName="ao-mono"
           value={content}
-          onChange={(event) => {
-            setContent(event.target.value);
+          onChange={(value) => {
+            setContent(value);
             setStatus(null);
           }}
           onKeyDown={(event) => {
@@ -139,7 +135,7 @@ export function FileEditor({
         />
         {showOptions && <ConfigReference path={path} />}
       </div>
-      {error && <p className="error-text">{error}</p>}
-    </div>
+      {error && <ErrorText>{error}</ErrorText>}
+    </VStack>
   );
 }

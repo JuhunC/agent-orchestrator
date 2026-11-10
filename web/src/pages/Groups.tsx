@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { Button, CheckboxInput, Code, Field, Grid, Heading, HStack, Selector, StackItem, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, TextInput, VStack } from "@astryxdesign/core";
 import { api, EFFORTS, useApi, type AgentsResponse, type Group } from "../api.ts";
 import { FileEditor } from "../components/FileEditor.tsx";
-import { Dialog, Empty, Panel, Pill } from "../components/ui.tsx";
-import { href, navigate } from "../router.ts";
-import { Chips } from "./Agents.tsx";
+import { SUGGESTED_MODELS } from "../components/ModelPicker.tsx";
+import { Chips, DataTable, Dialog, Empty, ErrorText, LinkButton, Meta, Notice, Panel, Pill, SuggestInput } from "../components/ui.tsx";
+import { navigate } from "../router.ts";
 
 function NewGroupDialog({ agents, onClose }: { agents: string[]; onClose: () => void }) {
   const [name, setName] = useState("");
@@ -25,37 +26,31 @@ function NewGroupDialog({ agents, onClose }: { agents: string[]; onClose: () => 
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!name} onClick={create}>
-            Create
-          </button>
+          <Button label="Cancel" onClick={onClose} />
+          <Button label="Create" variant="primary" isDisabled={!name} onClick={() => void create()} />
         </>
       }
     >
-      <div className="stack" style={{ gap: 12 }}>
-        <div className="field">
-          <label htmlFor="group-name">Name</label>
-          <input id="group-name" placeholder="developers" value={name} onChange={(event) => setName(event.target.value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())} />
-          <span className="help">Use it in a board column as group:{name || "<name>"}</span>
-        </div>
-        <div className="field">
-          <label>Members</label>
-          <div className="row">
-            {agents.map((agent) => (
-              <label key={agent} className="check">
-                <input
-                  type="checkbox"
-                  style={{ width: "auto" }}
-                  checked={members.includes(agent)}
-                  onChange={(event) => setMembers((current) => (event.target.checked ? [...current, agent] : current.filter((member) => member !== agent)))}
-                />
-                {agent}
-              </label>
-            ))}
-          </div>
-        </div>
-        {error && <p className="error-text">{error}</p>}
-      </div>
+      <TextInput
+        label="Name"
+        placeholder="developers"
+        value={name}
+        onChange={(value) => setName(value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())}
+        description={`Use it in a board column as group:${name || "<name>"}`}
+      />
+      <Field label="Members" inputID="group-members" isGroupLabel>
+        <HStack gap={4} wrap="wrap">
+          {agents.map((agent) => (
+            <CheckboxInput
+              key={agent}
+              label={agent}
+              value={members.includes(agent)}
+              onChange={(checked) => setMembers((current) => (checked ? [...current, agent] : current.filter((member) => member !== agent)))}
+            />
+          ))}
+        </HStack>
+      </Field>
+      {error && <ErrorText>{error}</ErrorText>}
     </Dialog>
   );
 }
@@ -64,54 +59,55 @@ export function Groups() {
   const { data } = useApi<AgentsResponse>("/api/agents", (message) => message.type === "agents");
   const [creating, setCreating] = useState(false);
   return (
-    <div className="stack">
-      <div className="page-head">
-        <span className="sub">
-          Groups bundle agents: members inherit the group's defaults (model, effort, skills, MCP servers, subagents), a board column can take a whole group, and you can change
-          every member at once.
-        </span>
-        <span className="spacer" />
-        <button className="primary" onClick={() => setCreating(true)}>
-          New group
-        </button>
-      </div>
+    <VStack gap={4}>
+      <HStack gap={3} vAlign="center" wrap="wrap">
+        <StackItem size="fill">
+          <Text color="secondary">
+            Groups bundle agents: members inherit the group's defaults (model, effort, skills, MCP servers, subagents), a board column can take a whole group, and you can change every member at once.
+          </Text>
+        </StackItem>
+        <Button label="New group" variant="primary" onClick={() => setCreating(true)} />
+      </HStack>
       <Panel tight>
         {!data ? (
           <Empty>Loading…</Empty>
         ) : data.groups.length === 0 ? (
           <Empty>No groups yet.</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Group</th>
-                  <th>Members</th>
-                  <th>Defaults</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.groups.map((group) => (
-                  <tr key={group.name} className="clickable" onClick={() => navigate(`/groups/${group.name}`)}>
-                    <td>
-                      <div className="title">
-                        {group.name} {group.errors.length > 0 && <Pill tone="failed">problems</Pill>}
-                      </div>
-                      <div className="meta">{group.description}</div>
-                    </td>
-                    <td>
-                      <Chips items={group.members} empty="none" />
-                    </td>
-                    <td className="meta">{defaultsText(group)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <DataTable hover>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Group</TableHeaderCell>
+                <TableHeaderCell>Members</TableHeaderCell>
+                <TableHeaderCell>Defaults</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.groups.map((group) => (
+                <TableRow key={group.name} className="ao-clickable" onClick={() => navigate(`/groups/${group.name}`)}>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <HStack gap={1.5} vAlign="center">
+                        <Text weight="semibold">{group.name}</Text>
+                        {group.errors.length > 0 && <Pill tone="failed">problems</Pill>}
+                      </HStack>
+                      <Meta>{group.description}</Meta>
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <Chips items={group.members} empty="none" />
+                  </TableCell>
+                  <TableCell>
+                    <Meta>{defaultsText(group)}</Meta>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
         )}
       </Panel>
       {creating && data && <NewGroupDialog agents={data.agents.map((agent) => agent.name)} onClose={() => setCreating(false)} />}
-    </div>
+    </VStack>
   );
 }
 
@@ -150,93 +146,83 @@ export function GroupDetail({ name }: { name: string }) {
   };
 
   return (
-    <div className="stack">
-      <div className="page-head">
-        <h1 className="grow">
-          {group.name} <span className="meta">use as group:{group.name}</span>
-        </h1>
-        <a className="button" href={href("/groups")}>
-          All groups
-        </a>
-      </div>
-      {group.errors.length > 0 && <div className="banner error">{group.errors.join(" · ")}</div>}
+    <VStack gap={4}>
+      <HStack gap={3} vAlign="center" wrap="wrap">
+        <StackItem size="fill">
+          <HStack gap={2} vAlign="center" wrap="wrap">
+            <Heading level={2}>{group.name}</Heading>
+            <Meta>use as group:{group.name}</Meta>
+          </HStack>
+        </StackItem>
+        <LinkButton to="/groups" label="All groups" />
+      </HStack>
+      {group.errors.length > 0 && <Notice tone="error" title={group.errors.join(" · ")} />}
 
       <Panel title="Members" hint={`${members.length} agent${members.length === 1 ? "" : "s"}`} tight>
         {members.length === 0 ? (
           <Empty>No members. Add agent names under members in the file below.</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Agent</th>
-                  <th>Model · effort</th>
-                  <th>On</th>
-                </tr>
-              </thead>
-              <tbody>
-                {members.map((agent) => (
-                  <tr key={agent.name} className="clickable" onClick={() => navigate(`/agents/${agent.name}`)}>
-                    <td>
-                      <div className="title">{agent.name}</div>
-                      <div className="meta">@{agent.handle}</div>
-                    </td>
-                    <td className="meta">
+          <DataTable hover>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Agent</TableHeaderCell>
+                <TableHeaderCell>Model · effort</TableHeaderCell>
+                <TableHeaderCell>On</TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {members.map((agent) => (
+                <TableRow key={agent.name} className="ao-clickable" onClick={() => navigate(`/agents/${agent.name}`)}>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <Text weight="semibold">{agent.name}</Text>
+                      <Meta>@{agent.handle}</Meta>
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <Meta>
                       {agent.model ?? "default"}
                       {agent.modelFrom === "group" && " (group)"} · {agent.effort ?? "default"}
                       {agent.effortFrom === "group" && " (group)"}
-                    </td>
-                    <td>{agent.enabled ? <Pill tone="succeeded">on</Pill> : <Pill tone="off">off</Pill>}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </Meta>
+                  </TableCell>
+                  <TableCell>{agent.enabled ? <Pill tone="succeeded">on</Pill> : <Pill tone="off">off</Pill>}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
         )}
       </Panel>
 
       <Panel title="Change every member at once" hint="writes each member's agent.md">
-        <div className="stack" style={{ gap: 12 }}>
-          <div className="form-grid">
-            <div className="field">
-              <label htmlFor="group-model">Model</label>
-              <input id="group-model" list="model-suggestions" placeholder="e.g. claude-sonnet-5-5 (empty clears it)" value={model} onChange={(event) => setModel(event.target.value)} />
-            </div>
-            <div className="field">
-              <label htmlFor="group-effort">Effort</label>
-              <select id="group-effort" value={effort} onChange={(event) => setEffort(event.target.value)}>
-                <option value="">Model default (clears it)</option>
-                {EFFORTS.map((level) => (
-                  <option key={level}>{level}</option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div className="row">
-            <button className="primary small" onClick={() => void apply({ model: model.trim() || null, effort: effort || null }, "Set model and effort")}>
-              Apply model and effort to all
-            </button>
-            <button className="small" onClick={() => void apply({ enabled: true }, "Turned on")}>
-              Turn all on
-            </button>
-            <button className="small danger" onClick={() => void apply({ enabled: false }, "Turned off")}>
-              Turn all off
-            </button>
-            {status && <span className="meta">{status}</span>}
-            {error && <span className="error-text">{error}</span>}
-          </div>
-          <p className="meta" style={{ margin: 0 }}>
-            To make members inherit instead (so later members get it too), set it under <code>defaults</code> in the group file; an agent's own setting still wins.
-          </p>
-        </div>
+        <Grid columns={{ minWidth: 240 }} gap={4}>
+          <SuggestInput label="Model" placeholder="e.g. claude-sonnet-5-5 (empty clears it)" suggestions={SUGGESTED_MODELS} value={model} onChange={setModel} />
+          <Selector
+            label="Effort"
+            options={[{ value: "", label: "Model default (clears it)" }, ...EFFORTS.map((level) => ({ value: level, label: level }))]}
+            value={effort}
+            placeholder="Model default (clears it)"
+            onChange={(value) => setEffort(value ?? "")}
+          />
+        </Grid>
+        <HStack gap={2} vAlign="center" wrap="wrap">
+          <Button label="Apply model and effort to all" size="sm" variant="primary" onClick={() => void apply({ model: model.trim() || null, effort: effort || null }, "Set model and effort")} />
+          <Button label="Turn all on" size="sm" onClick={() => void apply({ enabled: true }, "Turned on")} />
+          <Button label="Turn all off" size="sm" variant="destructive" onClick={() => void apply({ enabled: false }, "Turned off")} />
+          {status && <Meta>{status}</Meta>}
+          {error && <ErrorText>{error}</ErrorText>}
+        </HStack>
+        <Meta block>
+          To make members inherit instead (so later members get it too), set it under <Code size="inherit">defaults</Code> in the group file; an agent's own setting still wins.
+        </Meta>
       </Panel>
 
       <Panel title={`groups/${group.name}.yaml`} hint="members and shared defaults">
         <FileEditor path={`groups/${group.name}.yaml`} rows={14} onSaved={() => void reload()} onDeleted={() => navigate("/groups")} deleteLabel="Delete group" />
-        <p className="meta">
-          Example: <code>{"members: [coder, coder-2]"}</code> and <code>{"defaults: { model: sonnet, effort: high, skills: [shipping-changes] }"}</code>
-        </p>
+        <Meta block>
+          Example: <Code size="inherit">{"members: [coder, coder-2]"}</Code> and <Code size="inherit">{"defaults: { model: sonnet, effort: high, skills: [shipping-changes] }"}</Code>
+        </Meta>
       </Panel>
-    </div>
+    </VStack>
   );
 }

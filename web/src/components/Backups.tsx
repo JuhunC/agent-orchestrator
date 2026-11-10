@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { Button, Code, HStack } from "@astryxdesign/core";
 import { api, useApi } from "../api.ts";
-import { Panel } from "./ui.tsx";
+import { Meta, Notice, Panel } from "./ui.tsx";
 
 interface BackupsResponse {
   dir: string;
@@ -18,41 +19,42 @@ export function Backups() {
   if (!data) return null;
   return (
     <Panel title="Backups" hint={data.keep ? `daily, the last ${data.keep} kept` : "off (BACKUP_KEEP=0)"}>
-      <div className="stack" style={{ gap: 8 }}>
-        {data.backups.length ? (
-          <div className="meta">
-            Latest: {new Date(data.backups[0]!.at).toLocaleString()} ({data.backups[0]!.kb} KB: {data.backups[0]!.files.join(", ")}). {data.backups.length} kept in <code>{data.dir}</code>.
-          </div>
-        ) : (
-          <div className="meta">No backups yet. They go to <code>{data.dir}</code>.</div>
-        )}
-        <div className="meta">
-          Database: {(data.database.kb / 1024).toFixed(1)} MB. {data.detailRetentionDays ? `Prompts and step logs of tasks older than ${data.detailRetentionDays} days are dropped; the tasks stay.` : "Tasks' prompts and step logs are kept forever (TASK_DETAIL_RETENTION_DAYS=0)."}
-        </div>
-        {error && <div className="banner error">{error}</div>}
-        <div>
-          <button
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              setError(null);
-              try {
-                await api.post("/api/backups");
-                void reload();
-              } catch (failure) {
-                setError(failure instanceof Error ? failure.message : String(failure));
-              } finally {
-                setBusy(false);
-              }
-            }}
-          >
-            {busy ? "Backing up…" : "Back up now"}
-          </button>
-        </div>
-        <div className="meta">
-          Each holds the database (tasks, history, settings, agents' encrypted GitHub tokens) and the key files (the GitHub App's credentials, <code>data-key</code>, the session secret, the admin token), so keep copies somewhere safe, off this server. Workspaces are clones and aren't included; the profiles folder is its own git repository. See the README for restoring.
-        </div>
-      </div>
+      {data.backups.length ? (
+        <Meta block>
+          Latest: {new Date(data.backups[0]!.at).toLocaleString()} ({data.backups[0]!.kb} KB: {data.backups[0]!.files.join(", ")}). {data.backups.length} kept in <Code size="inherit">{data.dir}</Code>.
+        </Meta>
+      ) : (
+        <Meta block>
+          No backups yet. They go to <Code size="inherit">{data.dir}</Code>.
+        </Meta>
+      )}
+      <Meta block>
+        Database: {(data.database.kb / 1024).toFixed(1)} MB.{" "}
+        {data.detailRetentionDays ? `Prompts and step logs of tasks older than ${data.detailRetentionDays} days are dropped; the tasks stay.` : "Tasks' prompts and step logs are kept forever (TASK_DETAIL_RETENTION_DAYS=0)."}
+      </Meta>
+      {error && <Notice tone="error" title={error} />}
+      <HStack>
+        <Button
+          label={busy ? "Backing up…" : "Back up now"}
+          isDisabled={busy}
+          onClick={async () => {
+            setBusy(true);
+            setError(null);
+            try {
+              await api.post("/api/backups");
+              void reload();
+            } catch (failure) {
+              setError(failure instanceof Error ? failure.message : String(failure));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      </HStack>
+      <Meta block>
+        Each holds the database (tasks, history, settings, agents' encrypted GitHub tokens) and the key files (the GitHub App's credentials, <Code size="inherit">data-key</Code>, the session secret, the admin token), so keep
+        copies somewhere safe, off this server. Workspaces are clones and aren't included; the profiles folder is its own git repository. See the README for restoring.
+      </Meta>
     </Panel>
   );
 }

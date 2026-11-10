@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Button, Code, Heading, HStack, StackItem, Text, TextInput, VStack } from "@astryxdesign/core";
 import { api, useApi, type AgentsResponse, type GithubPermissions, type ModelInfo } from "../api.ts";
 import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
 import { GithubAccount } from "../components/GithubAccount.tsx";
@@ -6,9 +7,8 @@ import { Schedules } from "../components/Schedules.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
 import { AgentUsage } from "../components/Usage.tsx";
-import { Empty, Panel, Pill } from "../components/ui.tsx";
+import { A, Chips, Columns, Empty, KV, Lines, LinkButton, Meta, Notice, Panel, Pill, Tag } from "../components/ui.tsx";
 import { href, navigate } from "../router.ts";
-import { Chips } from "./Agents.tsx";
 
 const SKILL_TEMPLATE = (name: string) => `---
 name: ${name}
@@ -62,123 +62,120 @@ export function AgentDetail({ name }: { name: string }) {
   const permissions = githubPermissions(agent.github);
 
   return (
-    <div className="stack">
-      <div className="page-head">
-        <h1 className="grow">
-          {agent.name} <span className="meta">@{agent.handle}</span>
-        </h1>
-        <button onClick={() => setDuplicating(true)}>Duplicate</button>
-        <a className="button" href={href("/agents")}>
-          All agents
-        </a>
-      </div>
+    <VStack gap={4}>
+      <HStack gap={3} vAlign="center" wrap="wrap">
+        <StackItem size="fill">
+          <HStack gap={2} vAlign="center" wrap="wrap">
+            <Heading level={2}>{agent.name}</Heading>
+            <Meta>@{agent.handle}</Meta>
+          </HStack>
+        </StackItem>
+        <Button label="Duplicate" onClick={() => setDuplicating(true)} />
+        <LinkButton to="/agents" label="All agents" />
+      </HStack>
 
       {agent.errors.length > 0 && (
-        <div className="banner error">
-          <span>
-            <b>This agent won't start until these are fixed:</b>
-            {agent.errors.map((error) => (
-              <div key={error}>{error}</div>
-            ))}
-          </span>
-        </div>
+        <Notice tone="error" title="This agent won't start until these are fixed:">
+          <Lines items={agent.errors} />
+        </Notice>
       )}
 
-      <div className="grid-2">
+      <Columns>
         <Panel title="What it gets" hint="resolved from the files below">
-          <dl className="kv">
-            <dt>Model</dt>
-            <dd>
-              {agent.model ?? <span className="meta">default ({modelInfo?.model ?? "ANTHROPIC_MODEL"})</span>}
-              {agent.modelFrom === "group" && <span className="meta"> (from group)</span>}
-              {agent.effort && <span className="meta"> · effort {agent.effort}{agent.effortFrom === "group" ? " (from group)" : ""}</span>}
-              {agent.fallbackModel && <span className="meta" title="fallback_model: used when the model is overloaded or out of usage"> · falls back to {agent.fallbackModel.split(",").join(", ")}</span>}
-            </dd>
-            <dt>Groups</dt>
-            <dd>
-              {agent.groups.length ? agent.groups.map((group) => (
-                <a key={group} className="badge accent" href={href(`/groups/${group}`)} style={{ marginRight: 4 }}>
-                  {group}
-                </a>
-              )) : <span className="meta">none</span>}
-            </dd>
-            <dt>Replicas</dt>
-            <dd>{agent.replicas ? `${agent.replicas} (works up to ${agent.replicas} cards at once)` : <span className="meta">no limit</span>}
-            </dd>
-            <dt>Skills</dt>
-            <dd>
-              <Chips items={[...agent.skills, ...agent.ownSkills.map((own) => own.name)]} empty="none" />
-            </dd>
-            <dt>MCP servers</dt>
-            <dd>
-              <Chips items={["github", ...agent.mcp, ...agent.ownMcp]} />
-            </dd>
-            <dt>Subagents</dt>
-            <dd>
-              <Chips items={agent.subagents} empty="none" />
-            </dd>
-            <dt>Built-in tools</dt>
-            <dd>
-              {agent.toolsAllow ? <Chips items={agent.toolsAllow} /> : "all Claude Code tools"}
-              {agent.toolsDeny.length > 0 && (
-                <div className="meta">
-                  except <Chips items={agent.toolsDeny} />
-                </div>
-              )}
-            </dd>
-            <dt>GitHub</dt>
-            <dd>
-              <Chips items={permissions} empty="read only" />
-            </dd>
-            <dt>Base branch</dt>
-            <dd>
-              {agent.baseBranch ? (
-                <span title="github.base_branch">
-                  pull requests go into <code>{agent.baseBranch}</code> (a board, schedule or run can name another)
-                </span>
-              ) : (
-                <span className="meta" title="github.base_branch">
-                  the repository's setting (<a href={href("/settings")}>Settings</a>) or default branch, unless a board, schedule or run names one
-                </span>
-              )}
-            </dd>
-            <dt>Sub-issues</dt>
-            <dd>
-              {agent.github.parentBranch ? (
-                <span title="github.parent_branch">branch from and merge into the parent issue's branch</span>
-              ) : (
-                <span className="meta" title="github.parent_branch: false">merge into the base branch, like any issue</span>
-              )}
-            </dd>
-            <dt>Limits</dt>
-            <dd>
-              {[agent.maxTurns && `${agent.maxTurns} turns`, agent.maxBudgetUsd && `$${agent.maxBudgetUsd}`, agent.timeoutMinutes && `${agent.timeoutMinutes} min`].filter(Boolean).join(" · ") ||
-                "defaults"}
-            </dd>
-            <dt>Session</dt>
-            <dd>{agent.live ? <Pill tone="running">live between tasks</Pill> : "new process per task"}</dd>
-          </dl>
+          <KV
+            items={[
+              [
+                "Model",
+                <>
+                  {agent.model ?? <Meta>default ({modelInfo?.model ?? "ANTHROPIC_MODEL"})</Meta>}
+                  {agent.modelFrom === "group" && <Meta> (from group)</Meta>}
+                  {agent.effort && (
+                    <Meta>
+                      {" "}
+                      · effort {agent.effort}
+                      {agent.effortFrom === "group" ? " (from group)" : ""}
+                    </Meta>
+                  )}
+                  {agent.fallbackModel && (
+                    <span title="fallback_model: used when the model is overloaded or out of usage">
+                      <Meta> · falls back to {agent.fallbackModel.split(",").join(", ")}</Meta>
+                    </span>
+                  )}
+                </>,
+              ],
+              [
+                "Groups",
+                agent.groups.length ? (
+                  <HStack gap={1} wrap="wrap">
+                    {agent.groups.map((group) => (
+                      <Tag key={group} accent href={href(`/groups/${group}`)}>
+                        {group}
+                      </Tag>
+                    ))}
+                  </HStack>
+                ) : (
+                  <Meta>none</Meta>
+                ),
+              ],
+              ["Replicas", agent.replicas ? `${agent.replicas} (works up to ${agent.replicas} cards at once)` : <Meta>no limit</Meta>],
+              ["Skills", <Chips items={[...agent.skills, ...agent.ownSkills.map((own) => own.name)]} empty="none" />],
+              ["MCP servers", <Chips items={["github", ...agent.mcp, ...agent.ownMcp]} />],
+              ["Subagents", <Chips items={agent.subagents} empty="none" />],
+              [
+                "Built-in tools",
+                <VStack gap={1}>
+                  {agent.toolsAllow ? <Chips items={agent.toolsAllow} /> : <Text>all Claude Code tools</Text>}
+                  {agent.toolsDeny.length > 0 && (
+                    <HStack gap={1} vAlign="center" wrap="wrap">
+                      <Meta>except</Meta>
+                      <Chips items={agent.toolsDeny} />
+                    </HStack>
+                  )}
+                </VStack>,
+              ],
+              ["GitHub", <Chips items={permissions} empty="read only" />],
+              [
+                "Base branch",
+                agent.baseBranch ? (
+                  <span title="github.base_branch">
+                    pull requests go into <Code size="inherit">{agent.baseBranch}</Code> (a board, schedule or run can name another)
+                  </span>
+                ) : (
+                  <span title="github.base_branch">
+                    <Meta>
+                      the repository's setting (<A to="/settings">Settings</A>) or default branch, unless a board, schedule or run names one
+                    </Meta>
+                  </span>
+                ),
+              ],
+              [
+                "Sub-issues",
+                agent.github.parentBranch ? (
+                  <span title="github.parent_branch">branch from and merge into the parent issue's branch</span>
+                ) : (
+                  <span title="github.parent_branch: false">
+                    <Meta>merge into the base branch, like any issue</Meta>
+                  </span>
+                ),
+              ],
+              ["Limits", [agent.maxTurns && `${agent.maxTurns} turns`, agent.maxBudgetUsd && `$${agent.maxBudgetUsd}`, agent.timeoutMinutes && `${agent.timeoutMinutes} min`].filter(Boolean).join(" · ") || "defaults"],
+              ["Session", agent.live ? <Pill tone="running">live between tasks</Pill> : "new process per task"],
+            ]}
+          />
         </Panel>
         <Panel title="Shared library" hint="what this agent can reference">
-          <div className="stack" style={{ gap: 8 }}>
-            <div>
-              <span className="meta">Skills: </span>
-              <Chips items={data.library.skills.map((item) => item.name)} empty="none yet" />
-            </div>
-            <div>
-              <span className="meta">Roles: </span>
-              <Chips items={data.library.roles.map((item) => item.name)} empty="none yet" />
-            </div>
-            <div>
-              <span className="meta">MCP servers: </span>
-              <Chips items={data.library.mcp.map((item) => item.name)} empty="none yet" />
-            </div>
-            <p className="meta" style={{ margin: 0 }}>
-              List names from the library under <code>skills</code>, <code>mcp</code> and <code>subagents</code> in agent.md. <a href={href("/library")}>Edit the library</a>.
-            </p>
-          </div>
+          <KV
+            items={[
+              ["Skills", <Chips items={data.library.skills.map((item) => item.name)} empty="none yet" />],
+              ["Roles", <Chips items={data.library.roles.map((item) => item.name)} empty="none yet" />],
+              ["MCP servers", <Chips items={data.library.mcp.map((item) => item.name)} empty="none yet" />],
+            ]}
+          />
+          <Meta block>
+            List names from the library under <Code size="inherit">skills</Code>, <Code size="inherit">mcp</Code> and <Code size="inherit">subagents</Code> in agent.md. <A to="/library">Edit the library</A>.
+          </Meta>
         </Panel>
-      </div>
+      </Columns>
 
       <GithubAccount agent={agent} onChanged={() => void reload()} />
 
@@ -200,58 +197,51 @@ export function AgentDetail({ name }: { name: string }) {
         title="Own skills"
         hint="only this agent has these"
         actions={
-          <div className="row" style={{ flexWrap: "nowrap" }}>
-            <input placeholder="new-skill-name" value={newSkill} onChange={(event) => setNewSkill(event.target.value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())} style={{ width: 180 }} />
-            <button className="small" disabled={!newSkill} onClick={() => (setSkill(newSkill), setNewSkill(""))}>
-              Add skill
-            </button>
-          </div>
+          <HStack gap={2} vAlign="center">
+            <TextInput label="New skill name" isLabelHidden size="sm" width={180} placeholder="new-skill-name" value={newSkill} onChange={(value) => setNewSkill(value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())} />
+            <Button label="Add skill" size="sm" isDisabled={!newSkill} onClick={() => (setSkill(newSkill), setNewSkill(""))} />
+          </HStack>
         }
       >
-        <div className="stack" style={{ gap: 10 }}>
-          <div className="row">
-            {agent.ownSkills.length === 0 && !skill && <span className="meta">None. Library skills are usually enough; add one here for things only this agent does.</span>}
-            {agent.ownSkills.map((own) => (
-              <button key={own.name} className={`small${skill === own.name ? " primary" : ""}`} onClick={() => setSkill(own.name)} title={own.description}>
-                {own.name}
-              </button>
-            ))}
-          </div>
-          {skill && (
-            <FileEditor
-              key={skill}
-              path={`${base}/skills/${skill}/SKILL.md`}
-              initial={SKILL_TEMPLATE(skill)}
-              onSaved={() => void reload()}
-              onDeleted={() => {
-                setSkill(null);
-                void reload();
-              }}
-              deleteLabel="Delete skill"
-            />
-          )}
-        </div>
+        <HStack gap={2} wrap="wrap" vAlign="center">
+          {agent.ownSkills.length === 0 && !skill && <Meta>None. Library skills are usually enough; add one here for things only this agent does.</Meta>}
+          {agent.ownSkills.map((own) => (
+            <Button key={own.name} label={own.name} size="sm" variant={skill === own.name ? "primary" : "secondary"} tooltip={own.description || undefined} onClick={() => setSkill(own.name)} />
+          ))}
+        </HStack>
+        {skill && (
+          <FileEditor
+            key={skill}
+            path={`${base}/skills/${skill}/SKILL.md`}
+            initial={SKILL_TEMPLATE(skill)}
+            onSaved={() => void reload()}
+            onDeleted={() => {
+              setSkill(null);
+              void reload();
+            }}
+            deleteLabel="Delete skill"
+          />
+        )}
       </Panel>
 
       <Panel title="Own MCP servers" hint="mcp.json; added to the library servers it lists">
         <FileEditor path={`${base}/mcp.json`} initial={MCP_TEMPLATE} rows={12} onSaved={() => void reload()} onDeleted={() => void reload()} />
-        <p className="meta">
-          <code>{"${NAME}"}</code> is replaced with the server's environment variable, so secrets stay out of the files. Remote servers use <code>"url"</code> and{" "}
-          <code>"headers"</code>. Add <code>"alwaysLoad": true</code> to show a server's tools without tool search.
-        </p>
+        <Meta block>
+          <Code size="inherit">{"${NAME}"}</Code> is replaced with the server's environment variable, so secrets stay out of the files. Remote servers use <Code size="inherit">"url"</Code> and <Code size="inherit">"headers"</Code>. Add{" "}
+          <Code size="inherit">"alwaysLoad": true</Code> to show a server's tools without tool search.
+        </Meta>
       </Panel>
 
-      <div className="row">
-        <button
-          className="small"
+      <HStack>
+        <Button
+          label={agent.enabled ? "Turn off" : "Turn on"}
+          size="sm"
           onClick={async () => {
             await api.post(`/api/agents/${encodeURIComponent(agent.name)}/enabled`, { enabled: !agent.enabled });
             void reload();
           }}
-        >
-          {agent.enabled ? "Turn off" : "Turn on"}
-        </button>
-      </div>
-    </div>
+        />
+      </HStack>
+    </VStack>
   );
 }

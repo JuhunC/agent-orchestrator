@@ -1,5 +1,6 @@
+import { Code, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text } from "@astryxdesign/core";
 import { useApi } from "../api.ts";
-import { Panel } from "./ui.tsx";
+import { DataTable, Meta, Panel } from "./ui.tsx";
 
 interface AuditRow {
   id: number;
@@ -15,38 +16,46 @@ interface AuditRow {
 export function AuditLog() {
   const { data } = useApi<AuditRow[]>("/api/audit?limit=50", (message) => message.type === "settings" || message.type === "agents" || message.type === "task");
   return (
-    <Panel title="Audit log" hint="changes made here, newest first (GET /api/audit)">
+    <Panel title="Audit log" hint="changes made here, newest first (GET /api/audit)" tight={Boolean(data?.length)}>
       {!data?.length ? (
-        <div className="meta">Nothing yet.</div>
+        <Meta>Nothing yet.</Meta>
       ) : (
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Who</th>
-                <th>What</th>
-                <th>Details</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.map((row) => (
-                <tr key={row.id}>
-                  <td className="nowrap meta">{new Date(row.ts).toLocaleString()}</td>
-                  <td className="nowrap">
+        <DataTable>
+          <TableHeader>
+            <TableRow>
+              <TableHeaderCell>When</TableHeaderCell>
+              <TableHeaderCell>Who</TableHeaderCell>
+              <TableHeaderCell>What</TableHeaderCell>
+              <TableHeaderCell>Details</TableHeaderCell>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.map((row) => (
+              <TableRow key={row.id}>
+                <TableCell>
+                  <Text type="supporting" textWrap="nowrap">
+                    {new Date(row.ts).toLocaleString()}
+                  </Text>
+                </TableCell>
+                <TableCell>
+                  <Text textWrap="nowrap">
                     {row.login}
-                    {row.role !== "admin" && <span className="meta"> ({row.role})</span>}
-                  </td>
-                  <td>
-                    <code>{row.action}</code>
-                    {row.status >= 400 && <span className="meta"> · {row.status === 403 ? "refused" : `failed (${row.status})`}</span>}
-                  </td>
-                  <td className="meta" style={{ overflowWrap: "anywhere" }}>{row.detail}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    {row.role !== "admin" && <Meta> ({row.role})</Meta>}
+                  </Text>
+                </TableCell>
+                <TableCell>
+                  <Code size="inherit">{row.action}</Code>
+                  {row.status >= 400 && <Meta> · {row.status === 403 ? "refused" : `failed (${row.status})`}</Meta>}
+                </TableCell>
+                <TableCell>
+                  <Text type="supporting" wordBreak="break-all">
+                    {row.detail}
+                  </Text>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
       )}
     </Panel>
   );

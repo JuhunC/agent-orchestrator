@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
+import { Button, Code, HStack, TableBody, TableCell, TableRow, Text, TextInput, VStack } from "@astryxdesign/core";
 import { api, useApi, type BaseBranchOverview, type Installation } from "../api.ts";
-import { href } from "../router.ts";
-import { Panel } from "./ui.tsx";
+import { A, DataTable, Meta, Notice, Panel, SuggestInput } from "./ui.tsx";
 
 /**
  * Settings → Base branches: which branch agents' pull requests go into, per repository, and the
@@ -44,64 +44,58 @@ export function BaseBranches() {
 
   return (
     <Panel title="Base branches" hint="where agents' pull requests go">
-      <div className="stack" style={{ gap: 10 }}>
-        <div className="meta">
-          Without a setting, pull requests go into the repository's default branch. Set one here per repository, with <code>base_branch</code> in a board file or an agent's agent.md, on a schedule, or when you start a run. The most specific wins: run or schedule, then board, then agent, then repository.
-        </div>
-        {data.repos.length > 0 && (
-          <div className="table-wrap">
-            <table>
-              <tbody>
-                {data.repos.map((entry) => (
-                  <tr key={entry.repo}>
-                    <td className="mono">{entry.repo}</td>
-                    <td className="mono" style={{ whiteSpace: "nowrap" }}>
-                      → {entry.branch}
-                    </td>
-                    <td style={{ textAlign: "right" }}>
-                      <button className="small" disabled={busy} onClick={() => void save(entry.repo, null)}>
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-        <div className="base-branch-form">
-          <input aria-label="Repository" list="base-branch-repos" placeholder="owner/repo" value={repo} onChange={(event) => setRepo(event.target.value.trim())} />
-          <datalist id="base-branch-repos">
-            {repos.map((name) => (
-              <option key={name} value={name} />
+      <Meta block>
+        Without a setting, pull requests go into the repository's default branch. Set one here per repository, with <Code size="inherit">base_branch</Code> in a board file or an agent's agent.md, on a schedule, or when
+        you start a run. The most specific wins: run or schedule, then board, then agent, then repository.
+      </Meta>
+      {data.repos.length > 0 && (
+        <DataTable>
+          <TableBody>
+            {data.repos.map((entry) => (
+              <TableRow key={entry.repo}>
+                <TableCell>
+                  <Text type="code">{entry.repo}</Text>
+                </TableCell>
+                <TableCell>
+                  <Text type="code" textWrap="nowrap">
+                    → {entry.branch}
+                  </Text>
+                </TableCell>
+                <TableCell>
+                  <HStack hAlign="end">
+                    <Button label="Remove" size="sm" isDisabled={busy} onClick={() => void save(entry.repo, null)} />
+                  </HStack>
+                </TableCell>
+              </TableRow>
             ))}
-          </datalist>
-          <input aria-label="Base branch" placeholder="develop" value={branch} onChange={(event) => setBranch(event.target.value.trim())} />
-          <button disabled={!valid || busy} onClick={() => void save(repo.trim(), branch.trim())}>
-            {busy ? "Saving…" : "Set"}
-          </button>
-        </div>
-        {error && <div className="banner error">{error}</div>}
-        {others > 0 && (
-          <div className="meta stack" style={{ gap: 4 }}>
-            {data.boards.map((board) => (
-              <div key={`board-${board.name}`}>
-                Board <a href={href(`/boards/${board.name}`)}>{board.name}</a>: <code>{board.branch}</code>
-              </div>
-            ))}
-            {data.agents.map((agent) => (
-              <div key={`agent-${agent.name}`}>
-                Agent <a href={href(`/agents/${agent.name}`)}>{agent.name}</a>: <code>{agent.branch}</code>
-              </div>
-            ))}
-            {data.schedules.map((schedule) => (
-              <div key={`schedule-${schedule.id}`}>
-                Schedule <a href={href("/schedules")}>{schedule.name}</a> ({schedule.agent}, {schedule.repo}): <code>{schedule.branch}</code>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+          </TableBody>
+        </DataTable>
+      )}
+      <HStack gap={2} vAlign="end" wrap="wrap">
+        <SuggestInput label="Repository" isLabelHidden placeholder="owner/repo" width={200} suggestions={repos} value={repo} onChange={(value) => setRepo(value.trim())} />
+        <TextInput label="Base branch" isLabelHidden placeholder="develop" width={140} value={branch} onChange={(value) => setBranch(value.trim())} />
+        <Button label={busy ? "Saving…" : "Set"} isDisabled={!valid || busy} onClick={() => void save(repo.trim(), branch.trim())} />
+      </HStack>
+      {error && <Notice tone="error" title={error} />}
+      {others > 0 && (
+        <VStack gap={1}>
+          {data.boards.map((board) => (
+            <Meta key={`board-${board.name}`} block>
+              Board <A to={`/boards/${board.name}`}>{board.name}</A>: <Code size="inherit">{board.branch}</Code>
+            </Meta>
+          ))}
+          {data.agents.map((agent) => (
+            <Meta key={`agent-${agent.name}`} block>
+              Agent <A to={`/agents/${agent.name}`}>{agent.name}</A>: <Code size="inherit">{agent.branch}</Code>
+            </Meta>
+          ))}
+          {data.schedules.map((schedule) => (
+            <Meta key={`schedule-${schedule.id}`} block>
+              Schedule <A to="/schedules">{schedule.name}</A> ({schedule.agent}, {schedule.repo}): <Code size="inherit">{schedule.branch ?? ""}</Code>
+            </Meta>
+          ))}
+        </VStack>
+      )}
     </Panel>
   );
 }

@@ -1,4 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
+import {
+  AppShell,
+  Badge,
+  Button,
+  Heading,
+  HStack,
+  Icon,
+  Layout,
+  LayoutContent,
+  LayoutHeader,
+  NavIcon,
+  SideNav,
+  SideNavHeading,
+  SideNavItem,
+  SideNavSection,
+  StackItem,
+  StatusDot,
+  Text,
+  VStack,
+} from "@astryxdesign/core";
+import { Bot, CalendarClock, History as HistoryIcon, LayoutDashboard, LibraryBig, ListTodo, Settings as SettingsIcon, SquareKanban, Users, Webhook } from "lucide-react";
 import { api, connectStream, disconnectStream, onUnauthorized, useApi, useStreamStatus, type Overview, type Settings } from "./api.ts";
 import { AgentDetail } from "./pages/AgentDetail.tsx";
 import { Agents } from "./pages/Agents.tsx";
@@ -14,6 +35,7 @@ import { Settings as SettingsPage } from "./pages/Settings.tsx";
 import { TaskDetail } from "./pages/TaskDetail.tsx";
 import { Tasks } from "./pages/Tasks.tsx";
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx";
+import { Meta, Notice } from "./components/ui.tsx";
 import { href, useRoute } from "./router.ts";
 
 interface Me {
@@ -86,73 +108,93 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
   }
 
   const nav = [
-    { path: "/", key: "", label: "Dashboard", count: overview?.running.length || null },
-    { path: "/tasks", key: "tasks", label: "Tasks", count: overview?.queued.length || null },
-    { path: "/agents", key: "agents", label: "Agents", count: null },
-    { path: "/groups", key: "groups", label: "Groups", count: null },
-    { path: "/library", key: "library", label: "Library", count: null },
-    { path: "/boards", key: "boards", label: "Boards", count: null },
-    { path: "/schedules", key: "schedules", label: "Schedules", count: null },
-    { path: "/history", key: "history", label: "History", count: null },
-    { path: "/deliveries", key: "deliveries", label: "Webhooks", count: null },
-    { path: "/settings", key: "settings", label: "Settings", count: null },
+    { path: "/", key: "", label: "Dashboard", icon: LayoutDashboard, count: overview?.running.length || null },
+    { path: "/tasks", key: "tasks", label: "Tasks", icon: ListTodo, count: overview?.queued.length || null },
+    { path: "/agents", key: "agents", label: "Agents", icon: Bot, count: null },
+    { path: "/groups", key: "groups", label: "Groups", icon: Users, count: null },
+    { path: "/library", key: "library", label: "Library", icon: LibraryBig, count: null },
+    { path: "/boards", key: "boards", label: "Boards", icon: SquareKanban, count: null },
+    { path: "/schedules", key: "schedules", label: "Schedules", icon: CalendarClock, count: null },
+    { path: "/history", key: "history", label: "History", icon: HistoryIcon, count: null },
+    { path: "/deliveries", key: "deliveries", label: "Webhooks", icon: Webhook, count: null },
+    { path: "/settings", key: "settings", label: "Settings", icon: SettingsIcon, count: null },
   ];
 
   const togglePause = async () => {
     if (settings) await api.put("/api/settings", { paused: !settings.paused });
   };
 
-  return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-mark" aria-hidden>
-            ◉
-          </span>
-          Orchestrator
-        </div>
-        <nav className="nav">
-          {nav.map((item) => (
-            <a key={item.key} href={href(item.path)} className={section === item.key ? "active" : ""}>
-              {item.label}
-              {item.count ? <span className="count">{item.count}</span> : null}
-            </a>
-          ))}
-        </nav>
-        <div className="sidebar-foot">
-          <span className={`live${live ? " on" : ""}`}>{live ? "Live" : "Reconnecting…"}</span>
-          <span>
+  const sideNav = (
+    <SideNav
+      header={<SideNavHeading heading="Orchestrator" headingHref={href("/")} icon={<NavIcon icon={<Icon icon={Bot} size="sm" />} />} />}
+      footer={
+        <VStack gap={2} padding={2}>
+          <HStack gap={2} vAlign="center">
+            <StatusDot variant={live ? "success" : "warning"} label={live ? "Live" : "Reconnecting"} isPulsing={!live} />
+            <Text type="supporting">{live ? "Live" : "Reconnecting…"}</Text>
+          </HStack>
+          <Meta block>
             Signed in as {me.login}
             {me.role && me.role !== "admin" ? ` (${me.role})` : ""}
-          </span>
+          </Meta>
           {!me.authDisabled && (
-            <button className="small" onClick={onSignOut}>
-              Sign out
-            </button>
+            <HStack>
+              <Button label="Sign out" size="sm" onClick={onSignOut} />
+            </HStack>
           )}
-        </div>
-      </aside>
-      <main className="main">
-        <div className="page-head">
-          <h1>{title}</h1>
-          <span className="spacer" />
-          {settings && (
-            <>
-              <span className="meta">
-                {settings.running}/{settings.effectiveConcurrent ?? settings.maxConcurrent} slots busy
-                {settings.effectiveConcurrent !== undefined && settings.effectiveConcurrent < settings.maxConcurrent ? ` (of ${settings.maxConcurrent}: the model service is rate limiting)` : ""}
-              </span>
-              <button className={settings.paused ? "primary" : ""} disabled={me.role === "viewer"} onClick={togglePause}>
-                {settings.paused ? "Resume queue" : "Pause queue"}
-              </button>
-            </>
-          )}
-        </div>
-        {me.role === "viewer" && <div className="banner info">You can look around, but not change anything: you're signed in as a viewer.</div>}
-        {me.role === "operator" && section === "settings" && <div className="banner info">As an operator you can pause the queue and run, stop and retry agents, but not change configuration.</div>}
-        <ErrorBoundary resetKey={route.path}>{page}</ErrorBoundary>
-      </main>
-    </div>
+        </VStack>
+      }
+    >
+      <SideNavSection title="Pages" isHeaderHidden>
+        {nav.map((item) => (
+          <SideNavItem
+            key={item.key}
+            label={item.label}
+            icon={item.icon}
+            href={href(item.path)}
+            isSelected={section === item.key}
+            endContent={item.count ? <Badge variant="neutral" label={String(item.count)} /> : undefined}
+          />
+        ))}
+      </SideNavSection>
+    </SideNav>
+  );
+
+  return (
+    <AppShell sideNav={sideNav}>
+      <Layout
+        height="fill"
+        header={
+          <LayoutHeader hasDivider>
+            <HStack gap={3} vAlign="center" wrap="wrap">
+              <StackItem size="fill">
+                <Heading level={1} maxLines={1}>
+                  {title}
+                </Heading>
+              </StackItem>
+              {settings && (
+                <HStack gap={3} vAlign="center" wrap="wrap">
+                  <Meta>
+                    {settings.running}/{settings.effectiveConcurrent ?? settings.maxConcurrent} slots busy
+                    {settings.effectiveConcurrent !== undefined && settings.effectiveConcurrent < settings.maxConcurrent ? ` (of ${settings.maxConcurrent}: the model service is rate limiting)` : ""}
+                  </Meta>
+                  <Button label={settings.paused ? "Resume queue" : "Pause queue"} variant={settings.paused ? "primary" : "secondary"} isDisabled={me.role === "viewer"} onClick={() => void togglePause()} />
+                </HStack>
+              )}
+            </HStack>
+          </LayoutHeader>
+        }
+        content={
+          <LayoutContent padding={4}>
+            <VStack gap={4}>
+              {me.role === "viewer" && <Notice tone="info" title="You can look around, but not change anything: you're signed in as a viewer." />}
+              {me.role === "operator" && section === "settings" && <Notice tone="info" title="As an operator you can pause the queue and run, stop and retry agents, but not change configuration." />}
+              <ErrorBoundary resetKey={route.path}>{page}</ErrorBoundary>
+            </VStack>
+          </LayoutContent>
+        }
+      />
+    </AppShell>
   );
 }
 

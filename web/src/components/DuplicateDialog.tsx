@@ -1,6 +1,7 @@
 import { useState } from "react";
+import { Button, Code, Grid, SegmentedControl, SegmentedControlItem, Selector, TextInput } from "@astryxdesign/core";
 import { api, type Agent, type Group } from "../api.ts";
-import { Dialog } from "./ui.tsx";
+import { Dialog, ErrorText, Meta } from "./ui.tsx";
 
 /** Copies an agent: one named copy to edit, or several identical numbered copies. */
 export function DuplicateDialog({ agent, groups, onClose, onDone }: { agent: Agent; groups: Group[]; onClose: () => void; onDone: (created: string[]) => void }) {
@@ -35,67 +36,48 @@ export function DuplicateDialog({ agent, groups, onClose, onDone }: { agent: Age
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={busy || (mode === "one" ? !name.trim() || !handle.trim() : !(Number(count) >= 1))} onClick={submit}>
-            {busy ? "Creating…" : mode === "one" ? "Create copy" : `Create ${count} copies`}
-          </button>
+          <Button label="Cancel" onClick={onClose} />
+          <Button
+            label={busy ? "Creating…" : mode === "one" ? "Create copy" : `Create ${count} copies`}
+            variant="primary"
+            isDisabled={busy || (mode === "one" ? !name.trim() || !handle.trim() : !(Number(count) >= 1))}
+            onClick={() => void submit()}
+          />
         </>
       }
     >
-      <div className="stack" style={{ gap: 14 }}>
-        <div className="row">
-          <label className="check">
-            <input type="radio" name="dup-mode" checked={mode === "one"} onChange={() => setMode("one")} style={{ width: "auto" }} /> One copy to customise
-          </label>
-          <label className="check">
-            <input type="radio" name="dup-mode" checked={mode === "many"} onChange={() => setMode("many")} style={{ width: "auto" }} /> Several identical copies
-          </label>
-        </div>
-        {mode === "one" ? (
-          <div className="form-grid">
-            <div className="field">
-              <label htmlFor="dup-name">Name</label>
-              <input id="dup-name" value={name} onChange={(event) => setName(event.target.value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())} />
-            </div>
-            <div className="field">
-              <label htmlFor="dup-handle">GitHub handle</label>
-              <input id="dup-handle" value={handle} onChange={(event) => setHandle(event.target.value.replace(/^@/, ""))} />
-            </div>
-          </div>
-        ) : (
-          <div className="field" style={{ maxWidth: 240 }}>
-            <label htmlFor="dup-count">How many</label>
-            <input id="dup-count" inputMode="numeric" value={count} onChange={(event) => setCount(event.target.value.replace(/\D/g, ""))} />
-            <span className="help">
-              Named {agent.name.replace(/-\d+$/, "")}-2, -3, … with handles @{agent.handle.replace(/-\d+$/, "")}-2, -3, …
-            </span>
-          </div>
-        )}
-        <div className="form-grid">
-          <div className="field">
-            <label htmlFor="dup-group">Add to group</label>
-            <select id="dup-group" value={group} onChange={(event) => setGroup(event.target.value)}>
-              <option value="">No group</option>
-              {groups.map((candidate) => (
-                <option key={candidate.name} value={candidate.name}>
-                  {candidate.name}
-                </option>
-              ))}
-              <option value="__new">New group…</option>
-            </select>
-          </div>
-          {group === "__new" && (
-            <div className="field">
-              <label htmlFor="dup-new-group">New group name</label>
-              <input id="dup-new-group" value={newGroup} onChange={(event) => setNewGroup(event.target.value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())} />
-            </div>
-          )}
-        </div>
-        <p className="meta" style={{ margin: 0 }}>
-          Copies get everything: role, skills, MCP servers, subagents, model and effort. To run identical copies without separate folders, set <code>replicas: N</code> in agent.md instead.
-        </p>
-        {error && <p className="error-text">{error}</p>}
-      </div>
+      <SegmentedControl label="Kind of copy" value={mode} onChange={(value) => setMode(value as "one" | "many")} layout="fill">
+        <SegmentedControlItem value="one" label="One copy to customise" />
+        <SegmentedControlItem value="many" label="Several identical copies" />
+      </SegmentedControl>
+      {mode === "one" ? (
+        <Grid columns={{ minWidth: 200 }} gap={4}>
+          <TextInput label="Name" value={name} onChange={(value) => setName(value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())} />
+          <TextInput label="GitHub handle" value={handle} onChange={(value) => setHandle(value.replace(/^@/, ""))} />
+        </Grid>
+      ) : (
+        <TextInput
+          label="How many"
+          width={240}
+          value={count}
+          onChange={(value) => setCount(value.replace(/\D/g, ""))}
+          description={`Named ${agent.name.replace(/-\d+$/, "")}-2, -3, … with handles @${agent.handle.replace(/-\d+$/, "")}-2, -3, …`}
+        />
+      )}
+      <Grid columns={{ minWidth: 200 }} gap={4}>
+        <Selector
+          label="Add to group"
+          options={[{ value: "", label: "No group" }, ...groups.map((candidate) => ({ value: candidate.name, label: candidate.name })), { value: "__new", label: "New group…" }]}
+          value={group}
+          placeholder="No group"
+          onChange={(value) => setGroup(value ?? "")}
+        />
+        {group === "__new" && <TextInput label="New group name" value={newGroup} onChange={(value) => setNewGroup(value.replace(/[^a-z\d_-]/gi, "-").toLowerCase())} />}
+      </Grid>
+      <Meta block>
+        Copies get everything: role, skills, MCP servers, subagents, model and effort. To run identical copies without separate folders, set <Code size="inherit">replicas: N</Code> in agent.md instead.
+      </Meta>
+      {error && <ErrorText>{error}</ErrorText>}
     </Dialog>
   );
 }

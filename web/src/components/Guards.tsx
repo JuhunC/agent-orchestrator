@@ -1,6 +1,6 @@
+import { Code, Heading, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, VStack } from "@astryxdesign/core";
 import { useApi, type Incident } from "../api.ts";
-import { href } from "../router.ts";
-import { Panel } from "./ui.tsx";
+import { A, DataTable, Meta, Panel } from "./ui.tsx";
 
 interface GuardsResponse {
   global: { name: string; setting: string; value: string; what: string }[];
@@ -9,7 +9,16 @@ interface GuardsResponse {
   recent: Incident[];
 }
 
-const or = (value: number | null, unit = "") => (value === null ? <span className="meta">none</span> : `${unit === "$" ? "$" : ""}${value}${unit && unit !== "$" ? ` ${unit}` : ""}`);
+const or = (value: number | null, unit = "") => (value === null ? <Meta>none</Meta> : `${unit === "$" ? "$" : ""}${value}${unit && unit !== "$" ? ` ${unit}` : ""}`);
+
+/** A column header with the setting it comes from as a tooltip. */
+function Th({ children, setting }: { children: string; setting?: string }) {
+  return (
+    <TableHeaderCell>
+      <span title={setting}>{children}</span>
+    </TableHeaderCell>
+  );
+}
 
 /** Every limit that keeps agents from running away, in one place, with the ones that tripped lately. */
 export function Guards() {
@@ -17,101 +26,105 @@ export function Guards() {
   if (!data) return null;
   return (
     <Panel title="Loop guards" hint="what stops agents from running away">
-      <div className="stack" style={{ gap: 16 }}>
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Guard</th>
-                <th>Set to</th>
-                <th>Setting</th>
-                <th>What it does</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.global.map((guard) => (
-                <tr key={guard.name}>
-                  <td>{guard.name}</td>
-                  <td className="nowrap">{guard.value}</td>
-                  <td>
-                    <code>{guard.setting}</code>
-                  </td>
-                  <td className="meta">{guard.what}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {data.boards.length > 0 && (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Board</th>
-                  <th title="limits.moves_per_issue">Agent moves per card</th>
-                  <th title="limits.entries_per_column">Visits per column</th>
-                  <th title="limits.budget_usd_per_issue">Spend per card</th>
-                  <th title="limits.max_running">Cards at once</th>
-                  <th>Then</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.boards.map((board) => (
-                  <tr key={board.name}>
-                    <td>
-                      <a href={href("/boards")}>{board.name}</a>
-                    </td>
-                    <td>{board.movesPerIssue}</td>
-                    <td>{board.entriesPerColumn}</td>
-                    <td>{or(board.budgetUsdPerIssue, "$")}</td>
-                    <td>{or(board.maxRunning)}</td>
-                    <td className="meta">{board.needsHuman ? `to "${board.needsHuman}"` : "the card stays"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <DataTable>
+        <TableHeader>
+          <TableRow>
+            <Th>Guard</Th>
+            <Th>Set to</Th>
+            <Th>Setting</Th>
+            <Th>What it does</Th>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.global.map((guard) => (
+            <TableRow key={guard.name}>
+              <TableCell>{guard.name}</TableCell>
+              <TableCell>
+                <Text textWrap="nowrap">{guard.value}</Text>
+              </TableCell>
+              <TableCell>
+                <Code size="inherit">{guard.setting}</Code>
+              </TableCell>
+              <TableCell>
+                <Meta>{guard.what}</Meta>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </DataTable>
+      {data.boards.length > 0 && (
+        <DataTable>
+          <TableHeader>
+            <TableRow>
+              <Th>Board</Th>
+              <Th setting="limits.moves_per_issue">Agent moves per card</Th>
+              <Th setting="limits.entries_per_column">Visits per column</Th>
+              <Th setting="limits.budget_usd_per_issue">Spend per card</Th>
+              <Th setting="limits.max_running">Cards at once</Th>
+              <Th>Then</Th>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {data.boards.map((board) => (
+              <TableRow key={board.name}>
+                <TableCell>
+                  <A to="/boards">{board.name}</A>
+                </TableCell>
+                <TableCell>{board.movesPerIssue}</TableCell>
+                <TableCell>{board.entriesPerColumn}</TableCell>
+                <TableCell>{or(board.budgetUsdPerIssue, "$")}</TableCell>
+                <TableCell>{or(board.maxRunning)}</TableCell>
+                <TableCell>
+                  <Meta>{board.needsHuman ? `to "${board.needsHuman}"` : "the card stays"}</Meta>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </DataTable>
+      )}
+      <DataTable>
+        <TableHeader>
+          <TableRow>
+            <Th>Agent</Th>
+            <Th setting="max_budget_usd">Spend per task</Th>
+            <Th setting="max_turns">Turns per task</Th>
+            <Th setting="timeout_minutes">Timeout</Th>
+            <Th setting="replicas">Cards at once</Th>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {data.agents.map((agent) => (
+            <TableRow key={agent.name}>
+              <TableCell>
+                <A to={`/agents/${agent.name}`}>{agent.name}</A>
+              </TableCell>
+              <TableCell>{or(agent.maxBudgetUsd, "$")}</TableCell>
+              <TableCell>{or(agent.maxTurns)}</TableCell>
+              <TableCell>{agent.timeoutMinutes ? `${agent.timeoutMinutes} min` : <Meta>default</Meta>}</TableCell>
+              <TableCell>{or(agent.replicas)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </DataTable>
+      <VStack gap={1.5}>
+        <Heading level={3}>Tripped recently</Heading>
+        {data.recent.length === 0 ? (
+          <Meta>None.</Meta>
+        ) : (
+          data.recent.slice(0, 15).map((incident) => (
+            <Meta key={incident.id} block>
+              {new Date(incident.ts).toLocaleString()}: {incident.message}{" "}
+              {incident.taskId ? (
+                <A to={`/tasks/${incident.taskId}`}>task #{incident.taskId}</A>
+              ) : incident.url ? (
+                <A to={incident.url} external>
+                  on GitHub
+                </A>
+              ) : null}
+            </Meta>
+          ))
         )}
-        <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th title="max_budget_usd">Spend per task</th>
-                <th title="max_turns">Turns per task</th>
-                <th title="timeout_minutes">Timeout</th>
-                <th title="replicas">Cards at once</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.agents.map((agent) => (
-                <tr key={agent.name}>
-                  <td>
-                    <a href={href(`/agents/${agent.name}`)}>{agent.name}</a>
-                  </td>
-                  <td>{or(agent.maxBudgetUsd, "$")}</td>
-                  <td>{or(agent.maxTurns)}</td>
-                  <td>{agent.timeoutMinutes ? `${agent.timeoutMinutes} min` : <span className="meta">default</span>}</td>
-                  <td>{or(agent.replicas)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        <div>
-          <h3 style={{ marginBottom: 6 }}>Tripped recently</h3>
-          {data.recent.length === 0 ? (
-            <div className="meta">None.</div>
-          ) : (
-            data.recent.slice(0, 15).map((incident) => (
-              <div key={incident.id} className="meta" style={{ marginBottom: 4 }}>
-                {new Date(incident.ts).toLocaleString()}: {incident.message}{" "}
-                {incident.taskId ? <a href={href(`/tasks/${incident.taskId}`)}>task #{incident.taskId}</a> : incident.url ? <a href={incident.url} target="_blank" rel="noreferrer">on GitHub ↗</a> : null}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+      </VStack>
     </Panel>
   );
 }

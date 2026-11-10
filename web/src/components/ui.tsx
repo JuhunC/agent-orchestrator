@@ -1,72 +1,271 @@
-import { useEffect, type ReactNode } from "react";
+import { useId, type ReactNode } from "react";
+import {
+  Badge,
+  Banner,
+  Button,
+  Card,
+  Code,
+  Dialog as AstryxDialog,
+  Grid,
+  DialogHeader,
+  Heading,
+  HStack,
+  Layout,
+  LayoutContent,
+  LayoutFooter,
+  Link,
+  MetadataList,
+  MetadataListItem,
+  StackItem,
+  Switch as AstryxSwitch,
+  Table,
+  Text,
+  TextInput,
+  Token,
+  VStack,
+  type TextInputProps,
+} from "@astryxdesign/core";
 import { KIND_LABEL, type Task, type TaskStatus } from "../api.ts";
 import { href } from "../router.ts";
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  queued: "Queued",
-  running: "Running",
-  succeeded: "Done",
-  failed: "Failed",
-  cancelled: "Cancelled",
+type BadgeVariant = "neutral" | "info" | "success" | "warning" | "error" | "blue" | "purple";
+
+const STATUS: Record<TaskStatus, { label: string; variant: BadgeVariant }> = {
+  queued: { label: "Queued", variant: "warning" },
+  running: { label: "Running", variant: "info" },
+  succeeded: { label: "Done", variant: "success" },
+  failed: { label: "Failed", variant: "error" },
+  cancelled: { label: "Cancelled", variant: "neutral" },
+};
+
+/** Tones the old pills used, mapped to Astryx badge variants. */
+const TONE: Record<string, BadgeVariant> = {
+  queued: "warning",
+  running: "info",
+  succeeded: "success",
+  failed: "error",
+  cancelled: "neutral",
+  off: "neutral",
+  triggered: "success",
+  forwarded: "info",
+  ignored: "neutral",
+  rejected: "warning",
+  error: "error",
+  accent: "purple",
 };
 
 export function StatusPill({ status }: { status: TaskStatus }) {
-  return <span className={`pill ${status}`}>{STATUS_LABEL[status]}</span>;
+  return <Badge variant={STATUS[status].variant} label={STATUS[status].label} />;
 }
 
 export function Pill({ tone, children }: { tone: string; children: ReactNode }) {
-  return <span className={`pill ${tone}`}>{children}</span>;
+  return <Badge variant={TONE[tone] ?? "neutral"} label={children} />;
 }
 
-export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (value: boolean) => void; label: string; disabled?: boolean }) {
+/** A small label for metadata: a kind, a column, a skill. */
+export function Tag({ children, accent, href: link }: { children: string; accent?: boolean; href?: string }) {
+  return <Token size="sm" color={accent ? "purple" : "default"} label={children} href={link} />;
+}
+
+export function Chips({ items, empty = "—" }: { items: string[]; empty?: string }) {
+  if (!items.length) return <Meta>{empty}</Meta>;
   return (
-    <label className="switch" title={label}>
-      <input type="checkbox" aria-label={label} checked={checked} disabled={disabled} onChange={(event) => onChange(event.target.checked)} />
-      <span />
-    </label>
+    <HStack gap={1} wrap="wrap">
+      {items.map((item) => (
+        <Tag key={item}>{item}</Tag>
+      ))}
+    </HStack>
   );
 }
 
+export function Switch({ checked, onChange, label, disabled }: { checked: boolean; onChange: (value: boolean) => void; label: string; disabled?: boolean }) {
+  return <AstryxSwitch label={label} isLabelHidden value={checked} isDisabled={disabled} onChange={(value) => onChange(value)} size="sm" />;
+}
+
+/** Secondary text: hints, timestamps, explanations. */
+export function Meta({ children, block }: { children: ReactNode; block?: boolean }) {
+  return (
+    <Text type="supporting" display={block ? "block" : "inline"}>
+      {children}
+    </Text>
+  );
+}
+
+/** Several messages, one per line (inside a Notice, say). */
+export function Lines({ items }: { items: string[] }) {
+  return (
+    <>
+      {items.map((item) => (
+        <Text key={item} display="block">
+          {item}
+        </Text>
+      ))}
+    </>
+  );
+}
+
+/** Text in the error color, for a field's or an action's problem. */
+export function ErrorText({ children }: { children: ReactNode }) {
+  return (
+    <Text display="block" className="ao-error-text">
+      {children}
+    </Text>
+  );
+}
+
+/** A headline number with a label and a line of context. */
+export function StatTile({ label, value, sub }: { label: string; value: ReactNode; sub?: ReactNode }) {
+  return (
+    <Card>
+      <VStack gap={1}>
+        <Text type="supporting">{label}</Text>
+        <Text size="2xl" weight="semibold" hasTabularNumbers display="block">
+          {value}
+        </Text>
+        {sub && <Meta block>{sub}</Meta>}
+      </VStack>
+    </Card>
+  );
+}
+
+export function StatGrid({ children }: { children: ReactNode }) {
+  return (
+    <Grid columns={{ minWidth: 140 }} gap={3}>
+      {children}
+    </Grid>
+  );
+}
+
+/** Two (or more) panels side by side on wide screens, stacked on narrow ones. */
+export function Columns({ children, min = 440 }: { children: ReactNode; min?: number }) {
+  return (
+    <Grid columns={{ minWidth: min, max: 2 }} gap={4} align="start">
+      {children}
+    </Grid>
+  );
+}
+
+/** A link inside the app (hash route) or to GitHub (opens a new tab). */
+export function A({ to, children, external }: { to: string; children: ReactNode; external?: boolean }) {
+  if (external) {
+    return (
+      <Link href={to} isExternalLink type="inherit" onClick={(event) => event.stopPropagation()}>
+        {children}
+      </Link>
+    );
+  }
+  return (
+    <Link href={href(to)} type="inherit" onClick={(event) => event.stopPropagation()}>
+      {children}
+    </Link>
+  );
+}
+
+/** A titled block of the page: a card with a header row and a body. */
 export function Panel({ title, actions, hint, children, tight }: { title?: ReactNode; actions?: ReactNode; hint?: ReactNode; children: ReactNode; tight?: boolean }) {
   return (
-    <section className="panel">
+    <Card padding={0}>
       {title !== undefined && (
-        <div className="panel-head">
-          <h2>{title}</h2>
-          {hint && <span className="hint">{hint}</span>}
-          <span className="spacer" />
+        <HStack gap={3} vAlign="center" wrap="wrap" paddingInline={4} paddingBlockStart={3} paddingBlockEnd={tight ? 3 : 0}>
+          <StackItem size="fill">
+            <HStack gap={2} vAlign="center" wrap="wrap">
+              <Heading level={2}>{title}</Heading>
+              {hint && <Meta>{hint}</Meta>}
+            </HStack>
+          </StackItem>
           {actions}
-        </div>
+        </HStack>
       )}
-      <div className={`panel-body${tight ? " tight" : ""}`}>{children}</div>
-    </section>
+      <VStack gap={3} padding={tight ? 0 : 4}>
+        {children}
+      </VStack>
+    </Card>
   );
 }
 
 export function Empty({ children }: { children: ReactNode }) {
-  return <div className="empty">{children}</div>;
+  return (
+    <VStack padding={6} hAlign="center">
+      <Text color="secondary" justify="center" display="block">
+        {children}
+      </Text>
+    </VStack>
+  );
 }
 
-export function Dialog({ title, onClose, children, footer }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode }) {
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+/** A page-level message: an error, a warning, or information. */
+export function Notice({ tone = "warning", title, children, action }: { tone?: "info" | "warning" | "error" | "success"; title: ReactNode; children?: ReactNode; action?: ReactNode }) {
+  return <Banner status={tone} title={title} description={children} endContent={action} />;
+}
+
+/** Label and value pairs. */
+export function KV({ items }: { items: [string, ReactNode][] }) {
   return (
-    <div className="backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <div className="dialog" role="dialog" aria-modal="true" aria-label={title}>
-        <div className="panel-head">
-          <h2>{title}</h2>
-          <span className="spacer" />
-          <button className="ghost small" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </div>
-        <div className="panel-body">{children}</div>
-        {footer && <div className="dialog-foot">{footer}</div>}
-      </div>
-    </div>
+    <MetadataList label={{ position: "start", width: 150 }}>
+      {items.map(([label, value]) => (
+        <MetadataListItem key={label} label={label}>
+          {value}
+        </MetadataListItem>
+      ))}
+    </MetadataList>
+  );
+}
+
+export function Dialog({ title, onClose, children, footer, width = 560 }: { title: string; onClose: () => void; children: ReactNode; footer?: ReactNode; width?: number }) {
+  return (
+    <AstryxDialog isOpen width={width} maxHeight="90dvh" purpose="form" onOpenChange={(open) => !open && onClose()}>
+      <Layout
+        height="auto"
+        header={<DialogHeader title={title} onOpenChange={(open) => !open && onClose()} />}
+        content={
+          <LayoutContent padding={4}>
+            <VStack gap={4}>{children}</VStack>
+          </LayoutContent>
+        }
+        footer={
+          footer ? (
+            <LayoutFooter hasDivider>
+              <HStack gap={2} hAlign="end" wrap="wrap">
+                {footer}
+              </HStack>
+            </LayoutFooter>
+          ) : undefined
+        }
+      />
+    </AstryxDialog>
+  );
+}
+
+/** A text field with suggestions from a list (owner/repo, model names); any text is allowed. */
+export function SuggestInput({ suggestions, ...props }: TextInputProps & { suggestions: string[] }) {
+  const id = useId();
+  return (
+    <>
+      <TextInput {...props} {...({ list: id } as object)} />
+      <datalist id={id}>
+        {suggestions.map((name) => (
+          <option key={name} value={name} />
+        ))}
+      </datalist>
+    </>
+  );
+}
+
+/** A table that sizes columns to their content; rows can be clicked when `hover` is set. */
+export function DataTable({ children, hover }: { children: ReactNode; hover?: boolean }) {
+  return (
+    <Table density="compact" hasHover={hover} className="ao-table">
+      {children}
+    </Table>
+  );
+}
+
+/** Buttons that act on a row, kept on one line. */
+export function Actions({ children }: { children: ReactNode }) {
+  return (
+    <HStack gap={2} vAlign="center" wrap="wrap">
+      {children}
+    </HStack>
   );
 }
 
@@ -74,32 +273,26 @@ export function Dialog({ title, onClose, children, footer }: { title: string; on
 export function ThreadCell({ task, linkTask = true }: { task: Task; linkTask?: boolean }) {
   const label = `${task.owner}/${task.repo}#${task.threadNumber}`;
   return (
-    <div style={{ minWidth: 0 }}>
-      <div className="title ellipsis">{task.threadTitle || <span className="meta">(title loads when the task starts)</span>}</div>
-      <div className="meta">
-        <span className="badge">{KIND_LABEL[task.threadKind]}</span>{" "}
-        {task.boardColumn && (
-          <>
-            <span className="badge accent">{task.boardColumn}</span>{" "}
-          </>
-        )}
-        {linkTask ? (
-          <a href={href(`/tasks/${task.id}`)} onClick={(event) => event.stopPropagation()}>
-            {label}
-          </a>
-        ) : (
-          label
-        )}
-        {task.threadUrl && (
-          <>
-            {" · "}
-            <a href={task.threadUrl} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()}>
-              GitHub ↗
-            </a>
-          </>
-        )}
-      </div>
-    </div>
+    <VStack gap={0.5} maxWidth={420}>
+      <Text weight="medium" maxLines={1}>
+        {task.threadTitle || <Meta>(title loads when the task starts)</Meta>}
+      </Text>
+      <HStack gap={1} vAlign="center" wrap="wrap">
+        <Tag>{KIND_LABEL[task.threadKind]}</Tag>
+        {task.boardColumn && <Tag accent>{task.boardColumn}</Tag>}
+        <Meta>
+          {linkTask ? <A to={`/tasks/${task.id}`}>{label}</A> : label}
+          {task.threadUrl && (
+            <>
+              {" · "}
+              <A to={task.threadUrl} external>
+                GitHub
+              </A>
+            </>
+          )}
+        </Meta>
+      </HStack>
+    </VStack>
   );
 }
 
@@ -113,8 +306,17 @@ export function StepText({ text }: { text: string }) {
   return (
     <>
       {parts.map((part, index) =>
-        part.startsWith("`") && part.endsWith("`") && part.length > 2 ? <code key={index}>{part.slice(1, -1)}</code> : <span key={index}>{part}</span>,
+        part.startsWith("`") && part.endsWith("`") && part.length > 2 ? <Code size="inherit" key={index}>{part.slice(1, -1)}</Code> : <span key={index}>{part}</span>,
       )}
     </>
+  );
+}
+
+/** A button that only navigates: rendered as a link. */
+export function LinkButton({ to, label, external, variant = "secondary", size = "md" }: { to: string; label: string; external?: boolean; variant?: "primary" | "secondary" | "ghost"; size?: "sm" | "md" }) {
+  return external ? (
+    <Button label={label} href={to} target="_blank" rel="noreferrer" variant={variant} size={size} />
+  ) : (
+    <Button label={label} href={href(to)} variant={variant} size={size} />
   );
 }

@@ -1,9 +1,10 @@
 import { useState } from "react";
+import { Button, Code, Grid, HStack, StackItem, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, TextInput, VStack } from "@astryxdesign/core";
 import { api, useApi, type Agent, type AgentsResponse } from "../api.ts";
 import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
 import { RunAgentDialog } from "../components/RunAgentDialog.tsx";
-import { Dialog, Empty, Panel, Pill, Switch } from "../components/ui.tsx";
-import { href, navigate } from "../router.ts";
+import { Chips, DataTable, Dialog, Empty, ErrorText, Lines, LinkButton, Meta, Notice, Panel, Pill, Switch, Tag } from "../components/ui.tsx";
+import { navigate } from "../router.ts";
 
 function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const [name, setName] = useState("");
@@ -25,41 +26,18 @@ function NewAgentDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       footer={
         <>
-          <button onClick={onClose}>Cancel</button>
-          <button className="primary" disabled={!name.trim() || handle.length < 2} onClick={create}>
-            Create
-          </button>
+          <Button label="Cancel" onClick={onClose} />
+          <Button label="Create" variant="primary" isDisabled={!name.trim() || handle.length < 2} onClick={() => void create()} />
         </>
       }
     >
-      <div className="form-grid">
-        <div className="field">
-          <label htmlFor="new-name">Name</label>
-          <input id="new-name" placeholder="frontend" value={name} onChange={(event) => setName(event.target.value)} />
-          <span className="help">Folder name and branch prefix: agent/&lt;name&gt;/…</span>
-        </div>
-        <div className="field">
-          <label htmlFor="new-handle">GitHub handle</label>
-          <input id="new-handle" value={handle} onChange={(event) => setHandle(event.target.value)} />
-          <span className="help">What people @-mention. Pick a login nobody owns.</span>
-        </div>
-      </div>
-      <p className="meta">This creates profiles/agents/{name || "<name>"}/agent.md from a template; you'll edit its role, skills and tools next.</p>
-      {error && <p className="error-text">{error}</p>}
+      <Grid columns={{ minWidth: 220 }} gap={4}>
+        <TextInput label="Name" placeholder="frontend" value={name} onChange={setName} description="Folder name and branch prefix: agent/<name>/…" />
+        <TextInput label="GitHub handle" value={handle} onChange={setHandle} description="What people @-mention. Pick a login nobody owns." />
+      </Grid>
+      <Meta block>This creates profiles/agents/{name || "<name>"}/agent.md from a template; you'll edit its role, skills and tools next.</Meta>
+      {error && <ErrorText>{error}</ErrorText>}
     </Dialog>
-  );
-}
-
-export function Chips({ items, empty = "—" }: { items: string[]; empty?: string }) {
-  if (!items.length) return <span className="meta">{empty}</span>;
-  return (
-    <div className="row" style={{ gap: 4 }}>
-      {items.map((item) => (
-        <span key={item} className="badge">
-          {item}
-        </span>
-      ))}
-    </div>
   );
 }
 
@@ -75,31 +53,23 @@ export function Agents() {
   };
 
   return (
-    <div className="stack">
-      <div className="page-head">
-        <span className="sub">
-          Each agent is a folder in <code>{data?.profilesDir ?? "profiles"}/agents</code>: a role, skills, MCP servers and subagents. Mention its handle on GitHub
-          to start it.
-        </span>
-        <span className="spacer" />
-        <a className="button" href={href("/groups")}>
-          Groups
-        </a>
-        <a className="button" href={href("/library")}>
-          Shared library
-        </a>
-        <button className="primary" onClick={() => setCreating(true)}>
-          New agent
-        </button>
-      </div>
+    <VStack gap={4}>
+      <HStack gap={3} vAlign="center" wrap="wrap">
+        <StackItem size="fill">
+          <Text color="secondary">
+            Each agent is a folder in <Code size="inherit">{`${data?.profilesDir ?? "profiles"}/agents`}</Code>: a role, skills, MCP servers and subagents. Mention its handle on GitHub to start it.
+          </Text>
+        </StackItem>
+        <HStack gap={2} wrap="wrap">
+          <LinkButton to="/groups" label="Groups" />
+          <LinkButton to="/library" label="Shared library" />
+          <Button label="New agent" variant="primary" onClick={() => setCreating(true)} />
+        </HStack>
+      </HStack>
       {data?.errors.length ? (
-        <div className="banner error">
-          <span>
-            {data.errors.map((error) => (
-              <div key={error}>{error}</div>
-            ))}
-          </span>
-        </div>
+        <Notice tone="error" title="Some agent files have problems">
+          <Lines items={data.errors} />
+        </Notice>
       ) : null}
       <Panel tight>
         {!data ? (
@@ -107,66 +77,75 @@ export function Agents() {
         ) : data.agents.length === 0 ? (
           <Empty>No agents yet. Create one, or add a folder under profiles/agents.</Empty>
         ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>On</th>
-                  <th>Agent</th>
-                  <th>Groups</th>
-                  <th>Skills</th>
-                  <th>MCP</th>
-                  <th>Subagents</th>
-                  <th>Runs</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {data.agents.map((agent) => (
-                  <tr key={agent.name} className="clickable" onClick={() => navigate(`/agents/${agent.name}`)}>
-                    <td onClick={(event) => event.stopPropagation()}>
-                      <Switch checked={agent.enabled} disabled={!agent.enabledInFile} onChange={(value) => void toggle(agent, value)} label={`Turn ${agent.name} ${agent.enabled ? "off" : "on"}`} />
-                    </td>
-                    <td>
-                      <div className="title">
-                        {agent.name} {agent.live && <span className="badge accent">live</span>} {agent.replicas ? <span className="badge">×{agent.replicas}</span> : null} {agent.errors.length > 0 && <Pill tone="failed">{agent.errors.length} problem{agent.errors.length === 1 ? "" : "s"}</Pill>}
-                      </div>
-                      <div className="meta">
+          <DataTable hover>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>On</TableHeaderCell>
+                <TableHeaderCell>Agent</TableHeaderCell>
+                <TableHeaderCell>Groups</TableHeaderCell>
+                <TableHeaderCell>Skills</TableHeaderCell>
+                <TableHeaderCell>MCP</TableHeaderCell>
+                <TableHeaderCell>Subagents</TableHeaderCell>
+                <TableHeaderCell>Runs</TableHeaderCell>
+                <TableHeaderCell>
+                  <span />
+                </TableHeaderCell>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.agents.map((agent) => (
+                <TableRow key={agent.name} className="ao-clickable" onClick={() => navigate(`/agents/${agent.name}`)}>
+                  <TableCell onClick={(event) => event.stopPropagation()}>
+                    <Switch checked={agent.enabled} disabled={!agent.enabledInFile} onChange={(value) => void toggle(agent, value)} label={`Turn ${agent.name} ${agent.enabled ? "off" : "on"}`} />
+                  </TableCell>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <HStack gap={1.5} vAlign="center" wrap="wrap">
+                        <Text weight="semibold">{agent.name}</Text>
+                        {agent.live && <Tag accent>live</Tag>}
+                        {agent.replicas ? <Tag>{`×${agent.replicas}`}</Tag> : null}
+                        {agent.errors.length > 0 && (
+                          <Pill tone="failed">
+                            {agent.errors.length} problem{agent.errors.length === 1 ? "" : "s"}
+                          </Pill>
+                        )}
+                      </HStack>
+                      <Meta>
                         @{agent.handle}
                         {agent.account?.login && agent.account.login.toLowerCase() !== agent.handle.toLowerCase() && ` · acts as @${agent.account.login}`}
                         {agent.account?.login && agent.account.login.toLowerCase() === agent.handle.toLowerCase() && " · own GitHub account"}
                         {agent.model && ` · ${agent.model}`}
                         {agent.description && ` · ${agent.description}`}
-                      </div>
-                    </td>
-                    <td>
-                      <Chips items={agent.groups} />
-                    </td>
-                    <td>
-                      <Chips items={[...agent.skills, ...agent.ownSkills.map((skill) => skill.name)]} />
-                    </td>
-                    <td>
-                      <Chips items={["github", ...agent.mcp, ...agent.ownMcp]} />
-                    </td>
-                    <td>
-                      <Chips items={agent.subagents} />
-                    </td>
-                    <td className="num meta">{agent.stats ? `${agent.stats.succeeded} done · ${agent.stats.failed} failed` : "—"}</td>
-                    <td onClick={(event) => event.stopPropagation()}>
-                      <div className="row" style={{ flexWrap: "nowrap" }}>
-                        <button className="small" disabled={!agent.enabled || agent.errors.length > 0} onClick={() => setRunning(agent.name)}>
-                          Run…
-                        </button>
-                        <button className="small" onClick={() => setDuplicating(agent)}>
-                          Duplicate
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      </Meta>
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <Chips items={agent.groups} />
+                  </TableCell>
+                  <TableCell>
+                    <Chips items={[...agent.skills, ...agent.ownSkills.map((skill) => skill.name)]} />
+                  </TableCell>
+                  <TableCell>
+                    <Chips items={["github", ...agent.mcp, ...agent.ownMcp]} />
+                  </TableCell>
+                  <TableCell>
+                    <Chips items={agent.subagents} />
+                  </TableCell>
+                  <TableCell>
+                    <Text type="supporting" textWrap="nowrap">
+                      {agent.stats ? `${agent.stats.succeeded} done · ${agent.stats.failed} failed` : "—"}
+                    </Text>
+                  </TableCell>
+                  <TableCell onClick={(event) => event.stopPropagation()}>
+                    <HStack gap={2}>
+                      <Button label="Run…" size="sm" isDisabled={!agent.enabled || agent.errors.length > 0} onClick={() => setRunning(agent.name)} />
+                      <Button label="Duplicate" size="sm" onClick={() => setDuplicating(agent)} />
+                    </HStack>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
         )}
       </Panel>
       {creating && <NewAgentDialog onClose={() => setCreating(false)} />}
@@ -179,6 +158,6 @@ export function Agents() {
           onDone={(created) => (created.length === 1 ? navigate(`/agents/${created[0]}`) : void reload())}
         />
       )}
-    </div>
+    </VStack>
   );
 }
