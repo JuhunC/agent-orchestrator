@@ -694,3 +694,10 @@ export interface BaseChoice {
   branch: string | null;
   from: string | null;
 }
+
+/** Settings → Blocked users: GitHub accounts agents don't take requests from. */
+export interface BlockedUser {
+  login: string;
+  addedBy: string;
+  addedAt: string;
+}

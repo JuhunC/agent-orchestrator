@@ -3,6 +3,7 @@ import { Button, Code, Collapsible, Grid, Heading, HStack, StackItem, Switch as 
 import { AuditLog } from "../components/AuditLog.tsx";
 import { Backups } from "../components/Backups.tsx";
 import { BaseBranches } from "../components/BaseBranches.tsx";
+import { BlockedUsers } from "../components/BlockedUsers.tsx";
 import { Guards } from "../components/Guards.tsx";
 import { LiveActivityPanel } from "../components/LiveActivity.tsx";
 import { api, useApi, type Installation, type ModelInfo, type Settings as SettingsData, type Setup } from "../api.ts";
@@ -314,6 +315,7 @@ export function Settings() {
 
       <Columns>
         <LiveActivityPanel on={data.liveActivity} onChange={(on) => void update({ liveActivity: on })} />
+        <BlockedUsers />
         <LivePanel settings={data} onSave={update} />
         <BaseBranches />
         <Workspaces info={data.workspaces} onDone={() => void reload()} />

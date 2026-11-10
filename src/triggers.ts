@@ -1,6 +1,7 @@
+import { answerBlocked } from "./blocked-users.ts";
 import { bus } from "./bus.ts";
 import { config, repoAllowed } from "./config.ts";
-import { createTask, deliveryActedOn, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
+import { createTask, deliveryActedOn, isBlockedUser, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
 import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
 import type { Profile } from "./profiles/types.ts";
 import { accountLogins, agentAccount, agentForLogin as agentOfAccount, clientFor, isRecentOwnWrite } from "./github/accounts.ts";
@@ -259,6 +260,17 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
 
     const [owner, repo] = repoFull.split("/") as [string, string];
     const sender = String(payload.sender?.login ?? "");
+    // A blocked account (Settings → Blocked users) can't start agents or reach working ones. Each
+    // agent it called says so once per thread, without mentioning it, so bots can't keep chatting.
+    if (isBlockedUser(sender)) {
+      const outcomes: string[] = [];
+      for (const [, group] of Map.groupBy(intents, (intent) => `${intent.kind}#${intent.number}`)) {
+        const thread = { owner, repo, kind: group[0]!.kind, number: group[0]!.number, threadNodeId: payload.discussion?.node_id };
+        outcomes.push(...(await answerBlocked(sender, group.map((intent) => intent.agent), thread, installationId)));
+      }
+      if (working.length) outcomes.push(`not passed to ${working.map((task) => `${task.agent} (task #${task.id})`).join(", ")}`);
+      return record(deliveryId, event, payload, "rejected", [`${sender} is blocked`, ...outcomes].join("; "));
+    }
     const gh = await installationClient(installationId);
     const permission = await userPermission(gh, owner, repo, sender);
     const trusted = permissionAtLeast(permission, config.triggerMinPermission);

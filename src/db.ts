@@ -1274,3 +1274,71 @@ export function scheduleRunsBefore(scheduleId: number, taskId: number): { count:
   const row = db.prepare("SELECT COUNT(*) AS n, MAX(created_at) AS last FROM tasks WHERE schedule_id = ? AND id < ?").get(scheduleId, taskId) as Row;
   return { count: Number(row.n), lastAt: (row.last as string | null) ?? null };
 }
+
+// ---------- blocked users ----------
+
+// Accounts agents don't take requests from (Settings → Blocked users), and the threads where each
+// agent already said so, so it answers a blocked account once per thread.
+db.exec(`CREATE TABLE IF NOT EXISTS blocked_users (
+  login TEXT PRIMARY KEY COLLATE NOCASE,
+  added_by TEXT NOT NULL,
+  added_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS blocked_replies (
+  login TEXT NOT NULL COLLATE NOCASE,
+  agent TEXT NOT NULL,
+  thread TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  PRIMARY KEY (login, agent, thread)
+)`);
+
+export interface BlockedUser {
+  login: string;
+  addedBy: string;
+  addedAt: string;
+}
+
+export function listBlockedUsers(): BlockedUser[] {
+  return (db.prepare("SELECT * FROM blocked_users ORDER BY login COLLATE NOCASE").all() as Row[]).map((row) => ({ login: String(row.login), addedBy: String(row.added_by), addedAt: String(row.added_at) }));
+}
+
+export function isBlockedUser(login: string): boolean {
+  return Boolean(login) && Boolean(db.prepare("SELECT 1 FROM blocked_users WHERE login = ?").get(login));
+}
+
+/** Adds the logins not on the list yet (those already on it keep when they were added). */
+export function addBlockedUsers(logins: string[], addedBy: string): void {
+  const insert = db.prepare("INSERT OR IGNORE INTO blocked_users (login, added_by, added_at) VALUES (?, ?, ?)");
+  const ts = now();
+  for (const login of logins) insert.run(login, addedBy, ts);
+}
+
+/** Takes a login off the list, and forgets where agents told it so (they say it again if it's blocked again). */
+export function removeBlockedUser(login: string): boolean {
+  db.prepare("DELETE FROM blocked_replies WHERE login = ?").run(login);
+  return db.prepare("DELETE FROM blocked_users WHERE login = ?").run(login).changes > 0;
+}
+
+/** Makes the list exactly these logins, keeping when and by whom the remaining ones were added. */
+export function replaceBlockedUsers(logins: string[], addedBy: string): void {
+  db.exec("BEGIN");
+  try {
+    const keep = new Set(logins.map((login) => login.toLowerCase()));
+    for (const user of listBlockedUsers()) if (!keep.has(user.login.toLowerCase())) removeBlockedUser(user.login);
+    addBlockedUsers(logins, addedBy);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+/** Records that `agent` told `login` on `thread` it's blocked; false if it already had. */
+export function claimBlockedReply(login: string, agent: string, thread: string): boolean {
+  return db.prepare("INSERT OR IGNORE INTO blocked_replies (login, agent, thread, ts) VALUES (?, ?, ?, ?)").run(login, agent, thread, now()).changes > 0;
+}
+
+/** Undoes a claim whose reply couldn't be posted, so the next request tries again. */
+export function releaseBlockedReply(login: string, agent: string, thread: string): void {
+  db.prepare("DELETE FROM blocked_replies WHERE login = ? AND agent = ? AND thread = ?").run(login, agent, thread);
+}

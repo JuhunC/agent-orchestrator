@@ -61,6 +61,7 @@ import { startManualTask } from "../triggers.ts";
 import { usageReport } from "../runner/usage-report.ts";
 import { registerScheduleRoutes } from "./schedules-api.ts";
 import { registerBaseBranchRoutes } from "./base-branch-api.ts";
+import { registerBlockedUserRoutes } from "./blocked-users-api.ts";
 import { branchNameProblem, describeBaseSetting, pickBase } from "../github/branches.ts";
 import { checkBranchExists } from "../runtime/base-branch.ts";
 import type { Task, ThreadKind, ThreadRef } from "../types.ts";
@@ -220,6 +221,7 @@ function appManifest(name: string) {
 export function registerApi(app: FastifyInstance): void {
   registerScheduleRoutes(app);
   registerBaseBranchRoutes(app);
+  registerBlockedUserRoutes(app);
   // ---------- live stream ----------
   app.get("/api/stream", (request, reply) => {
     reply.hijack();
