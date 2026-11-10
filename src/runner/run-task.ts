@@ -25,7 +25,7 @@ import { git } from "./git.ts";
 import { settleInbox } from "./inbox.ts";
 import { retryTime, type DetectedLimit } from "./limits.ts";
 import { getLimit, setLimit } from "./limit-store.ts";
-import { progressEditAllowed, ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
+import { liveActivityFor, progressEditAllowed, ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
 import { recordIncident } from "./incidents.ts";
 import { scheduler } from "./scheduler.ts";
 import { profileCommit, profileVersion } from "../profiles/version.ts";
@@ -83,6 +83,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
 
   let gh: GitHubClient | null = null;
   let thread: ThreadContext | null = null;
+  // Past setup, so a cancellation is worth telling the thread about.
+  let begun = false;
   let boardContext: BoardContext | null = null;
   const target = () => ({ owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber, threadNodeId: thread?.nodeId });
   // The body last posted, so an edit that changes nothing isn't sent.
@@ -133,12 +135,14 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     } else if (task.progressCommentId) {
       // Resuming after a usage-limit pause: keep updating the same comment.
       await editComment(gh, target(), task.progressCommentId, renderProgress(profile, task, state)).catch(() => undefined);
-    } else {
+    } else if (liveActivityFor(profile)) {
       lastProgress = renderProgress(profile, task, state);
       const comment = await postComment(gh, target(), lastProgress);
       task = patch(task.id, { progressCommentId: comment.id });
     }
-    if (config.progressComments === "edit") throttle.start(); // "minimal": no edits until the end
+    // Without live activity the thread hears from the agent once, when it finishes.
+    begun = true;
+    if (task.progressCommentId && config.progressComments === "edit") throttle.start(); // "minimal": no edits until the end
 
     const column = boardContext ? boardContext.board.columns[boardContext.column]! : null;
     if (!task.dryRun && boardContext && column?.onStart && getBoardItem(boardContext.board.name, boardContext.itemId)?.status === column.name) {
@@ -495,7 +499,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     await throttle.flush(true);
     await throttle.stop();
     if (!gh || !profile || task.dryRun) return;
-    if (status === "cancelled" && !task.progressCommentId) return;
+    if (status === "cancelled" && !begun && !task.progressCommentId) return;
     const body = renderResult(profile, task, {
       ok: status === "succeeded",
       text: status === "succeeded" ? text : [reason, text ? `\n**Last reply from the agent:**\n\n${text}` : ""].join("\n"),
@@ -540,9 +544,18 @@ export async function recoverInterrupted(task: Task): Promise<void> {
 export async function markInterrupted(task: Task): Promise<void> {
   const updated = patch(task.id, { status: "failed", finishedAt: new Date().toISOString(), error: "Interrupted because the orchestrator restarted" });
   emit(task.id, "error", "Interrupted because the orchestrator restarted");
-  if (!task.progressCommentId) return;
+  if (task.dryRun) return;
   try {
     const gh = await clientFor(task);
+    if (!task.progressCommentId) {
+      // No live activity comment to complete: say so in a result comment instead.
+      const text = "Interrupted because the orchestrator restarted. Mention the agent again to retry.";
+      const durationMs = task.startedAt ? Date.now() - Date.parse(task.startedAt) : 0;
+      const threadNodeId = task.threadKind === "discussion" ? (await fetchThread(gh, task.owner, task.repo, task.threadKind, task.threadNumber)).nodeId : undefined;
+      const body = renderResult({ name: task.agent }, updated, { ok: false, text, durationMs, prUrl: null, prNumber: null, commits: 0 });
+      await postComment(gh, { owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber, threadNodeId }, body);
+      return;
+    }
     const state: ProgressState = {
       phase: "failed",
       steps: [],

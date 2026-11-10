@@ -119,6 +119,14 @@ const AGENT: FileDoc = {
       description: "When the agent acts as a GitHub account: mentioning that account (@login), assigning it or requesting its review starts the agent, like its handle. Turn off if the account is also a person's, who is mentioned for other things.",
       example: "github:\n  account_mentions: false",
     },
+    {
+      key: "github.live_activity",
+      type: "boolean",
+      default: "the Settings switch (off unless LIVE_ACTIVITY=true)",
+      description:
+        "Live activity: post a comment when a task starts and edit it as the agent works (its steps and latest message), then complete it at the end. Off, the agent only posts its result when it finishes. Leave it out to follow Settings → Live activity; PROGRESS_COMMENTS and PROGRESS_EDITS_PER_HOUR limit the edits.",
+      example: "github:\n  live_activity: true",
+    },
     { key: "max_turns", type: "number", default: "no limit", description: "Most model turns per task.", example: "max_turns: 200" },
     { key: "max_budget_usd", type: "number", default: "no limit", description: "Most it may spend per task, in US dollars.", example: "max_budget_usd: 5" },
     { key: "timeout_minutes", type: "number", default: "DEFAULT_TIMEOUT_MINUTES", description: "Stop a task after this long.", example: "timeout_minutes: 45" },

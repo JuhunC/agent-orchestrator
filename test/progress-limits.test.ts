@@ -5,7 +5,7 @@ import { startHarness } from "./harness.ts";
 
 const h = await startHarness(
   { "agents/coder/agent.md": "---\nhandle: aorch-coder\ndescription: coder\nlive: false\ngithub:\n  push: false\n  pull_request: false\n  finalize: false\n---\nYou are coder.\n" },
-  { PROGRESS_UPDATE_SECONDS: "5", PROGRESS_EDITS_PER_HOUR: "1" },
+  { PROGRESS_UPDATE_SECONDS: "5", PROGRESS_EDITS_PER_HOUR: "1", LIVE_ACTIVITY: "true" },
 );
 after(() => h.stop());
 const { app, fake, model } = h;

@@ -35,6 +35,8 @@ export interface GithubPermissions {
   accountMentions: boolean;
   /** github.base_branch: one branch, or per repository (owner/name in lower case). */
   baseBranch: { all: string | null; repos: Record<string, string> } | null;
+  /** github.live_activity: true or false; null follows the Settings default. */
+  liveActivity: boolean | null;
 }
 
 /** The GitHub account an agent acts as instead of the GitHub App. */
@@ -81,6 +83,8 @@ export interface Agent {
   canSchedule?: boolean;
   /** github.base_branch in words ("develop", "acme/api → develop, otherwise main"). */
   baseBranch?: string | null;
+  /** Whether it posts live activity (its github.live_activity, else the Settings default). */
+  liveActivity?: boolean;
   modelFrom: "agent" | "group" | null;
   effortFrom: "agent" | "group" | null;
   stats?: AgentStats | null;
@@ -104,6 +108,8 @@ export interface Library {
 
 export interface AgentsResponse {
   agents: Agent[];
+  /** Settings → Live activity: for agents that don't set github.live_activity. */
+  liveActivityDefault?: boolean;
   groups: Group[];
   library: Library;
   errors: string[];
@@ -373,6 +379,8 @@ export interface Settings {
   spendBlocked: string | null;
   /** Whether agents run as a separate OS user that can't read the orchestrator's data. */
   isolation: { mode: "off" | "sudo" | "direct"; user: string | null; required: boolean; problem: string | null };
+  /** Live activity comments for agents that don't set github.live_activity. */
+  liveActivity: boolean;
 }
 
 /** What agents' work came to: tasks, pull requests merged or closed, cards sent to a person. */

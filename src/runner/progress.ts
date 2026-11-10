@@ -1,4 +1,6 @@
+import { bus } from "../bus.ts";
 import { config } from "../config.ts";
+import { getSetting, setSetting } from "../db.ts";
 import { PROGRESS_MARKER, RESULT_MARKER } from "../github/threads.ts";
 import type { Task } from "../types.ts";
 import { githubThrottled } from "../github/app.ts";
@@ -19,6 +21,22 @@ export interface ProgressState {
 }
 
 const MAX_STEPS = 15;
+
+/** Live activity for agents that don't set github.live_activity: the Settings switch, else LIVE_ACTIVITY (off). */
+export function liveActivityDefault(): boolean {
+  const stored = getSetting("live_activity");
+  return stored === null ? config.liveActivity : stored === "true";
+}
+
+export function setLiveActivityDefault(on: boolean): void {
+  setSetting("live_activity", String(on));
+  bus.publish({ type: "settings" });
+}
+
+/** Does this agent post a progress comment and edit it as it works? Otherwise it only posts its result. */
+export function liveActivityFor(profile: { github: { liveActivity: boolean | null } }): boolean {
+  return profile.github.liveActivity ?? liveActivityDefault();
+}
 
 /** `@login` for GitHub users; plain text for admin-UI names that would otherwise ping a stranger. */
 export function mention(login: string): string {

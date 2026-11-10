@@ -11,7 +11,7 @@ const h = await startHarness(
     "agents/plain/agent.md": agent("aorch-plain", "  push: false\n  pull_request: false\n  finalize: false\n"),
     "agents/envy/agent.md": agent("aorch-envy", "  push: false\n  pull_request: false\n  finalize: false\n  account_token_env: ENVY_TOKEN\n"),
   },
-  { ENVY_TOKEN: "ghp_envy" },
+  { ENVY_TOKEN: "ghp_envy", LIVE_ACTIVITY: "true" },
 );
 after(() => h.stop());
 const { app, db, fake, model } = h;

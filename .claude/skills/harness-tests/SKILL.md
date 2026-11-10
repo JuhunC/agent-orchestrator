@@ -12,6 +12,7 @@ description: Write or run agent-orchestrator tests (test/*.test.ts) with the in-
 `const h = await startHarness(profiles, env)`, then `after(() => h.stop())`.
 - `profiles`: paths under PROFILES_DIR → contents (`"agents/coder/agent.md"`, `"boards/flow.yaml"`). `env` overrides (AUTH_DISABLED is "true" unless set "false").
 - Returns `app` (Fastify, `app.inject`), `db` (src/db.ts), `fake`, `model`, `sendWebhook(event, payload, deliveryId?)`, `waitForTask(id)`, `mentionOnNewIssue(n, handle, text)`, `commentMention(n, body)`, `showRemote("branch:path")`, `run(cwd, ...gitArgs)`, `root`, `remotes`, `scheduler`.
+- Live activity is off by default: a task posts only its result comment (`progressCommentId` null). For the progress comment, pass env `LIVE_ACTIVITY: "true"` or give the agent `github:\n  live_activity: true` (test/live-activity.test.ts).
 - Read-only agent: `---\nhandle: aorch-x\ndescription: x\nlive: false\ngithub:\n  push: false\n  pull_request: false\n  finalize: false\n---\nYou are x.\n`
 - Modules loaded after startHarness share its state: `await import("../src/…")`.
 

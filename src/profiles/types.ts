@@ -65,6 +65,8 @@ export interface GithubPermissions {
   accountTokenEnv: string | null;
   /** Mentioning or assigning its GitHub account starts it, like its handle. */
   accountMentions: boolean;
+  /** Post a progress comment and edit it while working (live activity); null: the Settings default. */
+  liveActivity: boolean | null;
 }
 
 /** A schedule listed under schedules: in agent.md (kept in step with the database; see schedules/runner.ts). */

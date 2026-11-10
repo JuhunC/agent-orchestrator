@@ -124,7 +124,16 @@ export const GITHUB_DEFAULTS = {
   start_related: false,
   account_token_env: null,
   account_mentions: true,
+  live_activity: null,
 } as const;
+
+/** true, false, or unset (null: follow a default set elsewhere). */
+function parseOptionalBoolean(value: unknown, field: string, errors: string[]): boolean | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "boolean") return value;
+  errors.push(`${field} must be true or false (got ${JSON.stringify(value)})`);
+  return null;
+}
 
 /** The name of the variable holding the agent's GitHub account token (github.account_token_env). */
 function parseTokenEnv(value: unknown, errors: string[]): string | null {
@@ -327,6 +336,7 @@ function loadProfile(root: string, name: string, library: Library, groups: Group
       startRelated: parseRelations(github.start_related, "start_related", errors),
       accountTokenEnv: parseTokenEnv(github.account_token_env, errors),
       accountMentions: github.account_mentions !== false,
+      liveActivity: parseOptionalBoolean(github.live_activity, "github.live_activity", errors),
     },
     maxTurns: number("max_turns"),
     maxBudgetUsd: number("max_budget_usd"),

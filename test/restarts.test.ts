@@ -43,4 +43,6 @@ test("a task running when the orchestrator restarts resumes its session; past RE
   await scheduler.start();
   assert.equal(db.getTask(queued.id)!.status, "failed");
   assert.match(db.getTask(queued.id)!.error ?? "", /Interrupted because the orchestrator restarted/);
+  // Without a live activity comment to complete, the thread hears it in a result comment.
+  assert.match(h.fake.issues.get(1)!.comments.at(-1)!.body, /\*\*coder\*\* couldn't finish ❌[\s\S]*Interrupted because the orchestrator restarted/);
 });

@@ -48,9 +48,11 @@ import {
   listProfileFiles,
   ProfileFileError,
   readProfileFile,
+  setAgentLiveActivity,
   setAgentModel,
   writeProfileFile,
 } from "../profiles/store.ts";
+import { liveActivityDefault, liveActivityFor, setLiveActivityDefault } from "../runner/progress.ts";
 import { sessions } from "../runtime/manager.ts";
 import { boardStatus, forgetProjectCache, pollInterval, syncBoard } from "../boards/engine.ts";
 import { loadBoards } from "../boards/loader.ts";
@@ -73,6 +75,8 @@ function agentView(profile: Profile) {
     ownSkills: profile.ownSkills.map((skill) => ({ name: skill.name, description: skill.description })),
     /** github.base_branch in words, for the agent's page. */
     baseBranch: describeBaseSetting(profile.github.baseBranch),
+    /** Whether it posts live activity: its github.live_activity, else the Settings default. */
+    liveActivity: liveActivityFor(profile),
     dir: undefined,
   };
 }
@@ -138,6 +142,8 @@ function settingsView() {
     spend: spendStatus(),
     workspaces: { retentionDays: config.workspaceRetentionDays, lastCleanup: lastCleanup() },
     spendBlocked: spendBlockReason(),
+    /** Live activity comments for agents that don't set github.live_activity. */
+    liveActivity: liveActivityDefault(),
   };
 }
 
@@ -372,6 +378,7 @@ export function registerApi(app: FastifyInstance): void {
         mcp: Object.entries(profiles.library.mcp).map(([name, server]) => ({ name, type: server.type, target: server.url ?? server.command })),
       },
       groups: profiles.groups,
+      liveActivityDefault: liveActivityDefault(),
       errors: [...profiles.errors.map((error) => `${error.file}: ${error.message}`), ...profiles.library.errors],
       profilesDir: config.profilesDir,
     };
@@ -395,9 +402,15 @@ export function registerApi(app: FastifyInstance): void {
     return { ok: true };
   });
 
-  app.patch<{ Params: { name: string }; Body: { model?: string | null; effort?: string | null } }>("/api/agents/:name", async (request, reply) => {
+  app.patch<{ Params: { name: string }; Body: { model?: string | null; effort?: string | null; liveActivity?: boolean | null } }>("/api/agents/:name", async (request, reply) => {
+    const body = request.body ?? {};
+    const author = request.adminLogin ?? "admin";
     try {
-      setAgentModel(request.params.name, request.body?.model?.trim() || null, request.body?.effort || null, request.adminLogin ?? "admin");
+      if (!loadProfiles().agents.some((agent) => agent.name === request.params.name)) return reply.code(404).send({ error: `No agent called ${request.params.name}` });
+      if ("liveActivity" in body && body.liveActivity !== null && typeof body.liveActivity !== "boolean") throw new ProfileFileError("liveActivity must be true, false or null");
+      // Only the fields sent change (model and effort are set together, as before).
+      if ("model" in body || "effort" in body) setAgentModel(request.params.name, body.model?.trim() || null, body.effort || null, author);
+      if ("liveActivity" in body) setAgentLiveActivity(request.params.name, body.liveActivity ?? null, author);
       bus.publish({ type: "agents" });
       return { ok: true };
     } catch (error) {
@@ -640,8 +653,12 @@ export function registerApi(app: FastifyInstance): void {
   // ---------- settings ----------
   app.get("/api/settings", async () => ({ ...settingsView(), setup: await setupView() }));
 
-  app.put<{ Body: { paused?: boolean; maxConcurrent?: number; liveIdleMinutes?: number; maxLiveSessions?: number; spendLimitDailyUsd?: number | null; spendLimitMonthlyUsd?: number | null } }>("/api/settings", async (request) => {
+  app.put<{
+    Body: { paused?: boolean; maxConcurrent?: number; liveIdleMinutes?: number; maxLiveSessions?: number; spendLimitDailyUsd?: number | null; spendLimitMonthlyUsd?: number | null; liveActivity?: boolean };
+  }>("/api/settings", async (request, reply) => {
+    if (request.body && "liveActivity" in request.body && typeof request.body.liveActivity !== "boolean") return reply.code(400).send({ error: "liveActivity must be true or false" });
     if (typeof request.body?.paused === "boolean") scheduler.setPaused(request.body.paused);
+    if (typeof request.body?.liveActivity === "boolean") setLiveActivityDefault(request.body.liveActivity);
     const limits: { dailyUsd?: number | null; monthlyUsd?: number | null } = {};
     if (request.body && "spendLimitDailyUsd" in request.body) limits.dailyUsd = Number(request.body.spendLimitDailyUsd) || null;
     if (request.body && "spendLimitMonthlyUsd" in request.body) limits.monthlyUsd = Number(request.body.spendLimitMonthlyUsd) || null;

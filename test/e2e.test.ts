@@ -64,7 +64,8 @@ You write tests.
 `,
     "library/mcp.json": JSON.stringify({ mcpServers: { docs: { command: process.execPath, args: [docsServer], env: { DOCS_TOKEN: "${DOCS_TOKEN}" }, alwaysLoad: true } } }),
   },
-  { DOCS_TOKEN: "docs-secret-value", MODEL_ERROR_RETRY_DELAY_SECONDS: "1", MAX_PULL_REQUESTS_PER_ISSUE: "1" },
+  // These checks follow the live activity comment, which is off unless turned on.
+  { DOCS_TOKEN: "docs-secret-value", MODEL_ERROR_RETRY_DELAY_SECONDS: "1", MAX_PULL_REQUESTS_PER_ISSUE: "1", LIVE_ACTIVITY: "true" },
 );
 after(() => h.stop());
 const { db, app, fake, model, waitForTask } = h;

@@ -4,7 +4,7 @@ AI agents that take GitHub issues and pull requests from request to merged-ready
 
 1. works in a checkout of the repo on its own branch,
 2. uses the skills, MCP servers and subagents in its profile,
-3. reports progress in one live comment,
+3. can report its progress in one live comment (live activity, off unless you turn it on),
 4. commits, pushes and opens the PR with the orchestrator's GitHub tools,
 5. replies with a summary, and remembers the thread next time.
 
@@ -234,7 +234,7 @@ schedules:
 
 - **Timing.** Cron times are wall-clock times in the schedule's time zone, so a daylight-saving change doesn't move them (a time the clock skips is skipped that day, and one it repeats runs once). Intervals count from when the schedule was made. Schedules may run at most every `SCHEDULE_MIN_MINUTES` (15).
 - **Guards.** A run is skipped while the schedule's last run is still queued or running. A schedule missed while the server was down runs once when it's back. After `SCHEDULE_PAUSE_AFTER_FAILURES` (3) failed runs in a row it pauses itself and records an incident. Each agent may have `SCHEDULES_PER_AGENT` (20). Scheduled runs queue after people's requests, alongside work agents started for each other, and count towards the spending limits.
-- **Run now** starts an extra run without moving the timetable. Operators may run and pause schedules; making, changing and deleting them is for admins. Progress comments say "requested by schedule …", so nobody is pinged on every run.
+- **Run now** starts an extra run without moving the timetable. Operators may run and pause schedules; making, changing and deleting them is for admins. Their comments say "requested by schedule …", so nobody is pinged on every run.
 
 ## Project boards
 
@@ -291,6 +291,8 @@ Only people with write access (`TRIGGER_MIN_PERMISSION`) can start agents; bots,
 
 **While an agent works**, what people do on its issue or PR reaches it mid-task: comments (and edits), reviews and inline comments, labels, assignees, title or description edits, pushes, closing, reopening or merging. That includes the PR it opened for an issue. The agent gets it after its current step, or just before it would finish, so it keeps going and deals with it. Mentioning an agent that's already working on the thread tells it there instead of queueing another run; if it finished before seeing the mention, a follow-up run is queued. Activity from people below `TRIGGER_MIN_PERMISSION` is marked as information, not instructions. Bots are never forwarded. The task's log shows each item, and **Deliveries** marks these webhooks *forwarded*.
 
+**Live activity** is off by default: the thread hears from an agent once, when it finishes (its result comment mentions whoever asked). Turned on, an agent also posts a comment when it starts and edits it as it works, with its steps and latest message, and completes it at the end. Set it for every agent in **Settings → Live activity** (`PUT /api/settings` with `{ "liveActivity": true }`; `LIVE_ACTIVITY=true` sets the starting value), and per agent with `github.live_activity: true` or `false` in its agent.md, which wins (the agent's page has the switch; `PATCH /api/agents/<name>` with `{ "liveActivity": true }`, `false`, or `null` to follow Settings). `PROGRESS_COMMENTS` and `PROGRESS_EDITS_PER_HOUR` limit the edits.
+
 **Token usage**: each task records what it cost and its tokens (input, output, cache reads and writes, per model), taken from Claude Code's running totals for the session, so a live or resumed session's later tasks don't count the earlier ones again. **Profile versions**: each task records which version of its agent's profile did the work: a fingerprint of the prompt, model, effort, fallback, tools, skills (and their text), subagents, MCP servers, GitHub permissions and limits, plus the profiles folder's last commit for that agent. The task page shows it, and the agent's page breaks its outcomes down **by profile version**, so after a change you can see whether success and merge rates went up or down.
 
 **Outcomes**: beside the cost, the Dashboard and each agent's page show what the work came to: the share of tasks that succeeded, of pull requests that were merged rather than closed, open pull requests, cards sent to a person (needs-human), cost per merged pull request and the average task time. Pull requests are followed through webhooks and checked with GitHub hourly (`GET /api/outcomes?days=30`). Daily and monthly spending limits (`SPEND_LIMIT_DAILY_USD`, `SPEND_LIMIT_MONTHLY_USD`, or **Settings → Queue**) hold new tasks once reached. The Dashboard sums it up for the last 7, 30 or 90 days, per day and per agent; each agent's page shows its own, by model, with its most expensive tasks. Costs are Claude Code's estimates at list prices; with your own model service they may not match its bill (the token counts still do). Tasks from before v2.9.3 in a live session may show a cost that includes earlier tasks.
@@ -318,6 +320,7 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `CLAUDE_CODE_EXECUTABLE` | bundled | A Claude Code-compatible executable agents run instead of the SDK's own (see [The model service](#the-model-service)) |
 | `TASK_DETAIL_RETENTION_DAYS` | `90` | Prompts and step-by-step logs of tasks that finished longer ago are dropped, hourly (the task, its request, reply, cost, tokens, branch and pull request stay). `0` keeps them forever |
 | `BACKUP_KEEP`, `BACKUP_DIR` | `7`, `DATA_DIR/backups` | Daily snapshots of the database and key files: how many to keep (`0` turns them off) and where (see [Backups](#backups)) |
+| `LIVE_ACTIVITY` | `false` | Starting value of **Settings → Live activity**: `true` makes agents post a progress comment and edit it while they work. Settings, and an agent's `github.live_activity`, override it |
 | `PROGRESS_UPDATE_SECONDS` | `60` | How often a running task's progress comment is edited, at most |
 | `PROGRESS_EDITS_PER_HOUR` | `300` | Progress edits all tasks together may make per hour. GitHub limits how fast content is written (about 500 writes an hour); past the budget, edits wait and the comment is completed when the task ends |
 | `PROGRESS_COMMENTS` | `edit` | `minimal`: post the progress comment when a task starts and complete it when it ends, with no edits in between (for many agents at once) |

@@ -25,8 +25,11 @@ export function FileEditor({
   onSaved,
   onDeleted,
   deleteLabel,
+  reloadKey,
 }: {
   path: string;
+  /** Changing it reloads the file (the page changed it another way), unless it has unsaved edits. */
+  reloadKey?: number;
   /** Content for a file that doesn't exist yet. */
   initial?: string;
   rows?: number;
@@ -69,6 +72,17 @@ export function FileEditor({
         setExists(false);
       });
   }, [path, initial]);
+
+  useEffect(() => {
+    if (!reloadKey || content === null || content !== saved) return;
+    api
+      .get<{ content: string }>(`/api/profiles/file?path=${encodeURIComponent(path)}`)
+      .then((file) => {
+        setContent(file.content);
+        setSaved(file.content);
+      })
+      .catch(() => undefined);
+  }, [reloadKey]);
 
   const save = async () => {
     if (content === null) return;

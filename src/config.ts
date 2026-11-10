@@ -115,6 +115,9 @@ export const config = {
   progressUpdateSeconds: int("PROGRESS_UPDATE_SECONDS", 60),
   progressEditsPerHour: Math.max(0, int("PROGRESS_EDITS_PER_HOUR", 300)),
   progressComments: env("PROGRESS_COMMENTS", "edit").toLowerCase() === "minimal" ? "minimal" : "edit",
+  // Whether agents post that progress comment at all (live activity). Off: only the result when
+  // they finish. Settings (and an agent's github.live_activity) override this starting value.
+  liveActivity: env("LIVE_ACTIVITY") === "true",
   historyLimit: int("HISTORY_LIMIT", 10),
   triggerMinPermission: env("TRIGGER_MIN_PERMISSION", "write").toLowerCase(),
   allowedRepos: list("ALLOWED_REPOS").map((repo) => repo.toLowerCase()),

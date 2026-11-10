@@ -3,6 +3,7 @@ import { Button, Code, Heading, HStack, StackItem, Text, TextInput, VStack } fro
 import { api, useApi, type AgentsResponse, type GithubPermissions, type ModelInfo } from "../api.ts";
 import { DuplicateDialog } from "../components/DuplicateDialog.tsx";
 import { GithubAccount } from "../components/GithubAccount.tsx";
+import { AgentLiveActivity } from "../components/LiveActivity.tsx";
 import { Schedules } from "../components/Schedules.tsx";
 import { ModelPicker } from "../components/ModelPicker.tsx";
 import { FileEditor } from "../components/FileEditor.tsx";
@@ -55,7 +56,13 @@ export function AgentDetail({ name }: { name: string }) {
   const [skill, setSkill] = useState<string | null>(null);
   const [duplicating, setDuplicating] = useState(false);
   const [newSkill, setNewSkill] = useState("");
+  // Bumped when the model picker or live activity choice rewrites agent.md, so its editor shows it.
+  const [fileVersion, setFileVersion] = useState(0);
   if (!data) return <Empty>Loading…</Empty>;
+  const changedFile = () => {
+    void reload();
+    setFileVersion((version) => version + 1);
+  };
   const agent = data.agents.find((candidate) => candidate.name === name);
   if (!agent) return <Empty>No agent called {name}. It may have been deleted.</Empty>;
   const base = `agents/${agent.name}`;
@@ -183,14 +190,17 @@ export function AgentDetail({ name }: { name: string }) {
 
       <AgentUsage agent={agent.name} />
 
-      <Panel title="Model and effort">
-        <ModelPicker agent={agent.name} model={agent.model} effort={agent.effort} defaultModel={modelInfo?.model ?? null} onSaved={() => void reload()} />
-      </Panel>
+      <Columns>
+        <Panel title="Model and effort">
+          <ModelPicker agent={agent.name} model={agent.model} effort={agent.effort} defaultModel={modelInfo?.model ?? null} onSaved={changedFile} />
+        </Panel>
+        <AgentLiveActivity agent={agent} defaultOn={data.liveActivityDefault ?? false} onSaved={changedFile} />
+      </Columns>
 
       {duplicating && <DuplicateDialog agent={agent} groups={data.groups} onClose={() => setDuplicating(false)} onDone={(created) => (created.length === 1 ? navigate(`/agents/${created[0]}`) : void reload())} />}
 
       <Panel title="agent.md" hint="frontmatter settings, then the role prompt">
-        <FileEditor path={`${base}/agent.md`} rows={22} onSaved={() => void reload()} onDeleted={() => navigate("/agents")} deleteLabel="Delete agent" />
+        <FileEditor path={`${base}/agent.md`} rows={22} reloadKey={fileVersion} onSaved={() => void reload()} onDeleted={() => navigate("/agents")} deleteLabel="Delete agent" />
       </Panel>
 
       <Panel

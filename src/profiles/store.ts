@@ -139,15 +139,20 @@ export function createAgent(name: string, handle: string, author: string): void 
 
 /**
  * Sets frontmatter fields of a profile file (agent.md) from the admin UI, keeping the rest of
- * the file, comments included. `null` removes a field.
+ * the file, comments included. `null` removes a field; "github.x" is x under github:.
  */
-export function setFrontmatterFields(path: string, fields: Record<string, string | number | null>, author: string): void {
+export function setFrontmatterFields(path: string, fields: Record<string, string | number | boolean | null>, author: string): void {
   const text = readProfileFile(path);
   const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
   const doc = parseDocument(match ? match[1]! : "");
   for (const [key, value] of Object.entries(fields)) {
-    if (value === null || value === "") doc.delete(key);
-    else doc.set(key, value);
+    const keyPath = key.split(".");
+    if (value === null || value === "") {
+      doc.deleteIn(keyPath);
+      // Don't leave an empty github: behind.
+      const parent = keyPath.length > 1 ? doc.getIn(keyPath.slice(0, -1)) : null;
+      if (parent && typeof parent === "object" && "items" in parent && (parent as { items: unknown[] }).items.length === 0) doc.deleteIn(keyPath.slice(0, -1));
+    } else doc.setIn(keyPath, value);
   }
   const front = doc.toString().trimEnd();
   writeProfileFile(path, `---\n${front}\n---\n${match ? match[2]! : text}`, author);
@@ -157,6 +162,11 @@ export function setAgentModel(name: string, model: string | null, effort: string
   if (effort && !EFFORTS.includes(effort as never)) throw new ProfileFileError(`effort must be one of ${EFFORTS.join(", ")}`);
   if (model && !/^[\w.:/@[\]-]{1,120}$/.test(model)) throw new ProfileFileError("That doesn't look like a model name");
   setFrontmatterFields(`agents/${name}/agent.md`, { model, effort }, author);
+}
+
+/** github.live_activity: true or false, or null to follow the Settings default. */
+export function setAgentLiveActivity(name: string, on: boolean | null, author: string): void {
+  setFrontmatterFields(`agents/${name}/agent.md`, { "github.live_activity": on }, author);
 }
 
 const AGENT_NAME = /^[a-z\d][a-z\d_-]{0,39}$/i;

@@ -4,6 +4,7 @@ import { AuditLog } from "../components/AuditLog.tsx";
 import { Backups } from "../components/Backups.tsx";
 import { BaseBranches } from "../components/BaseBranches.tsx";
 import { Guards } from "../components/Guards.tsx";
+import { LiveActivityPanel } from "../components/LiveActivity.tsx";
 import { api, useApi, type Installation, type ModelInfo, type Settings as SettingsData, type Setup } from "../api.ts";
 import { A, Columns, Empty, ErrorText, KV, LinkButton, Meta, Notice, Panel, Tag } from "../components/ui.tsx";
 import { useRoute } from "../router.ts";
@@ -312,6 +313,7 @@ export function Settings() {
       </Columns>
 
       <Columns>
+        <LiveActivityPanel on={data.liveActivity} onChange={(on) => void update({ liveActivity: on })} />
         <LivePanel settings={data} onSave={update} />
         <BaseBranches />
         <Workspaces info={data.workspaces} onDone={() => void reload()} />
