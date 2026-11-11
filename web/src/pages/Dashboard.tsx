@@ -2,9 +2,16 @@ import { useEffect, useState } from "react";
 import { Button, Card, Divider, Grid, HStack, StackItem, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, VStack } from "@astryxdesign/core";
 import { ago, api, duration, fromNow, useApi, useNow, useStream, waitText, type Agent, type Overview, type Task, type TaskEvent } from "../api.ts";
 import { RunAgentDialog } from "../components/RunAgentDialog.tsx";
-import { A, DataTable, Empty, LinkButton, Meta, Notice, Panel, Pill, StatGrid, StatTile, StatusPill, StepText, Switch, ThreadCell, who, Columns } from "../components/ui.tsx";
+import { A, DataTable, Empty, LinkButton, Meta, Notice, Panel, Pill, PrioritySelect, StatGrid, StatTile, StatusPill, StepText, Switch, ThreadCell, who, Columns } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 import { UsageSummary } from "../components/Usage.tsx";
+
+/** Under a queued task's agent: how long it has waited, who asked, and what holds it if something does. */
+function queueNote(task: Task, now: number): string {
+  if (task.waitFor) return "resuming after a pause";
+  const held = task.retryAt && Date.parse(task.retryAt) > now ? (task.waitReason === "setup" ? " · tries again shortly" : " · waits for a usage limit") : "";
+  return `${ago(task.createdAt, now)} · ${who(task.requestedBy)}${held}`;
+}
 
 function AgentCard({ agent, running, onRun, onToggle }: { agent: Agent; running: number; onRun: () => void; onToggle: (enabled: boolean) => void }) {
   const stats = agent.stats;
@@ -240,33 +247,41 @@ export function Dashboard() {
           )}
         </Panel>
 
-        <Panel title="Queue" hint={data.queued.length ? `${data.queued.length} waiting` : undefined} tight>
+        <Panel title="Queue" hint={data.queued.length ? `${data.queued.length} waiting · in the order they start` : undefined} tight>
           {data.queued.length === 0 ? (
             <Empty>Nothing waiting.</Empty>
           ) : (
             <DataTable hover>
               <TableBody>
-                {data.queued.map((task) => (
+                {data.queued.map((task, index) => (
                   <TableRow key={task.id} className="ao-clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
                     <TableCell>
-                      <VStack gap={0.5}>
-                        <Text weight="semibold">{task.agent}</Text>
-                        <Meta>{task.waitFor ? "resuming after a pause" : ago(task.createdAt, now)}</Meta>
-                      </VStack>
+                      <HStack gap={3} vAlign="center">
+                        <span className="ao-queue-place" title={index === 0 ? "Starts next" : `${index} ahead of it`}>
+                          {index + 1}
+                        </span>
+                        <VStack gap={0.5}>
+                          <Text weight="semibold">{task.agent}</Text>
+                          <Meta>{queueNote(task, now)}</Meta>
+                        </VStack>
+                      </HStack>
                     </TableCell>
                     <TableCell>
-                      <ThreadCell task={task} />
+                      <ThreadCell task={task} priority={false} />
                     </TableCell>
                     <TableCell>
-                      <Button
-                        label="Remove"
-                        size="sm"
-                        variant="destructive"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void api.post(`/api/tasks/${task.id}/cancel`);
-                        }}
-                      />
+                      <HStack gap={2} vAlign="center" hAlign="end">
+                        <PrioritySelect task={task} />
+                        <Button
+                          label="Remove"
+                          size="sm"
+                          variant="destructive"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void api.post(`/api/tasks/${task.id}/cancel`);
+                          }}
+                        />
+                      </HStack>
                     </TableCell>
                   </TableRow>
                 ))}

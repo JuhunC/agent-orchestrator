@@ -1,6 +1,6 @@
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { getSetting, getTask, openAgentPullCount, queuedTasks, setSetting, tasksWithStatus, threadHasOpenAgentPull, updateTask } from "../db.ts";
+import { getSetting, getTask, lastStarts, openAgentPullCount, queuedTasks, setSetting, tasksWithStatus, threadHasOpenAgentPull, updateTask } from "../db.ts";
 import { recordIncident } from "./incidents.ts";
 import { errorMessage, log } from "../log.ts";
 import type { Task } from "../types.ts";
@@ -15,6 +15,12 @@ import { loadBoards } from "../boards/loader.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
 import { executeTask, notePausedCancelled, recoverInterrupted } from "./run-task.ts";
 import { settleInbox } from "./inbox.ts";
+
+/** The queue in the order it will start now: what's running and who had a turn last count (queue-order.ts). */
+export function startOrder(queued: Task[], running: Task[], now = Date.now()): Task[] {
+  const served = config.queueFairness && queued.length > 1 ? lastStarts(new Date(now - 24 * 3_600_000).toISOString()) : [];
+  return queueOrder(queued, now, running, served);
+}
 
 /**
  * Runs queued tasks, up to the concurrency limit. Two tasks that share a workspace (same agent
@@ -132,15 +138,24 @@ class Scheduler {
     const busy = new Set([...this.running.values()].map((entry) => entry.workspace));
     // Agents with `replicas: N` work at most N cards at once.
     const perAgent = new Map<string, number>();
+    // MAX_RUNNING_PER_REPO: one repository takes at most that many of the slots.
+    const perRepo = new Map<string, number>();
+    const repoKey = (task: Task) => `${task.owner}/${task.repo}`.toLowerCase();
+    // What runs now, and what this pass starts: whoever has more of it waits more turns (queue-order.ts).
+    const active: Task[] = [];
     for (const id of this.running.keys()) {
       const running = getTask(id);
-      if (running) perAgent.set(running.agent, (perAgent.get(running.agent) ?? 0) + 1);
-      if (running?.board) perBoard.set(running.board, (perBoard.get(running.board) ?? 0) + 1);
+      if (!running) continue;
+      active.push(running);
+      perAgent.set(running.agent, (perAgent.get(running.agent) ?? 0) + 1);
+      perRepo.set(repoKey(running), (perRepo.get(repoKey(running)) ?? 0) + 1);
+      if (running.board) perBoard.set(running.board, (perBoard.get(running.board) ?? 0) + 1);
     }
-    for (const task of queueOrder(queued, now)) {
+    for (const task of startOrder(queued, active, now)) {
       if (this.running.size >= this.effectiveConcurrent(now)) break;
       const workspace = workspaceDir(task);
       if (busy.has(workspace)) continue;
+      if (config.maxRunningPerRepo && (perRepo.get(repoKey(task)) ?? 0) >= config.maxRunningPerRepo) continue;
       const profile = profiles.find((candidate) => candidate.name === task.agent);
       if (!profile) {
         this.finishWithoutRunning(task, "cancelled", "The agent was removed before this task ran");
@@ -161,6 +176,7 @@ class Scheduler {
       }
       busy.add(workspace);
       perAgent.set(profile.name, (perAgent.get(profile.name) ?? 0) + 1);
+      perRepo.set(repoKey(task), (perRepo.get(repoKey(task)) ?? 0) + 1);
       if (task.board) perBoard.set(task.board, (perBoard.get(task.board) ?? 0) + 1);
       this.launch(task, workspace);
     }

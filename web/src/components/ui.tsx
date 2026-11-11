@@ -16,6 +16,7 @@ import {
   Link,
   MetadataList,
   MetadataListItem,
+  Selector,
   StackItem,
   Switch as AstryxSwitch,
   Table,
@@ -25,7 +26,7 @@ import {
   VStack,
   type TextInputProps,
 } from "@astryxdesign/core";
-import { KIND_LABEL, type Task, type TaskOutcome, type TaskStatus } from "../api.ts";
+import { api, KIND_LABEL, type Task, type TaskOutcome, type TaskPriority, type TaskStatus } from "../api.ts";
 import { href } from "../router.ts";
 
 type BadgeVariant = "neutral" | "info" | "success" | "warning" | "error" | "blue" | "purple";
@@ -76,6 +77,35 @@ export function Pill({ tone, children }: { tone: string; children: ReactNode }) 
 /** A small label for metadata: a kind, a column, a skill. */
 export function Tag({ children, accent, href: link }: { children: string; accent?: boolean; href?: string }) {
   return <Token size="sm" color={accent ? "purple" : "default"} label={children} href={link} />;
+}
+
+/** A task's place in the queue, shown only when it isn't the usual one. */
+export function PriorityTag({ priority }: { priority: TaskPriority }) {
+  if (priority === "normal") return null;
+  return <Token size="sm" color={priority === "high" ? "orange" : "gray"} label={priority === "high" ? "High priority" : "Low priority"} />;
+}
+
+const PRIORITIES: { value: TaskPriority; label: string }[] = [
+  { value: "high", label: "High" },
+  { value: "normal", label: "Normal" },
+  { value: "low", label: "Low" },
+];
+
+/** Moves a queued task up or down the queue: high goes before the rest, low after it. */
+export function PrioritySelect({ task, width = 104 }: { task: Task; width?: number }) {
+  return (
+    <span onClick={(event) => event.stopPropagation()}>
+      <Selector
+        label={`Priority of task #${task.id}`}
+        isLabelHidden
+        size="sm"
+        width={width}
+        options={PRIORITIES}
+        value={task.priority}
+        onChange={(value) => value && value !== task.priority && void api.post(`/api/tasks/${task.id}/priority`, { priority: value })}
+      />
+    </span>
+  );
 }
 
 export function Chips({ items, empty = "—" }: { items: string[]; empty?: string }) {
@@ -281,7 +311,7 @@ export function Actions({ children }: { children: ReactNode }) {
 }
 
 /** "acme/widgets#12 · Fix the thing" with links to the task and GitHub. */
-export function ThreadCell({ task, linkTask = true }: { task: Task; linkTask?: boolean }) {
+export function ThreadCell({ task, linkTask = true, priority = true }: { task: Task; linkTask?: boolean; priority?: boolean }) {
   const label = `${task.owner}/${task.repo}#${task.threadNumber}`;
   return (
     <VStack gap={0.5} maxWidth={420}>
@@ -291,6 +321,7 @@ export function ThreadCell({ task, linkTask = true }: { task: Task; linkTask?: b
       <HStack gap={1} vAlign="center" wrap="wrap">
         <Tag>{KIND_LABEL[task.threadKind]}</Tag>
         {task.boardColumn && <Tag accent>{task.boardColumn}</Tag>}
+        {priority && <PriorityTag priority={task.priority} />}
         <Meta>
           {linkTask ? <A to={`/tasks/${task.id}`}>{label}</A> : label}
           {task.threadUrl && (

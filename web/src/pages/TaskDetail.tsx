@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Blockquote, Button, CheckboxInput, Code, CodeBlock, Heading, HStack, StackItem, Text, VStack } from "@astryxdesign/core";
 import { ago, api, duration, fromNow, isPaused, KIND_LABEL, useNow, useStream, waitText, type Task, type TaskEvent } from "../api.ts";
-import { A, Columns, Empty, KV, Meta, Notice, Panel, StatusPill, Tag, who } from "../components/ui.tsx";
+import { A, Columns, Empty, KV, Meta, Notice, Panel, PrioritySelect, PriorityTag, StatusPill, Tag, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
 /** Something that happened on GitHub while the agent works, which it hasn't been told yet. */
@@ -11,6 +11,12 @@ interface WaitingNote {
   url: string;
   mention: boolean;
   fromAgent: boolean;
+}
+
+/** Where a queued task stands in the queue. */
+interface QueuePlace {
+  ahead: number;
+  why: string;
 }
 
 /** A task in a chain of agents starting each other. */
@@ -96,6 +102,9 @@ export function TaskDetail({ id }: { id: number }) {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [others, setOthers] = useState<ChainNode[]>([]);
   const [inbox, setInbox] = useState<WaitingNote[]>([]);
+  /** While it's queued: how many tasks start before it, and why it stands there. */
+  const [queue, setQueue] = useState<QueuePlace | null>(null);
+  const queueTimer = useRef<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showStderr, setShowStderr] = useState(false);
   const [follow, setFollow] = useState(true);
@@ -107,19 +116,40 @@ export function TaskDetail({ id }: { id: number }) {
     setTask(null);
     setEvents([]);
     api
-      .get<{ task: Task; events: TaskEvent[]; inbox: WaitingNote[]; others?: ChainNode[]; chain?: { ancestors: ChainNode[]; started: ChainNode[] } }>(`/api/tasks/${id}`)
+      .get<{ task: Task; events: TaskEvent[]; inbox: WaitingNote[]; queue: QueuePlace | null; others?: ChainNode[]; chain?: { ancestors: ChainNode[]; started: ChainNode[] } }>(`/api/tasks/${id}`)
       .then((data) => {
         setTask(data.task);
         setEvents(data.events);
         setInbox(data.inbox);
+        setQueue(data.queue);
         setOthers(data.others ?? []);
         setChain(data.chain ?? null);
       })
       .catch((err) => setError((err as Error).message));
   }, [id]);
 
+  // Its place in the queue changes as other tasks start, finish or are moved: look again, at most once a second.
+  const refreshQueue = () => {
+    if (queueTimer.current !== null) return;
+    queueTimer.current = window.setTimeout(() => {
+      queueTimer.current = null;
+      void api
+        .get<{ queue: QueuePlace | null }>(`/api/tasks/${id}?after=${Number.MAX_SAFE_INTEGER}`)
+        .then((data) => setQueue(data.queue))
+        .catch(() => undefined);
+    }, 1000);
+  };
+  useEffect(
+    () => () => {
+      if (queueTimer.current !== null) window.clearTimeout(queueTimer.current);
+      queueTimer.current = null;
+    },
+    [id],
+  );
+
   useStream((message) => {
     if (message.type === "task" && message.task.id === id) setTask(message.task);
+    if (message.type === "task" && task?.status === "queued") refreshQueue();
     if (message.type === "task" && message.task.id !== id) {
       const changed = message.task;
       setOthers((current) => (current.some((other) => other.id === changed.id) ? current.map((other) => (other.id === changed.id ? { ...other, status: changed.status } : other)) : current));
@@ -166,7 +196,10 @@ export function TaskDetail({ id }: { id: number }) {
           </Heading>
         </StackItem>
         {active ? (
-          <Button label={isPaused(task) ? "Cancel task" : task.status === "queued" ? "Remove from queue" : "Stop agent"} variant="destructive" onClick={cancel} />
+          <HStack gap={2} vAlign="center">
+            {task.status === "queued" && <PrioritySelect task={task} width={120} />}
+            <Button label={isPaused(task) ? "Cancel task" : task.status === "queued" ? "Remove from queue" : "Stop agent"} variant="destructive" onClick={cancel} />
+          </HStack>
         ) : (
           <HStack gap={2}>
             <Button label="Run again" onClick={() => void retry()} />
@@ -218,6 +251,11 @@ export function TaskDetail({ id }: { id: number }) {
       {task.status === "queued" && !isPaused(task) && task.waitFor?.woke && (
         <Notice tone="info" title="Resuming after a pause, as soon as a slot is free.">
           It was woken because {task.waitFor.woke}.
+        </Notice>
+      )}
+      {task.status === "queued" && !isPaused(task) && !task.retryAt && queue && (
+        <Notice tone="info" title={queue.ahead === 0 ? "Next in the queue: it starts as soon as a slot is free." : `In the queue, with ${queue.ahead} task${queue.ahead === 1 ? "" : "s"} ahead of it.`}>
+          {queue.why} Set its priority (top right) to move it: high goes before the rest, low after it.
         </Notice>
       )}
       {task.status === "queued" && task.retryAt && !isPaused(task) && (
@@ -325,6 +363,7 @@ export function TaskDetail({ id }: { id: number }) {
           <KV
             items={[
               ["Task", `#${task.id}`],
+              ...(task.priority === "normal" ? [] : ([["Priority", <PriorityTag priority={task.priority} />]] as [string, ReactNode][])),
               ["Duration", duration(task.startedAt, task.finishedAt, now)],
               ["Branch", task.branch ? <Code size="inherit">{`${task.branch}${task.baseBranch && task.baseBranch !== task.branch ? ` → ${task.baseBranch}` : ""}`}</Code> : "—"],
               [

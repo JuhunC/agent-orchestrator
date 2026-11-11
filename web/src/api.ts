@@ -4,6 +4,7 @@ export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 /** What the agent said about a task that ended without an error (null: nothing, which counts as done). */
 export type TaskOutcome = "done" | "partial" | "blocked" | "gave_up";
+export type TaskPriority = "high" | "normal" | "low";
 
 export interface AgentStats {
   queued: number;
@@ -197,6 +198,8 @@ export interface Task {
   waitFor: WaitFor | null;
   /** Times its agent paused it. */
   waits: number;
+  /** Its place in the queue. */
+  priority: TaskPriority;
   outcome: TaskOutcome | null;
   outcomeNote: string | null;
   live: boolean;

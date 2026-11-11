@@ -212,6 +212,7 @@ export function settleInbox(task: Task, startFollowUp: boolean): Task | null {
         requestText: text,
         requestUrl: mentions[0]!.url,
         startedByTask: fromAgent,
+        priority: task.priority,
       });
   bus.publish({ type: "task", task: follow });
   emit(task.id, `Finished before seeing ${mentions.length === 1 ? "a mention" : `${mentions.length} mentions`}; queued it as task #${follow.id}`);

@@ -5,6 +5,7 @@ import type { FastifyInstance } from "fastify";
 import { bus, type BusMessage } from "../bus.ts";
 import { config } from "../config.ts";
 import {
+  addEvent,
   createTask,
   getSetting,
   getTask,
@@ -22,17 +23,18 @@ import {
   listBoardItems,
   listHandoffs,
   tasksStartedBy,
+  updateTask,
   databaseSize,
 } from "../db.ts";
 import { addressCheck, appAddresses, ensureAppDetails, findInstallation, getApp, getCredentials, installationClient, resetBotIdentity, saveCredentials, setAppWebhookUrl } from "../github/app.ts";
 import { AccountError, accountToken, agentAccount, lookUpToken, registerAccount, removeAccount, repositoryAccess } from "../github/accounts.ts";
 import { errorMessage } from "../log.ts";
-import { scheduler } from "../runner/scheduler.ts";
+import { scheduler, startOrder } from "../runner/scheduler.ts";
 import { cleanUpWorkspaces, lastCleanup } from "../runtime/cleanup.ts";
 import { backUp, backupDir, listBackups } from "../runtime/backup.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
-import { queueOrder } from "../runner/queue-order.ts";
+import { rankReason } from "../runner/queue-order.ts";
 import { waitingNotes } from "../runner/inbox.ts";
 import { wakeTask } from "../runner/waits.ts";
 import { listIncidents, renderMetrics } from "../runner/incidents.ts";
@@ -253,7 +255,7 @@ export function registerApi(app: FastifyInstance): void {
       sessions: sessions.list(),
       model: modelView(),
       running: listTasks({ status: "running", limit: 50 }),
-      queued: queueOrder(listTasks({ status: "queued", waiting: false, limit: 100 })),
+      queued: startOrder(listTasks({ status: "queued", waiting: false, limit: 100 }), listTasks({ status: "running", limit: 50 })),
       /** Tasks their agents paused until other work is done (wait_for), the one that resumes first on top. */
       waiting: listTasks({ waiting: true, limit: 100 }).sort((a, b) => (a.retryAt ?? "").localeCompare(b.retryAt ?? "")),
       incidents: listIncidents(20).filter((incident) => Date.now() - Date.parse(incident.ts) < 7 * 86_400_000),
@@ -263,6 +265,14 @@ export function registerApi(app: FastifyInstance): void {
       configured: Boolean(getCredentials()),
     };
   });
+
+  /** Where a queued task stands: how many start before it, and why it's placed there. */
+  const queuePlace = (task: Task): { ahead: number; why: string } | null => {
+    if (task.status !== "queued" || task.waitReason === "wake") return null;
+    const order = startOrder(listTasks({ status: "queued", waiting: false, limit: 500 }), listTasks({ status: "running", limit: 50 }));
+    const ahead = order.findIndex((other) => other.id === task.id);
+    return ahead < 0 ? null : { ahead, why: rankReason(task) };
+  };
 
   // ---------- tasks ----------
   app.get<{ Querystring: { status?: string; outcome?: string; agent?: string; repo?: string; limit?: string; before?: string } }>("/api/tasks", async (request) => {
@@ -283,12 +293,28 @@ export function registerApi(app: FastifyInstance): void {
       /** Other agents' runs on the same thread: what this agent was told about in its prompt. */
       others: first ? othersOnThread({ owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber }, task.agent, task.id).map(chainEntry).reverse() : undefined,
       inbox: waitingNotes(task.id),
+      queue: queuePlace(task),
     };
   });
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (request, reply) => {
     if (!scheduler.cancel(Number(request.params.id))) return reply.code(409).send({ error: "That task is not queued or running" });
     return { ok: true };
+  });
+
+  /** Moves a queued task up or down the queue: before the rest (high), the usual order, or after the rest (low). */
+  app.post<{ Params: { id: string }; Body: { priority?: string } }>("/api/tasks/:id/priority", async (request, reply) => {
+    const priority = request.body?.priority;
+    if (priority !== "high" && priority !== "normal" && priority !== "low") return reply.code(400).send({ error: "Priority is high, normal or low" });
+    const task = getTask(Number(request.params.id));
+    if (!task) return reply.code(404).send({ error: "Task not found" });
+    if (task.status !== "queued") return reply.code(409).send({ error: "Only a task that's waiting in the queue can be moved" });
+    if (task.priority === priority) return task;
+    bus.publish({ type: "event", event: addEvent(task.id, "system", `Priority set to ${priority} by @${request.adminLogin ?? "an admin"} in the admin UI`) });
+    const updated = updateTask(task.id, { priority });
+    bus.publish({ type: "task", task: updated });
+    scheduler.kick();
+    return updated;
   });
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/retry", async (request, reply) => {
@@ -309,6 +335,7 @@ export function registerApi(app: FastifyInstance): void {
       requestUrl: original.requestUrl,
       retryOf: original.id,
       dryRun: original.dryRun,
+      priority: original.priority,
       // A retry isn't a board task, so it keeps the board's base branch (as the board has it now) itself.
       requestedBase: original.requestedBase ?? (original.board ? pickBase(loadBoards().boards.find((board) => board.name === original.board)?.baseBranch, original.owner, original.repo) : null),
     });
@@ -350,7 +377,7 @@ export function registerApi(app: FastifyInstance): void {
     return task;
   });
 
-  app.post<{ Body: { agent: string; repo: string; number: number; kind?: ThreadKind | "auto"; instruction: string; baseBranch?: string | null } }>("/api/tasks", async (request, reply) => {
+  app.post<{ Body: { agent: string; repo: string; number: number; kind?: ThreadKind | "auto"; instruction: string; baseBranch?: string | null; priority?: string } }>("/api/tasks", async (request, reply) => {
     const { agent, repo, number, instruction } = request.body ?? ({} as never);
     const [owner, name] = String(repo ?? "").split("/");
     if (!owner || !name || !number || !instruction?.trim()) return reply.code(400).send({ error: "Agent, owner/repo, number and instruction are required" });
@@ -376,6 +403,7 @@ export function registerApi(app: FastifyInstance): void {
         requestedBy: request.adminLogin ?? "admin",
         installationId,
         baseBranch,
+        priority: request.body.priority === "high" || request.body.priority === "low" ? request.body.priority : "normal",
       });
       return { id };
     } catch (error) {
@@ -729,6 +757,7 @@ export function registerApi(app: FastifyInstance): void {
         { name: "Longest pause", setting: "WAIT_MAX_HOURS", value: config.waitMaxHours ? `${config.waitMaxHours} h` : "off", what: "how long a task may stay paused for other work (wait_for) before it resumes anyway; off: agents can't pause" },
         { name: "Pauses per task", setting: "TASK_MAX_WAITS", value: String(config.taskMaxWaits), what: "times one task may pause for other work before it has to finish or report it's blocked" },
         { name: "Agents at once", setting: "MAX_CONCURRENT_TASKS", value: String(scheduler.maxConcurrent), what: "tasks running at the same time" },
+        { name: "Agents at once per repository", setting: "MAX_RUNNING_PER_REPO", value: config.maxRunningPerRepo ? String(config.maxRunningPerRepo) : "no limit", what: "tasks running at the same time in one repository; the rest of its queue waits, and other repositories' work starts" },
         { name: "Time between scheduled runs", setting: "SCHEDULE_MIN_MINUTES", value: `${config.scheduleMinMinutes} min`, what: "the shortest gap a schedule may have between two runs" },
         { name: "Schedules per agent", setting: "SCHEDULES_PER_AGENT", value: config.schedulesPerAgent ? String(config.schedulesPerAgent) : "no limit", what: "schedules one agent may have, its agent.md ones included" },
         { name: "Failed runs before a schedule pauses", setting: "SCHEDULE_PAUSE_AFTER_FAILURES", value: config.schedulePauseAfterFailures ? String(config.schedulePauseAfterFailures) : "never", what: "a schedule whose runs fail this many times in a row is paused until someone switches it back on" },

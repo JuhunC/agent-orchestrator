@@ -26,6 +26,7 @@ test("viewers only look, operators run the queue, admins change anything", async
   assert.equal((await call("olga", "PUT", "/api/settings", { paused: true })).statusCode, 200, "operators pause the queue");
   assert.equal((await call("olga", "PUT", "/api/settings", { paused: false })).statusCode, 200);
   assert.equal((await call("olga", "POST", "/api/agents/coder/enabled", { enabled: false })).statusCode, 200);
+  assert.equal((await call("olga", "POST", "/api/tasks/999/priority", { priority: "high" })).statusCode, 404, "operators may move tasks in the queue (there's no such task)");
   assert.equal((await call("olga", "PUT", "/api/settings", { maxConcurrent: 5 })).statusCode, 403, "but don't configure it");
   assert.equal((await call("olga", "PUT", "/api/profiles/file", { path: "agents/coder/agent.md", content: "x" })).statusCode, 403);
   assert.equal((await call("olga", "PUT", "/api/agents/coder/github-account", { token: "ghp_x" })).statusCode, 403);
@@ -42,6 +43,7 @@ test("viewers only look, operators run the queue, admins change anything", async
     "olga (operator) PUT /api/settings 200: paused: true",
     "olga (operator) PUT /api/settings 200: paused: false",
     "olga (operator) POST /api/agents/coder/enabled 200: enabled: false",
+    'olga (operator) POST /api/tasks/999/priority 404: priority: "high"',
     "olga (operator) PUT /api/settings 403: refused: maxConcurrent: 5",
     'olga (operator) PUT /api/profiles/file 403: refused: path: "agents/coder/agent.md", content: "x"',
     "olga (operator) PUT /api/agents/coder/github-account 403: refused: token: (hidden)",

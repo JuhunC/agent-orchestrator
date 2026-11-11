@@ -41,6 +41,16 @@ body {
   color: var(--color-text-warning);
 }
 
+/* A queued task's place in the queue on the dashboard. */
+.ao-queue-place {
+  flex: none;
+  min-width: 1.75em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-supporting-size);
+  color: var(--color-text-secondary);
+}
+
 /* Agent steps on the dashboard's running tasks. */
 .ao-steps {
   list-style: none;

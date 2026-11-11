@@ -227,6 +227,8 @@ export async function runRelatedStart(start: RelatedStart, source: { task: Task;
     requestText: request,
     requestUrl: source.url,
     startedByTask: task.id,
+    // Work an urgent task hands on is urgent too.
+    priority: task.priority,
   });
   bus.publish({ type: "task", task: created });
   scheduler.kick();

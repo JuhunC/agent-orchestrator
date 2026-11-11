@@ -38,8 +38,9 @@ import { postComment } from "../github/threads.ts";
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import { scheduler } from "../runner/scheduler.ts";
+import { priorityFromLabels } from "../runner/queue-order.ts";
 import type { Profile } from "../profiles/types.ts";
-import type { Task } from "../types.ts";
+import type { Task, TaskPriority } from "../types.ts";
 import { loadBoards, type Board, type BoardColumn } from "./loader.ts";
 import { hasCardFields } from "./rules.ts";
 import { recordIncident } from "../runner/incidents.ts";
@@ -204,6 +205,24 @@ async function candidatesFor(board: Board, column: BoardColumn, row: BoardItemRo
   return names.map((name) => profiles.find((profile) => profile.name === name)).filter((profile): profile is Profile => Boolean(profile));
 }
 
+/**
+ * A card's place in the queue: its issue's priority labels (HIGH_PRIORITY_LABELS,
+ * LOW_PRIORITY_LABELS). Without one, a start another issue's agent asked for takes that task's.
+ */
+async function cardPriority(row: BoardItemRow, installationId: number, from: Task | null): Promise<TaskPriority> {
+  const inherited = from?.priority ?? "normal";
+  if (!config.highPriorityLabels.length && !config.lowPriorityLabels.length) return inherited;
+  try {
+    const gh = await installationClient(installationId);
+    const { data } = await gh.rest.issues.get({ owner: row.owner, repo: row.repo, issue_number: row.number });
+    const own = priorityFromLabels(data.labels);
+    const sameCard = from && from.threadNumber === row.number && from.repo.toLowerCase() === row.repo.toLowerCase() && from.owner.toLowerCase() === row.owner.toLowerCase();
+    return own !== "normal" || sameCard ? own : inherited;
+  } catch {
+    return inherited; // GitHub unreachable: the task says why when it runs
+  }
+}
+
 /** The least busy agent (relative to its replicas), rotating on ties. */
 function leastBusy(candidates: Profile[]): Profile {
   const active = activeTaskCounts();
@@ -260,6 +279,8 @@ export async function startColumnAgent(board: Board, itemId: string, extra?: Col
   const chosen = column.mode === "all" && !extra?.agent ? candidates : [leastBusy(candidates)];
   const round = column.mode === "all" && !extra?.agent ? `${board.name}:${itemId}:${column.name}:${randomUUID()}` : null;
   const installationId = await findInstallation(row.owner, row.repo);
+  const from = extra?.startedByTask ?? startedBy ?? null;
+  const priority = await cardPriority(row, installationId, from ? getTask(from) : null);
   const tasks: Task[] = [];
   for (const profile of chosen) {
     const base = `The card is in the "${column.name}" column of the ${board.name} board. Do this column's work (see your role below), then move the card on.`;
@@ -281,7 +302,8 @@ export async function startColumnAgent(board: Board, itemId: string, extra?: Col
       boardItemId: itemId,
       boardRound: round,
       // The task whose move (or start_related_agent) led here, so chains of agents can be traced and limited.
-      startedByTask: extra?.startedByTask ?? startedBy ?? null,
+      startedByTask: from,
+      priority,
     });
     bus.publish({ type: "task", task });
     tasks.push(task);

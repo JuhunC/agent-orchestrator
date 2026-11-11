@@ -24,6 +24,14 @@ function list(name: string): string[] {
     .filter(Boolean);
 }
 
+/** A comma-separated list of label names, lower case (label names may hold spaces). */
+function labels(name: string, fallback: string): string[] {
+  return env(name, fallback)
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter((item) => item && item !== "none");
+}
+
 function trimSlash(url: string): string {
   return url.replace(/\/+$/, "");
 }
@@ -187,6 +195,16 @@ export const config = {
   // Queued tasks start people's requests first, then agent-started work, then board stages; one
   // that has waited this long goes first. 0 = strictly that order.
   queueAgingMinutes: Math.max(0, int("QUEUE_AGING_MINUTES", 30)),
+  // An issue or pull request with one of these labels gets its tasks started before the rest
+  // (high) or after the rest (low). "none" turns either off.
+  highPriorityLabels: labels("HIGH_PRIORITY_LABELS", "urgent, priority:high, p0"),
+  lowPriorityLabels: labels("LOW_PRIORITY_LABELS", "priority:low"),
+  // Among tasks of the same standing, whoever has the least running and waiting goes first, so
+  // one person or board with many tasks doesn't hold up everyone else. off: oldest first.
+  queueFairness: env("QUEUE_FAIRNESS", "on").toLowerCase() !== "off",
+  // At most this many tasks run at once in one repository (0 = no limit), so a busy repository
+  // leaves room for the others.
+  maxRunningPerRepo: Math.max(0, int("MAX_RUNNING_PER_REPO", 0)),
   workspaceRetentionDays: Math.max(0, int("WORKSPACE_RETENTION_DAYS", 14)),
   // Checkouts of closed issues and pull requests go sooner: after this many days unused.
   workspaceClosedRetentionDays: Math.max(0, int("WORKSPACE_CLOSED_RETENTION_DAYS", 2)),

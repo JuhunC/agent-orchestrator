@@ -1,7 +1,7 @@
 import { answerBlocked } from "./blocked-users.ts";
 import { bus } from "./bus.ts";
 import { config, repoAllowed } from "./config.ts";
-import { createTask, deliveryActedOn, isBlockedUser, queuedTaskForThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
+import { addEvent, createTask, deliveryActedOn, isBlockedUser, queuedTaskForThread, queuedTasksOnThread, recentTaskForThread, recordDelivery, runningTasksForThread, updateTask } from "./db.ts";
 import { loadProfiles, profileByHandle } from "./profiles/loader.ts";
 import type { Profile } from "./profiles/types.ts";
 import { accountLogins, agentAccount, agentForLogin as agentOfAccount, clientFor, isRecentOwnWrite } from "./github/accounts.ts";
@@ -12,9 +12,10 @@ import { extractMentions } from "./mentions.ts";
 import { handleProjectItemWebhook } from "./boards/engine.ts";
 import { activityFor, deliver } from "./runner/inbox.ts";
 import { scheduler } from "./runner/scheduler.ts";
+import { priorityFromLabels } from "./runner/queue-order.ts";
 import { notePullEvent } from "./runner/outcomes.ts";
 import { noteWaitEvent, wakeTask } from "./runner/waits.ts";
-import type { Delivery, ThreadKind, TriggerKind } from "./types.ts";
+import type { Delivery, TaskPriority, ThreadKind, TriggerKind } from "./types.ts";
 
 type Agent = Profile;
 
@@ -243,6 +244,7 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
     if (event === "pull_request") notePullEvent(payload);
     // An issue closing, a merge or a review may be what a paused task waits for.
     noteWaitEvent(event, payload);
+    notePriorityLabel(event, payload);
     const repoFull = String(payload.repository?.full_name ?? "");
     const installationId = Number(payload.installation?.id ?? 0);
     if (!repoFull || !installationId) return record(deliveryId, event, payload, "ignored", "No repository or installation in payload");
@@ -298,7 +300,9 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
         if (intent.reactTo && as) await addEyesReaction(as, intent.reactTo).catch(() => undefined);
         continue;
       }
-      outcomes.push(await accept(gh, intent, { owner, repo, installationId, sender }));
+      // Labels such as "urgent" on the issue or pull request move its tasks up (or down) the queue.
+      const priority = priorityFromLabels((payload.issue ?? payload.pull_request ?? payload.discussion)?.labels);
+      outcomes.push(await accept(gh, intent, { owner, repo, installationId, sender, priority }));
     }
     const started = outcomes.filter((outcome) => outcome.startsWith("Queued"));
     const passedOn = working.length > 0 || outcomes.some((outcome) => outcome.startsWith("Woke"));
@@ -310,10 +314,32 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
   }
 }
 
+/**
+ * Someone put a priority label (HIGH_PRIORITY_LABELS, LOW_PRIORITY_LABELS) on an issue or pull
+ * request, or took one off: what's queued for it moves up or down the queue with it.
+ */
+function notePriorityLabel(event: string, payload: Payload): void {
+  if ((event !== "issues" && event !== "pull_request") || (payload.action !== "labeled" && payload.action !== "unlabeled")) return;
+  const label = String(payload.label?.name ?? "");
+  if (!config.highPriorityLabels.includes(label.toLowerCase()) && !config.lowPriorityLabels.includes(label.toLowerCase())) return;
+  const thread = payload.issue ?? payload.pull_request;
+  const [owner, repo] = String(payload.repository?.full_name ?? "").split("/");
+  if (!thread || !owner || !repo) return;
+  const priority = priorityFromLabels(thread.labels);
+  const kind: ThreadKind = event === "pull_request" ? "pull" : "issue";
+  const changed = queuedTasksOnThread({ owner, repo, kind, number: Number(thread.number) }).filter((task) => task.priority !== priority);
+  for (const task of changed) {
+    const verb = payload.action === "labeled" ? "added" : "removed";
+    bus.publish({ type: "event", event: addEvent(task.id, "system", `Priority is now ${priority}: @${payload.sender?.login ?? "someone"} ${verb} the label ${label}`) });
+    bus.publish({ type: "task", task: updateTask(task.id, { priority }) });
+  }
+  if (changed.length) scheduler.kick();
+}
+
 async function accept(
   gh: GitHubClient,
   intent: Intent,
-  context: { owner: string; repo: string; installationId: number; sender: string },
+  context: { owner: string; repo: string; installationId: number; sender: string; priority?: TaskPriority },
 ): Promise<string> {
   const { agent } = intent;
   const ref = { owner: context.owner, repo: context.repo, kind: intent.kind, number: intent.number };
@@ -333,6 +359,7 @@ async function accept(
     // The agent is busy here and already has a follow-up waiting: fold this request into it.
     const merged = updateTask(queued.id, {
       requestText: `${queued.requestText}\n\n---\n\n@${context.sender} also asked (${intent.requestUrl}):\n\n${intent.requestText}`,
+      ...(context.priority === "high" ? { priority: "high" as const } : {}),
     });
     bus.publish({ type: "task", task: merged });
     const as = await clientFor({ agent: agent.name, installationId: context.installationId }).catch(() => null);
@@ -353,6 +380,7 @@ async function accept(
     requestedBy: context.sender,
     requestText: intent.requestText,
     requestUrl: intent.requestUrl,
+    priority: context.priority,
   });
   bus.publish({ type: "task", task });
 
@@ -381,6 +409,7 @@ export async function startManualTask(input: {
   installationId: number;
   /** Base branch for this run's pull request; null: the usual one (see runtime/base-branch.ts). */
   baseBranch?: string | null;
+  priority?: TaskPriority;
 }): Promise<number> {
   const agent = loadProfiles().agents.find((candidate) => candidate.name === input.agentName);
   if (!agent) throw new Error(`Unknown agent ${input.agentName}`);
@@ -398,6 +427,7 @@ export async function startManualTask(input: {
     requestText: input.instruction,
     requestUrl: "",
     requestedBase: input.baseBranch ?? null,
+    priority: input.priority,
   });
   bus.publish({ type: "task", task });
   scheduler.kick();

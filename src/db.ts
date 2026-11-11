@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { config } from "./config.ts";
-import type { Delivery, EventKind, Schedule, Task, TaskEvent, TaskStatus, TaskUsage, ThreadKind, ThreadRef, WaitFor } from "./types.ts";
+import type { Delivery, EventKind, Schedule, Task, TaskEvent, TaskPriority, TaskStatus, TaskUsage, ThreadKind, ThreadRef, WaitFor } from "./types.ts";
 
 mkdirSync(config.dataDir, { recursive: true });
 
@@ -123,6 +123,8 @@ addColumn("tasks", "wait_reason", "TEXT");
 // What a task its agent paused is waiting for (wait_for; see runner/waits.ts), and how often it paused.
 addColumn("tasks", "wait_for", "TEXT");
 addColumn("tasks", "waits", "INTEGER NOT NULL DEFAULT 0");
+// Where the task stands in the queue: high, normal or low (see runner/queue-order.ts).
+addColumn("tasks", "priority", "TEXT NOT NULL DEFAULT 'normal'");
 addColumn("tasks", "outcome", "TEXT");
 addColumn("tasks", "outcome_note", "TEXT");
 addColumn("tasks", "profile_version", "TEXT");
@@ -251,6 +253,7 @@ function toTask(row: Row): Task {
     waitReason: (row.wait_reason as Task["waitReason"]) ?? null,
     waitFor: json<WaitFor | null>(row.wait_for, null),
     waits: Number(row.waits ?? 0),
+    priority: row.priority === "high" || row.priority === "low" ? row.priority : "normal",
     outcome: (row.outcome as Task["outcome"]) ?? null,
     outcomeNote: (row.outcome_note as string | null) ?? null,
     profileVersion: (row.profile_version as string | null) ?? null,
@@ -282,14 +285,15 @@ export interface NewTask {
   dryRun?: boolean;
   scheduleId?: number | null;
   requestedBase?: string | null;
+  priority?: TaskPriority;
 }
 
 export function createTask(input: NewTask): Task {
   const result = db
     .prepare(
       `INSERT INTO tasks (agent, installation_id, owner, repo, thread_kind, thread_number, thread_title, thread_url,
-         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task, dry_run, schedule_id, requested_base)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         trigger_kind, requested_by, request_text, request_url, status, created_at, retry_of, board, board_column, board_item_id, board_round, started_by_task, dry_run, schedule_id, requested_base, priority)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       input.agent,
@@ -314,6 +318,7 @@ export function createTask(input: NewTask): Task {
       input.dryRun ? 1 : 0,
       input.scheduleId ?? null,
       input.requestedBase ?? null,
+      input.priority ?? "normal",
     );
   return getTask(Number(result.lastInsertRowid))!;
 }
@@ -358,6 +363,7 @@ const TASK_COLUMNS: Record<string, string> = {
   waitReason: "wait_reason",
   waitFor: "wait_for",
   waits: "waits",
+  priority: "priority",
   outcome: "outcome",
   outcomeNote: "outcome_note",
   profileVersion: "profile_version",
@@ -509,6 +515,27 @@ export function queuedTaskForThread(ref: ThreadRef, agent: string): Task | null 
     )
     .get(ref.owner, ref.repo, ref.kind, ref.number, agent) as Row | undefined;
   return row ? toTask(row) : null;
+}
+
+/** Every agent's queued task on a thread (paused ones included). */
+export function queuedTasksOnThread(ref: ThreadRef): Task[] {
+  const rows = db
+    .prepare(
+      `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND thread_kind = ?
+         AND thread_number = ? AND status = 'queued' AND dry_run = 0 ORDER BY id`,
+    )
+    .all(ref.owner, ref.repo, ref.kind, ref.number) as Row[];
+  return rows.map(toTask);
+}
+
+/** When each requester's newest task started, per repository, since `since`: who had a turn last (runner/queue-order.ts). */
+export function lastStarts(since: string): { owner: string; repo: string; requestedBy: string; startedAt: string }[] {
+  return db
+    .prepare(
+      `SELECT owner, repo, requested_by AS requestedBy, MAX(started_at) AS startedAt FROM tasks
+        WHERE started_at > ? AND dry_run = 0 GROUP BY owner, repo, requested_by`,
+    )
+    .all(since) as { owner: string; repo: string; requestedBy: string; startedAt: string }[];
 }
 
 /** Running tasks on a thread, plus tasks whose pull request this is (an agent working an issue opened it). */

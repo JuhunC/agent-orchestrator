@@ -12,6 +12,7 @@ export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agen
   const [kind, setKind] = useState("auto");
   const [instruction, setInstruction] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
+  const [priority, setPriority] = useState("normal");
   const [usual, setUsual] = useState<BaseChoice | null>(null);
   const [repos, setRepos] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +46,7 @@ export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agen
     setBusy(true);
     setError(null);
     try {
-      const { id } = await api.post<{ id: number }>("/api/tasks", { agent, repo, number: Number(number), kind, instruction, baseBranch: baseBranch || null });
+      const { id } = await api.post<{ id: number }>("/api/tasks", { agent, repo, number: Number(number), kind, instruction, baseBranch: baseBranch || null, priority });
       onClose();
       navigate(`/tasks/${id}`);
     } catch (err) {
@@ -82,22 +83,33 @@ export function RunAgentDialog({ agents, initialAgent, onClose }: { agents: Agen
           value={kind}
           onChange={(value) => setKind(value ?? "auto")}
         />
-        <GridSpan columns="full">
-          <VStack gap={1}>
-            <TextInput label="Base branch" isOptional placeholder={usual?.branch ?? "the repository's default branch"} value={baseBranch} onChange={(value) => setBaseBranch(value.trim())} />
-            <Meta block>
-              Where a pull request from this run goes.{" "}
-              {usual?.branch ? (
-                <>
-                  Left empty: <Code size="inherit">{usual.branch}</Code> (set {usual.from}).
-                </>
-              ) : (
-                "Left empty: the repository's default branch."
-              )}{" "}
-              A pull request you start it on keeps its own base.
-            </Meta>
-          </VStack>
-        </GridSpan>
+        <VStack gap={1}>
+          <TextInput label="Base branch" isOptional placeholder={usual?.branch ?? "the repository's default branch"} value={baseBranch} onChange={(value) => setBaseBranch(value.trim())} />
+          <Meta block>
+            Where a pull request from this run goes.{" "}
+            {usual?.branch ? (
+              <>
+                Left empty: <Code size="inherit">{usual.branch}</Code> (set {usual.from}).
+              </>
+            ) : (
+              "Left empty: the repository's default branch."
+            )}{" "}
+            A pull request you start it on keeps its own base.
+          </Meta>
+        </VStack>
+        <VStack gap={1}>
+          <Selector
+            label="Priority"
+            options={[
+              { value: "high", label: "High" },
+              { value: "normal", label: "Normal" },
+              { value: "low", label: "Low" },
+            ]}
+            value={priority}
+            onChange={(value) => setPriority(value ?? "normal")}
+          />
+          <Meta block>When agents are busy: high starts before everything else that's waiting, low after it.</Meta>
+        </VStack>
         <GridSpan columns="full">
           <TextArea
             label="Instruction"
