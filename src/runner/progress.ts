@@ -73,14 +73,23 @@ const HEADLINE: Record<ProgressPhase, string> = {
   cancelled: "⏹️ was cancelled",
 };
 
+/** For a task that ended without an error but whose agent said it didn't do all of it (report_outcome). */
+const REPORTED: Record<string, { headline: string; result: string }> = {
+  partial: { headline: "⚠️ finished part of this", result: "finished part of this ⚠️" },
+  blocked: { headline: "🚧 is blocked and needs someone", result: "is blocked and needs someone 🚧" },
+  gave_up: { headline: "🏳️ couldn't do this", result: "couldn't do this 🏳️" },
+};
+const reportedBy = (task: Task) => (task.outcome && task.outcomeNote ? REPORTED[task.outcome] : undefined);
+
 /** The single comment that's edited as the agent works. */
 export function renderProgress(agent: Agent, task: Task, state: ProgressState, now = Date.now()): string {
   const done = state.phase === "succeeded" || state.phase === "failed" || state.phase === "cancelled";
   const elapsed = formatDuration((state.finishedAt ?? now) - state.startedAt);
   const lines = [
     PROGRESS_MARKER,
-    `**🤖 ${agent.name}** ${HEADLINE[state.phase]}${done ? ` in ${elapsed}` : ""} · requested by ${mention(task.requestedBy)}`,
+    `**🤖 ${agent.name}** ${(state.phase === "succeeded" && reportedBy(task)?.headline) || HEADLINE[state.phase]}${done ? ` in ${elapsed}` : ""} · requested by ${mention(task.requestedBy)}`,
   ];
+  if (state.phase === "succeeded" && reportedBy(task)) lines.push("", `**Why:** ${task.outcomeNote}`);
   if (state.prUrl) lines.push(`Pull request: ${state.prUrl}`);
   if (state.note) lines.push("", state.note);
 
@@ -115,8 +124,9 @@ export function renderResult(
   task: Task,
   outcome: { ok: boolean; text: string; durationMs: number; prUrl: string | null; prNumber: number | null; commits: number; details?: string },
 ): string {
+  const reported = outcome.ok ? reportedBy(task) : undefined;
   const head = outcome.ok
-    ? `${mention(task.requestedBy)} **${agent.name}** finished ✅${outcome.prNumber ? ` · #${outcome.prNumber}` : ""}`
+    ? `${mention(task.requestedBy)} **${agent.name}** ${reported?.result ?? "finished ✅"}${outcome.prNumber ? ` · #${outcome.prNumber}` : ""}`
     : `${mention(task.requestedBy)} **${agent.name}** couldn't finish ❌`;
   const meta = [
     `[task #${task.id}](${taskAdminUrl(task.id)})`,
@@ -124,7 +134,7 @@ export function renderResult(
     task.branch && outcome.commits ? `${outcome.commits} commit${outcome.commits === 1 ? "" : "s"} on \`${task.branch}\`` : "",
     task.costUsd ? `$${task.costUsd.toFixed(2)}` : "",
   ].filter(Boolean);
-  const parts = [RESULT_MARKER, head, "", outcome.text.trim() || "_The agent finished without a reply._"];
+  const parts = [RESULT_MARKER, head, ...(reported ? ["", `**Why:** ${task.outcomeNote}`] : []), "", outcome.text.trim() || "_The agent finished without a reply._"];
   if (outcome.details) parts.push("", outcome.details);
   parts.push("", `<sub>${meta.join(" · ")}</sub>`);
   return parts.join("\n");

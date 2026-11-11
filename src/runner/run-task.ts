@@ -387,6 +387,12 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         move = null;
       }
     }
+    // What the agent said about its own work; saved before the reply is written so both show it.
+    const reported = context.outcome ?? null;
+    task = patch(task.id, { outcome: reported?.outcome ?? null, outcomeNote: reported?.note ?? null });
+    // Blocked or given up, and the agent left the card where it is: a person gets it.
+    const parked = Boolean(boardContext && !boardContext.pendingMove && reported && reported.outcome !== "partial" && boardContext.board.needsHuman && boardContext.column !== boardContext.board.needsHuman);
+    if (boardContext && reported && parked) move = { to: boardContext.board.needsHuman!, note: reported.note };
     // Sub-issue cards the agent moved, checked again the same way, and the sub-issues it created.
     const subMoves: SubIssueMove[] = [];
     const subLines: string[] = [];
@@ -413,13 +419,15 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     const own =
       boardContext && move && task.boardRound
         ? `**Voted to move the card to ${move.to}** (it moves when every agent in this column has finished). Handoff:\n\n${quoted(move.note)}`
-        : boardContext && move
-          ? `**Moved the card to ${move.to}.** Handoff:\n\n${quoted(move.note)}`
-          : boardContext
-            ? refused
-              ? `The card stays in **${boardContext.column}**. ${refused}`
-              : `The card stays in **${boardContext.column}** (the agent didn't move it).`
-            : "";
+        : boardContext && move && parked
+          ? `**Moved the card to ${move.to}** for a person to look at, because the agent ${reported!.outcome === "blocked" ? "is blocked" : "gave up"}.`
+          : boardContext && move
+            ? `**Moved the card to ${move.to}.** Handoff:\n\n${quoted(move.note)}`
+            : boardContext
+              ? refused
+                ? `The card stays in **${boardContext.column}**. ${refused}`
+                : `The card stays in **${boardContext.column}** (the agent didn't move it).`
+              : "";
     const issueState = context.issueState ?? null;
     if (issueState) subLines.push(issueState.state === "closed" ? `**Closed the issue** as ${issueState.reason.replace("_", " ")}.` : "**Reopened the issue.**");
     const relatedStarts = context.relatedStarts ?? [];
@@ -432,6 +440,9 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
     if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
     await finish("succeeded", outcome.result, "", details, commits);
+    if (reported && reported.outcome !== "partial") {
+      recordIncident("task_blocked", "info", `${task.agent} ${reported.outcome === "blocked" ? "is blocked" : "gave up"} on ${task.owner}/${task.repo}#${task.threadNumber}: ${reported.note.split("\n")[0]!.slice(0, 300)}`, { taskId: task.id });
+    }
     if (boardContext && move && !task.boardRound) {
       // After the reply is posted: hand the card to the next column (and its agent).
       addHandoff(boardContext.board.name, boardContext.itemId, { taskId: task.id, agent: profile.name, fromColumn: boardContext.column, toColumn: move.to, note: move.note });

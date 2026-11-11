@@ -29,16 +29,24 @@ import { isIssueBranch } from "../github/relations.ts";
 import { signed } from "../github/threads.ts";
 
 /**
- * What agents' work came to, beside what it cost: tasks that succeeded or failed, pull requests
- * merged or closed without merging, cards sent to a person (needs-human), and the cost per merged
- * pull request. Pull requests are followed from webhooks, and checked with GitHub hourly in case
- * one was missed.
+ * What agents' work came to, beside what it cost: tasks that did their work, did part of it, got
+ * blocked, gave up or failed, pull requests merged or closed without merging, cards sent to a
+ * person (needs-human), and the cost per merged pull request. Pull requests are followed from
+ * webhooks, and checked with GitHub hourly in case one was missed.
  */
+
+/** Of the tasks that ended without an error: those whose agent said it didn't do all of it (report_outcome). */
+export interface ReportedOutcomes {
+  partial: number;
+  blocked: number;
+  gaveUp: number;
+}
 
 export interface AgentOutcome {
   agent: string;
   tasks: { succeeded: number; failed: number; cancelled: number };
-  /** Share of finished tasks that succeeded (cancelled ones left out). */
+  reported: ReportedOutcomes;
+  /** Share of finished tasks whose work was done: succeeded, and not reported as partial, blocked or given up (cancelled ones left out). */
   successRate: number | null;
   pulls: { opened: number; merged: number; closed: number; open: number };
   /** Share of decided pull requests (merged or closed) that were merged. */
@@ -55,6 +63,7 @@ export interface VersionOutcome {
   firstUsed: string;
   lastUsed: string;
   tasks: { succeeded: number; failed: number; cancelled: number };
+  reported: ReportedOutcomes;
   successRate: number | null;
   pulls: { merged: number; closed: number; open: number };
   mergeRate: number | null;
@@ -72,6 +81,8 @@ export interface OutcomeReport {
 }
 
 const ratio = (part: number, whole: number) => (whole > 0 ? part / whole : null);
+const REPORTED_KEY: Record<string, keyof ReportedOutcomes> = { partial: "partial", blocked: "blocked", gave_up: "gaveUp" };
+const notDone = (reported: ReportedOutcomes) => reported.partial + reported.blocked + reported.gaveUp;
 
 export function outcomeReport(days: number, agent?: string): OutcomeReport {
   const span = Math.max(1, Math.min(366, Math.floor(days)));
@@ -81,13 +92,14 @@ export function outcomeReport(days: number, agent?: string): OutcomeReport {
   const since = start.toISOString();
   const rows = new Map<string, AgentOutcome>();
   const row = (name: string) => {
-    if (!rows.has(name)) rows.set(name, { agent: name, tasks: { succeeded: 0, failed: 0, cancelled: 0 }, successRate: null, pulls: { opened: 0, merged: 0, closed: 0, open: 0 }, mergeRate: null, needsHuman: 0, costUsd: 0, costPerMergedPull: null, avgTaskMinutes: null });
+    if (!rows.has(name)) rows.set(name, { agent: name, tasks: { succeeded: 0, failed: 0, cancelled: 0 }, reported: { partial: 0, blocked: 0, gaveUp: 0 }, successRate: null, pulls: { opened: 0, merged: 0, closed: 0, open: 0 }, mergeRate: null, needsHuman: 0, costUsd: 0, costPerMergedPull: null, avgTaskMinutes: null });
     return rows.get(name)!;
   };
   const minutes = new Map<string, number>();
   for (const entry of taskOutcomes(since, agent)) {
     const target = row(entry.agent);
     target.tasks[entry.status as keyof AgentOutcome["tasks"]] += entry.count;
+    if (REPORTED_KEY[entry.outcome]) target.reported[REPORTED_KEY[entry.outcome]!] += entry.count;
     minutes.set(entry.agent, (minutes.get(entry.agent) ?? 0) + entry.minutes);
   }
   for (const pull of pullOutcomes(since, agent)) {
@@ -101,16 +113,17 @@ export function outcomeReport(days: number, agent?: string): OutcomeReport {
 
   const finish = (target: Omit<AgentOutcome, "agent">, runMinutes: number) => {
     const finished = target.tasks.succeeded + target.tasks.failed;
-    target.successRate = ratio(target.tasks.succeeded, finished);
+    target.successRate = ratio(target.tasks.succeeded - notDone(target.reported), finished);
     target.mergeRate = ratio(target.pulls.merged, target.pulls.merged + target.pulls.closed);
     target.costPerMergedPull = target.pulls.merged ? target.costUsd / target.pulls.merged : null;
     const all = finished + target.tasks.cancelled;
     target.avgTaskMinutes = all ? runMinutes / all : null;
   };
   for (const target of rows.values()) finish(target, minutes.get(target.agent) ?? 0);
-  const totals: Omit<AgentOutcome, "agent"> = { tasks: { succeeded: 0, failed: 0, cancelled: 0 }, successRate: null, pulls: { opened: 0, merged: 0, closed: 0, open: 0 }, mergeRate: null, needsHuman: 0, costUsd: 0, costPerMergedPull: null, avgTaskMinutes: null };
+  const totals: Omit<AgentOutcome, "agent"> = { tasks: { succeeded: 0, failed: 0, cancelled: 0 }, reported: { partial: 0, blocked: 0, gaveUp: 0 }, successRate: null, pulls: { opened: 0, merged: 0, closed: 0, open: 0 }, mergeRate: null, needsHuman: 0, costUsd: 0, costPerMergedPull: null, avgTaskMinutes: null };
   for (const target of rows.values()) {
     for (const key of ["succeeded", "failed", "cancelled"] as const) totals.tasks[key] += target.tasks[key];
+    for (const key of ["partial", "blocked", "gaveUp"] as const) totals.reported[key] += target.reported[key];
     for (const key of ["opened", "merged", "closed", "open"] as const) totals.pulls[key] += target.pulls[key];
     totals.needsHuman += target.needsHuman;
     totals.costUsd += target.costUsd;
@@ -119,6 +132,7 @@ export function outcomeReport(days: number, agent?: string): OutcomeReport {
   const versions = agent
     ? outcomesByVersion(agent, since).map((entry) => {
         const tasks = { succeeded: entry.tasks.succeeded ?? 0, failed: entry.tasks.failed ?? 0, cancelled: entry.tasks.cancelled ?? 0 };
+        const reported = { partial: entry.reported.partial ?? 0, blocked: entry.reported.blocked ?? 0, gaveUp: entry.reported.gave_up ?? 0 };
         const pulls = { merged: entry.pulls.merged ?? 0, closed: entry.pulls.closed ?? 0, open: entry.pulls.open ?? 0 };
         return {
           version: entry.version,
@@ -126,7 +140,8 @@ export function outcomeReport(days: number, agent?: string): OutcomeReport {
           firstUsed: entry.firstUsed,
           lastUsed: entry.lastUsed,
           tasks,
-          successRate: ratio(tasks.succeeded, tasks.succeeded + tasks.failed),
+          reported,
+          successRate: ratio(tasks.succeeded - notDone(reported), tasks.succeeded + tasks.failed),
           pulls,
           mergeRate: ratio(pulls.merged, pulls.merged + pulls.closed),
           costUsd: entry.costUsd,

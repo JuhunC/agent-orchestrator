@@ -5,6 +5,11 @@ export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancel
 /** "schedule": one of the agent's schedules came round (see schedules/runner.ts). */
 export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance" | "schedule";
 /** "github": something a person did on the thread while the agent was working. */
+/**
+ * What the agent itself said about a task that ended without an error (report_outcome): all of it
+ * done, part of it, blocked on a person or other work, or given up. Nothing reported counts as done.
+ */
+export type TaskOutcome = "done" | "partial" | "blocked" | "gave_up";
 export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error" | "github";
 
 
@@ -65,6 +70,9 @@ export interface Task {
   restarts: number;
   /** How many times it was continued after timing out, going silent or stopping with an error (up to TASK_FAILURE_RETRIES). */
   recoveries: number;
+  /** What the agent reported about its own work (null: nothing, which counts as done), and its one-line reason. */
+  outcome: TaskOutcome | null;
+  outcomeNote: string | null;
   /** Fingerprint of the agent's profile that ran it, and the profiles folder's commit (see profiles/version.ts). */
   profileVersion: string | null;
   profileCommit: string | null;

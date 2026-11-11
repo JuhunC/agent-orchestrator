@@ -120,6 +120,8 @@ addColumn("tasks", "restarts", "INTEGER NOT NULL DEFAULT 0");
 // Times the task was continued after a timeout, a stall or an error (see run-task.ts).
 addColumn("tasks", "recoveries", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "wait_reason", "TEXT");
+addColumn("tasks", "outcome", "TEXT");
+addColumn("tasks", "outcome_note", "TEXT");
 addColumn("tasks", "profile_version", "TEXT");
 addColumn("tasks", "profile_commit", "TEXT");
 // Set for runs a schedule started (see schedules/runner.ts).
@@ -244,6 +246,8 @@ function toTask(row: Row): Task {
     restarts: Number(row.restarts ?? 0),
     recoveries: Number(row.recoveries ?? 0),
     waitReason: (row.wait_reason as Task["waitReason"]) ?? null,
+    outcome: (row.outcome as Task["outcome"]) ?? null,
+    outcomeNote: (row.outcome_note as string | null) ?? null,
     profileVersion: (row.profile_version as string | null) ?? null,
     profileCommit: (row.profile_commit as string | null) ?? null,
     scheduleId: row.schedule_id === null || row.schedule_id === undefined ? null : Number(row.schedule_id),
@@ -347,6 +351,8 @@ const TASK_COLUMNS: Record<string, string> = {
   restarts: "restarts",
   recoveries: "recoveries",
   waitReason: "wait_reason",
+  outcome: "outcome",
+  outcomeNote: "outcome_note",
   profileVersion: "profile_version",
   profileCommit: "profile_commit",
 };
@@ -366,6 +372,8 @@ export function updateTask(id: number, patch: Partial<Task>): Task {
 
 export interface TaskFilter {
   status?: string;
+  /** What the agent reported: "partial", "blocked", "gave_up" (several with commas), or "any" of them. */
+  outcome?: string;
   agent?: string;
   repo?: string;
   limit?: number;
@@ -379,6 +387,11 @@ export function listTasks(filter: TaskFilter = {}): Task[] {
     const statuses = filter.status.split(",");
     where.push(`status IN (${statuses.map(() => "?").join(",")})`);
     values.push(...statuses);
+  }
+  if (filter.outcome) {
+    const outcomes = filter.outcome === "any" ? ["partial", "blocked", "gave_up"] : filter.outcome.split(",");
+    where.push(`status = 'succeeded' AND outcome IN (${outcomes.map(() => "?").join(",")})`);
+    values.push(...outcomes);
   }
   if (filter.agent) {
     where.push("agent = ?");
@@ -395,6 +408,18 @@ export function listTasks(filter: TaskFilter = {}): Task[] {
   }
   const sql = `SELECT * FROM tasks ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY id DESC LIMIT ?`;
   return (db.prepare(sql).all(...values, Math.min(filter.limit ?? 50, 500)) as Row[]).map(toTask);
+}
+
+/**
+ * Tasks whose agent said it's blocked or gave up, and that nothing has followed: the same agent
+ * hasn't run on that thread since. These wait on a person.
+ */
+export function tasksNeedingPerson(since: string, limit = 20): Task[] {
+  const sql = `SELECT * FROM tasks t WHERE status = 'succeeded' AND outcome IN ('blocked', 'gave_up') AND dry_run = 0 AND finished_at >= ?
+    AND NOT EXISTS (SELECT 1 FROM tasks later WHERE later.id > t.id AND later.agent = t.agent AND later.owner = t.owner AND later.repo = t.repo
+      AND later.thread_kind = t.thread_kind AND later.thread_number = t.thread_number AND later.dry_run = 0)
+    ORDER BY id DESC LIMIT ?`;
+  return (db.prepare(sql).all(since, limit) as Row[]).map(toTask);
 }
 
 export function queuedTasks(): Task[] {
@@ -926,12 +951,15 @@ export function handoffsInto(column: string, since: string): Record<string, numb
   return Object.fromEntries(rows.map((row) => [String(row.agent), Number(row.count)]));
 }
 
-/** One agent's outcomes per profile version since `since`: tasks by status, and its pull requests by state. */
-export function outcomesByVersion(agent: string, since: string): { version: string; commit: string | null; firstUsed: string; lastUsed: string; tasks: Record<string, number>; pulls: Record<string, number>; costUsd: number }[] {
+/** For a task that ended without an error: what its agent reported, when that isn't "done". */
+const REPORTED = "CASE WHEN status = 'succeeded' AND outcome IN ('partial', 'blocked', 'gave_up') THEN outcome ELSE '' END";
+
+/** One agent's outcomes per profile version since `since`: tasks by status (and what agents reported), and its pull requests by state. */
+export function outcomesByVersion(agent: string, since: string): { version: string; commit: string | null; firstUsed: string; lastUsed: string; tasks: Record<string, number>; reported: Record<string, number>; pulls: Record<string, number>; costUsd: number }[] {
   const tasks = db
     .prepare(
-      `SELECT profile_version AS version, MAX(profile_commit) AS commit_id, MIN(created_at) AS first_used, MAX(created_at) AS last_used, status, COUNT(*) AS count, COALESCE(SUM(cost_usd), 0) AS cost
-       FROM tasks WHERE agent = ? AND profile_version IS NOT NULL AND dry_run = 0 AND COALESCE(finished_at, started_at, created_at) >= ? GROUP BY profile_version, status`,
+      `SELECT profile_version AS version, MAX(profile_commit) AS commit_id, MIN(created_at) AS first_used, MAX(created_at) AS last_used, status, ${REPORTED} AS outcome, COUNT(*) AS count, COALESCE(SUM(cost_usd), 0) AS cost
+       FROM tasks WHERE agent = ? AND profile_version IS NOT NULL AND dry_run = 0 AND COALESCE(finished_at, started_at, created_at) >= ? GROUP BY profile_version, status, ${REPORTED}`,
     )
     .all(agent, since) as Row[];
   const pulls = db
@@ -941,11 +969,12 @@ export function outcomesByVersion(agent: string, since: string): { version: stri
        WHERE p.agent = ? AND p.opened_at >= ? AND t.profile_version IS NOT NULL GROUP BY t.profile_version, p.state`,
     )
     .all(agent, since) as Row[];
-  const versions = new Map<string, { version: string; commit: string | null; firstUsed: string; lastUsed: string; tasks: Record<string, number>; pulls: Record<string, number>; costUsd: number }>();
+  const versions = new Map<string, { version: string; commit: string | null; firstUsed: string; lastUsed: string; tasks: Record<string, number>; reported: Record<string, number>; pulls: Record<string, number>; costUsd: number }>();
   for (const row of tasks) {
     const version = String(row.version);
-    const entry = versions.get(version) ?? { version, commit: (row.commit_id as string | null) ?? null, firstUsed: String(row.first_used), lastUsed: String(row.last_used), tasks: {}, pulls: {}, costUsd: 0 };
-    entry.tasks[String(row.status)] = Number(row.count);
+    const entry = versions.get(version) ?? { version, commit: (row.commit_id as string | null) ?? null, firstUsed: String(row.first_used), lastUsed: String(row.last_used), tasks: {}, reported: {}, pulls: {}, costUsd: 0 };
+    entry.tasks[String(row.status)] = (entry.tasks[String(row.status)] ?? 0) + Number(row.count);
+    if (row.outcome) entry.reported[String(row.outcome)] = (entry.reported[String(row.outcome)] ?? 0) + Number(row.count);
     entry.costUsd += Number(row.cost);
     if (String(row.first_used) < entry.firstUsed) entry.firstUsed = String(row.first_used);
     if (String(row.last_used) > entry.lastUsed) entry.lastUsed = String(row.last_used);
@@ -958,15 +987,15 @@ export function outcomesByVersion(agent: string, since: string): { version: stri
   return [...versions.values()].sort((a, b) => b.firstUsed.localeCompare(a.firstUsed));
 }
 
-/** Tasks per agent and status since `since`, with how long they ran. */
-export function taskOutcomes(since: string, agent?: string): { agent: string; status: string; count: number; minutes: number }[] {
+/** Tasks per agent, status and reported outcome ("" when done or none) since `since`, with how long they ran. */
+export function taskOutcomes(since: string, agent?: string): { agent: string; status: string; outcome: string; count: number; minutes: number }[] {
   const rows = db
     .prepare(
-      `SELECT agent, status, COUNT(*) AS count, COALESCE(SUM((julianday(finished_at) - julianday(started_at)) * 1440), 0) AS minutes
-       FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? AND status IN ('succeeded', 'failed', 'cancelled') AND dry_run = 0 ${agent ? "AND agent = ?" : ""} GROUP BY agent, status`,
+      `SELECT agent, status, ${REPORTED} AS outcome, COUNT(*) AS count, COALESCE(SUM((julianday(finished_at) - julianday(started_at)) * 1440), 0) AS minutes
+       FROM tasks WHERE COALESCE(finished_at, started_at, created_at) >= ? AND status IN ('succeeded', 'failed', 'cancelled') AND dry_run = 0 ${agent ? "AND agent = ?" : ""} GROUP BY agent, status, ${REPORTED}`,
     )
     .all(...(agent ? [since, agent] : [since])) as Row[];
-  return rows.map((row) => ({ agent: String(row.agent), status: String(row.status), count: Number(row.count), minutes: Number(row.minutes) }));
+  return rows.map((row) => ({ agent: String(row.agent), status: String(row.status), outcome: String(row.outcome ?? ""), count: Number(row.count), minutes: Number(row.minutes) }));
 }
 
 // ---------- audit log ----------

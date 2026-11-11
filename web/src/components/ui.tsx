@@ -25,7 +25,7 @@ import {
   VStack,
   type TextInputProps,
 } from "@astryxdesign/core";
-import { KIND_LABEL, type Task, type TaskStatus } from "../api.ts";
+import { KIND_LABEL, type Task, type TaskOutcome, type TaskStatus } from "../api.ts";
 import { href } from "../router.ts";
 
 type BadgeVariant = "neutral" | "info" | "success" | "warning" | "error" | "blue" | "purple";
@@ -54,8 +54,16 @@ const TONE: Record<string, BadgeVariant> = {
   accent: "purple",
 };
 
-export function StatusPill({ status }: { status: TaskStatus }) {
-  return <Badge variant={STATUS[status].variant} label={STATUS[status].label} />;
+/** A task that ended without an error, but whose agent said it didn't do all of it. */
+const REPORTED: Record<string, { label: string; variant: BadgeVariant }> = {
+  partial: { label: "Partly done", variant: "warning" },
+  blocked: { label: "Blocked", variant: "warning" },
+  gave_up: { label: "Gave up", variant: "error" },
+};
+
+export function StatusPill({ status, outcome }: { status: TaskStatus; outcome?: TaskOutcome | null }) {
+  const shown = (status === "succeeded" && outcome && REPORTED[outcome]) || STATUS[status];
+  return <Badge variant={shown.variant} label={shown.label} />;
 }
 
 export function Pill({ tone, children }: { tone: string; children: ReactNode }) {

@@ -5,13 +5,15 @@ import { onGithubThrottled } from "../github/app.ts";
 import { errorMessage, log } from "../log.ts";
 
 /**
- * Problems an administrator should hear about: failed tasks, loop guards that stopped agents,
- * spending and usage limits, agents that aren't isolated, rejected webhooks. They're kept in the
- * database (the last 1000) for the Dashboard, and posted to ALERT_WEBHOOK_URL when it's set.
+ * Problems an administrator should hear about: failed tasks, tasks whose agent said it's blocked
+ * or gave up, loop guards that stopped agents, spending and usage limits, agents that aren't
+ * isolated, rejected webhooks. They're kept in the database (the last 1000) for the Dashboard, and
+ * posted to ALERT_WEBHOOK_URL when it's set.
  */
 
 export type IncidentKind =
   | "task_failed"
+  | "task_blocked"
   | "loop_guard"
   | "spend_limit"
   | "spend_warning"

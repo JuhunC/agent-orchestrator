@@ -179,6 +179,34 @@ export function Dashboard() {
         </Panel>
       )}
 
+      {data.attention.length > 0 && (
+        <Panel title="Waiting on a person" hint="agents that said they're blocked or gave up · last 7 days · gone once the agent runs there again" tight>
+          <DataTable hover>
+            <TableBody>
+              {data.attention.map((task) => (
+                <TableRow key={task.id} className="ao-clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
+                  <TableCell>
+                    <StatusPill status={task.status} outcome={task.outcome} />
+                  </TableCell>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <Text weight="semibold">{task.agent}</Text>
+                      <Meta>{task.finishedAt ? ago(task.finishedAt, now) : ""}</Meta>
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <ThreadCell task={task} />
+                      <Text type="supporting">{task.outcomeNote}</Text>
+                    </VStack>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
+        </Panel>
+      )}
+
       <Panel title="Agents" hint={`${data.agents.filter((agent) => agent.enabled).length} of ${data.agents.length} on`} actions={<LinkButton to="/agents" label="Manage" size="sm" />}>
         {data.agents.length === 0 ? (
           <Empty>
@@ -311,7 +339,9 @@ export function Dashboard() {
               {data.recent.map((task) => (
                 <TableRow key={task.id} className="ao-clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
                   <TableCell>
-                    <StatusPill status={task.status} />
+                    <span title={task.outcomeNote ?? undefined}>
+                      <StatusPill status={task.status} outcome={task.outcome} />
+                    </span>
                   </TableCell>
                   <TableCell>
                     <Text textWrap="nowrap">{task.agent}</Text>

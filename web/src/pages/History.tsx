@@ -163,7 +163,7 @@ export function ThreadDetail({ owner, repo, kind, number }: { owner: string; rep
               {index > 0 && <Divider />}
               <VStack gap={2} padding={4}>
                 <HStack gap={2} vAlign="center" wrap="wrap">
-                  <StatusPill status={task.status} />
+                  <StatusPill status={task.status} outcome={task.outcome} />
                   <Text weight="semibold" color={task.forgotten ? "secondary" : undefined}>
                     {task.agent}
                   </Text>

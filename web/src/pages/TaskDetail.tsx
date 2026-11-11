@@ -24,6 +24,7 @@ interface ChainNode {
   threadTitle: string;
   triggerKind: Task["triggerKind"];
   status: Task["status"];
+  outcome?: Task["outcome"];
   board: string | null;
   boardColumn: string | null;
   createdAt?: string;
@@ -36,7 +37,7 @@ function ChainRow({ node, depth, current }: { node: ChainNode; depth: number; cu
   return (
     <>
       <HStack gap={2} vAlign="center" wrap="wrap" paddingInlineStart={depth === 0 ? 0 : depth === 1 ? 4 : depth === 2 ? 8 : 10}>
-        <StatusPill status={node.status} />
+        <StatusPill status={node.status} outcome={node.outcome} />
         <Text>
           {current ? <b>this task</b> : <A to={`/tasks/${node.id}`}>task #{node.id}</A>} · {node.agent} on {node.owner}/{node.repo}#{node.threadNumber}
           {node.threadTitle ? ` "${node.threadTitle}"` : ""}
@@ -72,7 +73,7 @@ function Others({ others, task, now }: { others: ChainNode[]; task: Task; now: n
       <VStack gap={1.5}>
         {others.map((other) => (
           <HStack key={other.id} gap={2} vAlign="center" wrap="wrap">
-            <StatusPill status={other.status} />
+            <StatusPill status={other.status} outcome={other.outcome} />
             <Text>
               <A to={`/tasks/${other.id}`}>task #{other.id}</A> · {other.agent}
               {other.threadNumber !== task.threadNumber ? ` on ${KIND_LABEL[other.threadKind]} #${other.threadNumber}` : ""}
@@ -157,7 +158,7 @@ export function TaskDetail({ id }: { id: number }) {
   return (
     <VStack gap={4}>
       <HStack gap={3} vAlign="center" wrap="wrap">
-        <StatusPill status={task.status} />
+        <StatusPill status={task.status} outcome={task.outcome} />
         <StackItem size="fill">
           <Heading level={2}>
             {task.agent} · {task.owner}/{task.repo}#{task.threadNumber}
@@ -188,6 +189,15 @@ export function TaskDetail({ id }: { id: number }) {
       )}
 
       {task.error && task.status !== "succeeded" && <Notice tone="error" title={task.error} />}
+      {task.status === "succeeded" && task.outcome && task.outcome !== "done" && (
+        <Notice
+          tone={task.outcome === "gave_up" ? "error" : "warning"}
+          title={task.outcome === "partial" ? "The agent says it did only part of this." : task.outcome === "blocked" ? "The agent says it's blocked and needs someone." : "The agent says it couldn't do this."}
+        >
+          {task.outcomeNote}
+          {task.board && task.outcome !== "partial" ? " On the board, its card went to a person unless the agent moved it elsewhere." : ""}
+        </Notice>
+      )}
       {task.status === "queued" && task.retryAt && (
         <Notice
           tone={task.waitReason === "setup" ? "info" : "warning"}

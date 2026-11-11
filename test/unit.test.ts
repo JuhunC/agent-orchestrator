@@ -243,7 +243,7 @@ test("a prompt that's too long loses its oldest comments, notes and runs, never 
 
   const long = buildPrompt({ agent, task, thread: thread(60), history: Array.from({ length: 10 }, (_, index) => run(index + 1)), workspace, board });
   assert.ok(long.length <= 100_000, String(long.length));
-  assert.ok(long.endsWith("It is posted as a comment."), "the reply instructions are still the end");
+  assert.ok(long.endsWith("so the task isn't shown as done."), "the reply instructions are still the end");
   assert.match(long, /## Your stage on the product board: "Build"/);
   for (const kept of ["THE REQUEST", "THE ISSUE BODY", "comment-59.", "note-11.", "run-10"]) assert.ok(long.includes(kept), kept);
   assert.ok(!long.includes("comment-0."), "the oldest comment went");
@@ -261,12 +261,12 @@ test("a prompt that's too long loses its oldest comments, notes and runs, never 
   for (const kept of ["comment-0.", "comment-2.", "note-0.", "run-1"]) assert.ok(short.includes(kept), kept);
 
   const followUp = buildFollowUpPrompt({ agent, task, thread: thread(60), workspace, since: null, interrupted: false, board });
-  assert.ok(followUp.length <= 100_000 && followUp.endsWith("It is posted as a comment."));
+  assert.ok(followUp.length <= 100_000 && followUp.endsWith("so the task isn't shown as done."));
   assert.ok(followUp.includes("comment-59.") && !followUp.includes("comment-0.") && followUp.includes("note-11."));
   assert.match(followUp, /_\(\d+ earlier comments left out/);
 
   // Even a request and description that fill the prompt leave the end intact.
   const huge = buildPrompt({ agent, task: { ...(task as object), requestText: "r".repeat(30_000) } as never, thread: { ...thread(40), body: "b".repeat(30_000) }, history: [], workspace, board: { ...board, role: "ROLE ".repeat(12_000) } });
-  assert.ok(huge.length <= 100_000 && huge.endsWith("It is posted as a comment."));
+  assert.ok(huge.length <= 100_000 && huge.endsWith("so the task isn't shown as done."));
   assert.match(huge, /## Your stage on the product board/);
 });

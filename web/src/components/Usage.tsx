@@ -224,7 +224,7 @@ function OutcomeTable({ rows }: { rows: AgentOutcome[] }) {
         <TableRow>
           <TableHeaderCell>Agent</TableHeaderCell>
           <TableHeaderCell>
-            <span title="succeeded / (succeeded + failed)">Tasks OK</span>
+            <span title="tasks whose work was done / tasks that finished or failed. A task the agent reported as partly done, blocked or given up doesn't count as done.">Tasks done</span>
           </TableHeaderCell>
           <TableHeaderCell>
             <span title="merged / (merged + closed without merging)">PRs merged</span>
@@ -246,8 +246,8 @@ function OutcomeTable({ rows }: { rows: AgentOutcome[] }) {
               <A to={`/agents/${row.agent}`}>{row.agent}</A>
             </TableCell>
             <TableCell>
-              <span title={`${row.tasks.succeeded} succeeded, ${row.tasks.failed} failed, ${row.tasks.cancelled} cancelled`}>
-                <Rate rate={row.successRate} done={row.tasks.succeeded} of={row.tasks.succeeded + row.tasks.failed} />
+              <span title={taskBreakdown(row, ", ")}>
+                <Rate rate={row.successRate} done={fullyDone(row)} of={row.tasks.succeeded + row.tasks.failed} />
               </span>
             </TableCell>
             <TableCell>
@@ -274,6 +274,23 @@ function OutcomeTable({ rows }: { rows: AgentOutcome[] }) {
   );
 }
 
+type TaskCounts = Pick<AgentOutcome, "tasks" | "reported">;
+/** Tasks that ended without an error and whose agent didn't say otherwise. */
+const fullyDone = (row: TaskCounts) => row.tasks.succeeded - row.reported.partial - row.reported.blocked - row.reported.gaveUp;
+/** "12 done · 2 partly done · 1 blocked · 3 failed": only what happened. */
+function taskBreakdown(row: TaskCounts, separator: string): string {
+  const parts: [number, string][] = [
+    [fullyDone(row), "done"],
+    [row.reported.partial, "partly done"],
+    [row.reported.blocked, "blocked"],
+    [row.reported.gaveUp, "gave up"],
+    [row.tasks.failed, "failed"],
+    [row.tasks.cancelled, "cancelled"],
+  ];
+  const shown = parts.filter(([count], index) => count > 0 || index === 0);
+  return shown.map(([count, label]) => `${count} ${label}`).join(separator);
+}
+
 /** Dashboard: outcomes per agent, over the same period as the usage above. */
 function OutcomeSummary({ days }: { days: number }) {
   const data = useOutcomes(days);
@@ -283,7 +300,8 @@ function OutcomeSummary({ days }: { days: number }) {
       <Heading level={3}>Outcomes</Heading>
       <OutcomeTable rows={data.agents} />
       <Meta block>
-        Pull requests count once merged or closed; tasks once they succeed or fail. A low merge rate, many failed tasks or many cards sent to a person say an agent's role or tools need work.
+        Pull requests count once merged or closed; tasks once they finish or fail. A task counts as done unless it failed or its agent said it did only part, is blocked or gave up. A low merge rate, few
+        tasks done or many cards sent to a person say an agent's role or tools need work.
       </Meta>
     </VStack>
   );
@@ -300,7 +318,7 @@ function VersionTable({ versions }: { versions: NonNullable<OutcomeReport["versi
           <TableRow>
             <TableHeaderCell>Version</TableHeaderCell>
             <TableHeaderCell>Used</TableHeaderCell>
-            <TableHeaderCell>Tasks OK</TableHeaderCell>
+            <TableHeaderCell>Tasks done</TableHeaderCell>
             <TableHeaderCell>PRs merged</TableHeaderCell>
             <TableHeaderCell>Per merged PR</TableHeaderCell>
           </TableRow>
@@ -321,7 +339,9 @@ function VersionTable({ versions }: { versions: NonNullable<OutcomeReport["versi
                 </Text>
               </TableCell>
               <TableCell>
-                <Rate rate={row.successRate} done={row.tasks.succeeded} of={row.tasks.succeeded + row.tasks.failed} />
+                <span title={taskBreakdown(row, ", ")}>
+                  <Rate rate={row.successRate} done={fullyDone(row)} of={row.tasks.succeeded + row.tasks.failed} />
+                </span>
               </TableCell>
               <TableCell>
                 <Rate rate={row.mergeRate} done={row.pulls.merged} of={row.pulls.merged + row.pulls.closed} />
@@ -348,7 +368,7 @@ function OutcomeTiles({ days, agent }: { days: number; agent: string }) {
   return (
     <>
       <StatGrid>
-        <StatTile label="Tasks that succeeded" value={percent(row.successRate)} sub={`${row.tasks.succeeded} ok · ${row.tasks.failed} failed · ${row.tasks.cancelled} cancelled`} />
+        <StatTile label="Tasks done" value={percent(row.successRate)} sub={taskBreakdown(row, " · ")} />
         <StatTile label="Pull requests merged" value={percent(row.mergeRate)} sub={`${row.pulls.merged} merged · ${row.pulls.closed} closed · ${row.pulls.open} open`} />
         <StatTile label="Per merged PR" value={row.costPerMergedPull === null ? "—" : formatUsd(row.costPerMergedPull)} sub="spend ÷ merged pull requests" />
         <StatTile label="Sent to a person" value={row.needsHuman} sub="cards moved to needs-human" />

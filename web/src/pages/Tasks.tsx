@@ -13,6 +13,11 @@ const STATUSES = [
   { value: "succeeded", label: "Done" },
   { value: "failed", label: "Failed" },
   { value: "cancelled", label: "Cancelled" },
+  // What the agent itself reported about a task that ended without an error.
+  { value: "outcome:any", label: "Not fully done" },
+  { value: "outcome:partial", label: "· Partly done" },
+  { value: "outcome:blocked", label: "· Blocked" },
+  { value: "outcome:gave_up", label: "· Gave up" },
 ];
 
 export function Tasks() {
@@ -22,7 +27,8 @@ export function Tasks() {
   const [older, setOlder] = useState<Task[]>([]);
   const [exhausted, setExhausted] = useState(false);
   const query = new URLSearchParams({ limit: String(PAGE) });
-  if (status) query.set("status", status);
+  if (status.startsWith("outcome:")) query.set("outcome", status.slice(8));
+  else if (status) query.set("status", status);
   if (agent) query.set("agent", agent);
   if (/^[^/\s]+\/[^/\s]+$/.test(repo)) query.set("repo", repo);
   const path = `/api/tasks?${query}`;
@@ -93,7 +99,9 @@ export function Tasks() {
                     </Text>
                   </TableCell>
                   <TableCell>
-                    <StatusPill status={task.status} />
+                    <span title={task.outcomeNote ?? undefined}>
+                      <StatusPill status={task.status} outcome={task.outcome} />
+                    </span>
                   </TableCell>
                   <TableCell>
                     <Text textWrap="nowrap">{task.agent}</Text>

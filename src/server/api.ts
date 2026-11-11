@@ -17,6 +17,7 @@ import {
   setForgotten,
   setSetting,
   taskStats,
+  tasksNeedingPerson,
   tasksForThread,
   listBoardItems,
   listHandoffs,
@@ -98,7 +99,7 @@ function modelView() {
 
 /** A task in a chain of agents starting each other, for the task page. */
 function chainEntry(task: Task) {
-  return { id: task.id, agent: task.agent, owner: task.owner, repo: task.repo, threadKind: task.threadKind, threadNumber: task.threadNumber, threadTitle: task.threadTitle, triggerKind: task.triggerKind, status: task.status, board: task.board, boardColumn: task.boardColumn, createdAt: task.createdAt };
+  return { id: task.id, agent: task.agent, owner: task.owner, repo: task.repo, threadKind: task.threadKind, threadNumber: task.threadNumber, threadTitle: task.threadTitle, triggerKind: task.triggerKind, status: task.status, outcome: task.outcome, board: task.board, boardColumn: task.boardColumn, createdAt: task.createdAt };
 }
 
 /**
@@ -254,15 +255,16 @@ export function registerApi(app: FastifyInstance): void {
       queued: queueOrder(listTasks({ status: "queued", limit: 100 })),
       incidents: listIncidents(20).filter((incident) => Date.now() - Date.parse(incident.ts) < 7 * 86_400_000),
       recent: listTasks({ status: "succeeded,failed,cancelled", limit: 15 }),
+      attention: tasksNeedingPerson(new Date(Date.now() - 7 * 86_400_000).toISOString()),
       settings: settingsView(),
       configured: Boolean(getCredentials()),
     };
   });
 
   // ---------- tasks ----------
-  app.get<{ Querystring: { status?: string; agent?: string; repo?: string; limit?: string; before?: string } }>("/api/tasks", async (request) => {
-    const { status, agent, repo, limit, before } = request.query;
-    return listTasks({ status, agent, repo, limit: limit ? Number(limit) : 50, beforeId: before ? Number(before) : undefined });
+  app.get<{ Querystring: { status?: string; outcome?: string; agent?: string; repo?: string; limit?: string; before?: string } }>("/api/tasks", async (request) => {
+    const { status, outcome, agent, repo, limit, before } = request.query;
+    return listTasks({ status, outcome, agent, repo, limit: limit ? Number(limit) : 50, beforeId: before ? Number(before) : undefined });
   });
 
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/tasks/:id", async (request, reply) => {

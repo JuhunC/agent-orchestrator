@@ -109,7 +109,7 @@ function historyEntries(history: Task[]): string[] {
   return history.map((task) => {
     const where = `${KIND_LABEL[task.threadKind]} #${task.threadNumber}`;
     const lines = [
-      `### Run ${task.id} — ${task.finishedAt?.slice(0, 16).replace("T", " ") ?? task.createdAt.slice(0, 16)} UTC on ${where} (${task.status})`,
+      `### Run ${task.id} — ${task.finishedAt?.slice(0, 16).replace("T", " ") ?? task.createdAt.slice(0, 16)} UTC on ${where} (${ended(task)})`,
       `Requested by @${task.requestedBy}:`,
       quote(clip(task.requestText, 1500)),
     ];
@@ -129,7 +129,7 @@ function otherEntries(others: Task[]): string[] {
     const lines = [
       active
         ? `### ${task.agent} — ${active} on ${where} (task ${task.id})`
-        : `### ${task.agent} — run ${task.id}, ${task.finishedAt?.slice(0, 16).replace("T", " ") ?? task.createdAt.slice(0, 16)} UTC on ${where} (${task.status})`,
+        : `### ${task.agent} — run ${task.id}, ${task.finishedAt?.slice(0, 16).replace("T", " ") ?? task.createdAt.slice(0, 16)} UTC on ${where} (${ended(task)})`,
       `Asked by @${task.requestedBy}: ${clip(task.requestText, 400).split("\n").join(" ")}`,
     ];
     if (task.branch) lines.push(`Branch: \`${task.branch}\`${task.commits ? ` (${task.commits} commit${task.commits === 1 ? "" : "s"})` : ""}`);
@@ -213,7 +213,13 @@ function relatedSection(task: Task, thread: ThreadContext, workspace: WorkspaceI
 }
 
 const REPLY_INSTRUCTIONS =
-  "When you are done, end with a concise summary for the people on GitHub: what you changed (or found), anything left to do, and any question you need answered. It is posted as a comment.";
+  "When you are done, end with a concise summary for the people on GitHub: what you changed (or found), anything left to do, and any question you need answered. It is posted as a comment. If you did not fully do what was asked, call report_outcome first (partial, blocked or gave_up, with a short note), so the task isn't shown as done.";
+
+/** How a finished run ended, for the prompt: its status, and what its agent reported when that wasn't "done". */
+function ended(task: Task): string {
+  if (task.status !== "succeeded" || !task.outcome || task.outcome === "done") return task.status;
+  return `${{ partial: "partly done", blocked: "blocked", gave_up: "gave up" }[task.outcome]}${task.outcomeNote ? `: ${clip(task.outcomeNote, 300).split("\n").join(" ")}` : ""}`;
+}
 
 /**
  * The prompt for an agent session that already knows this thread (a live session, or one resumed

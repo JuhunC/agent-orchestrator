@@ -12,7 +12,7 @@ import type { Profile } from "../profiles/types.ts";
 import { listWikiPages, readWikiPage, writeWikiPage } from "../github/wiki.ts";
 import { git, GitError } from "../runner/git.ts";
 import { mention } from "../runner/progress.ts";
-import type { EventKind, Task } from "../types.ts";
+import type { EventKind, Task, TaskOutcome } from "../types.ts";
 import { allowedMoves, canMove, type Board } from "../boards/loader.ts";
 import { HANDOFF_FIELDS, hasCardFields, renderHandoff, type HandoffField, type HandoffFields } from "../boards/rules.ts";
 import { setCardFields } from "../boards/engine.ts";
@@ -94,8 +94,13 @@ export interface ToolContext {
   issueState?: { state: "open" | "closed"; reason: "completed" | "not_planned" | "duplicate" | "reopened" } | null;
   /** Agents to start on related issues when the task finishes successfully (start_related_agent). */
   relatedStarts?: RelatedStart[];
+  /** What the agent said about its own work (report_outcome); nothing said counts as done. */
+  outcome?: { outcome: TaskOutcome; note: string } | null;
   board: BoardContext | null;
 }
+
+/** How a reported outcome reads in a sentence. */
+export const OUTCOME_WORDS: Record<Exclude<TaskOutcome, "done">, string> = { partial: "partly done", blocked: "blocked", gave_up: "given up" };
 
 export const MAX_COMMENTS_PER_TASK = 10;
 export const MAX_SUB_ISSUES_PER_TASK = 20;
@@ -474,6 +479,30 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
       ),
     );
   }
+
+  tools.push(
+    tool(
+      "report_outcome",
+      "Say how the task ended when you did NOT fully do what was asked. partial: some of it is done and some isn't. blocked: you can't go on until a person answers or decides something, or until other work is finished. gave_up: you tried and couldn't do it. The task is then shown that way to the people following it instead of as done (and on a project board, a blocked or given-up card goes to a person). Call it once, near the end, and still write your summary. If you did everything, don't call it; \"done\" takes back an earlier report.",
+      {
+        outcome: z.enum(["done", "partial", "blocked", "gave_up"]),
+        note: z.string().max(600).optional().describe("One or two sentences: what is missing, or what (or who) you are waiting for. Needed unless the outcome is done."),
+      },
+      (args) =>
+        withContext(async (ctx) => {
+          const note = (args.note ?? "").trim();
+          if (args.outcome === "done") {
+            ctx.outcome = null;
+            return ok("Noted: the task counts as done.");
+          }
+          if (!note) return fail("Give a note: one or two sentences on what is missing, or what you are waiting for.");
+          ctx.outcome = { outcome: args.outcome, note };
+          ctx.onEvent("system", `Reported the outcome: ${OUTCOME_WORDS[args.outcome as Exclude<TaskOutcome, "done">]} (${note})`);
+          const parked = ctx.board?.board.needsHuman && args.outcome !== "partial" && !ctx.board.pendingMove ? ` Unless you move the card yourself, it goes to ${ctx.board.board.needsHuman} with your note when you finish.` : "";
+          return ok(`Noted: the task will be shown as ${OUTCOME_WORDS[args.outcome as Exclude<TaskOutcome, "done">]}.${parked} Finish with your summary as usual.`);
+        })(),
+    ),
+  );
 
   tools.push(
     tool("get_ci_status", "Show CI check results for the commit you last pushed.", {}, () =>

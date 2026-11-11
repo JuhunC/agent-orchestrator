@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
+/** What the agent said about a task that ended without an error (null: nothing, which counts as done). */
+export type TaskOutcome = "done" | "partial" | "blocked" | "gave_up";
 
 export interface AgentStats {
   queued: number;
@@ -175,6 +177,8 @@ export interface Task {
   restarts: number;
   recoveries: number;
   waitReason: "usage_limit" | "rate_limit" | "setup" | null;
+  outcome: TaskOutcome | null;
+  outcomeNote: string | null;
   live: boolean;
   board: string | null;
   boardColumn: string | null;
@@ -391,6 +395,9 @@ export interface Settings {
 export interface AgentOutcome {
   agent: string;
   tasks: { succeeded: number; failed: number; cancelled: number };
+  /** Of the succeeded ones: those whose agent said it didn't do all of it. */
+  reported: { partial: number; blocked: number; gaveUp: number };
+  /** Share of finished tasks whose work was done (not partial, blocked, given up or failed). */
   successRate: number | null;
   pulls: { opened: number; merged: number; closed: number; open: number };
   mergeRate: number | null;
@@ -406,6 +413,7 @@ export interface VersionOutcome {
   firstUsed: string;
   lastUsed: string;
   tasks: { succeeded: number; failed: number; cancelled: number };
+  reported: { partial: number; blocked: number; gaveUp: number };
   successRate: number | null;
   pulls: { merged: number; closed: number; open: number };
   mergeRate: number | null;
@@ -467,6 +475,8 @@ export interface Overview {
   running: Task[];
   queued: Task[];
   recent: Task[];
+  /** Tasks whose agent said it's blocked or gave up, with nothing from that agent on the thread since. */
+  attention: Task[];
   sessions: SessionInfo[];
   model: ModelInfo;
   settings: Settings;
