@@ -45,6 +45,8 @@ function scheduleSection(schedule: ScheduleRun): string {
 }
 
 const MAX_PROMPT = 100_000;
+/** Room kept for the headings and "left out" lines added around trimmed lists. */
+const HEADINGS = 1_000;
 const KIND_LABEL = { issue: "issue", pull: "pull request", discussion: "discussion" } as const;
 
 function clip(text: string, max: number): string {
@@ -59,9 +61,52 @@ function quote(text: string): string {
     .join("\n");
 }
 
-function historySection(history: Task[]): string {
-  if (!history.length) return "";
-  const entries = history.map((task) => {
+/** "(3 earlier comments left out…)": said in the prompt wherever the oldest entries had to go. */
+function leftOut(count: number, what: string, where = ""): string[] {
+  return count ? [`_(${count} earlier ${what}${count === 1 ? "" : "s"} left out to keep this prompt short${where})_`] : [];
+}
+
+/**
+ * Makes lists of prompt entries (each oldest first) fit into `room` characters by leaving out the
+ * oldest: first from lists over their share of the room, in the order given, then from any list.
+ * The newest entry of each list stays. Cuts the lists in place; returns how many each one lost.
+ */
+function fit(lists: { entries: string[]; share: number }[], room: number): number[] {
+  const size = (entries: string[]) => entries.reduce((sum, entry) => sum + entry.length + 2, 0);
+  let total = lists.reduce((sum, list) => sum + size(list.entries), 0);
+  const lost = lists.map(() => 0);
+  for (const keepShare of [true, false]) {
+    for (const [index, list] of lists.entries()) {
+      let own = size(list.entries);
+      const floor = keepShare ? list.share * room : 0;
+      while (total > room && list.entries.length > 1 && own > floor) {
+        const gone = list.entries.shift()!.length + 2;
+        own -= gone;
+        total -= gone;
+        lost[index]!++;
+      }
+    }
+  }
+  return lost;
+}
+
+/**
+ * The prompt from its start and its end. The end (board stage, how to reply) is what tells the
+ * agent what to do, so when it's still too long after trimming, the cut is made before it.
+ */
+function assemble(head: string[], tail: string[]): string {
+  const start = head.join("\n");
+  const end = tail.join("\n");
+  if (start.length + end.length + 1 <= MAX_PROMPT) return `${start}\n${end}`;
+  return `${start.slice(0, Math.max(0, MAX_PROMPT - end.length - 60))}\n…(cut here to keep the prompt short)\n${end}`.slice(-MAX_PROMPT);
+}
+
+const commentEntry = (comment: { author: string; createdAt: string; body: string }) => `**@${comment.author}** (${comment.createdAt.slice(0, 16).replace("T", " ")}):\n${quote(clip(comment.body, 4000))}`;
+const handoffEntry = (handoff: BoardStage["handoffs"][number]) =>
+  `**${handoff.agent}** (${handoff.fromColumn} → ${handoff.toColumn}, ${handoff.ts.slice(0, 16).replace("T", " ")}):\n${quote(clip(handoff.note, 3000))}`;
+
+function historyEntries(history: Task[]): string[] {
+  return history.map((task) => {
     const where = `${KIND_LABEL[task.threadKind]} #${task.threadNumber}`;
     const lines = [
       `### Run ${task.id} — ${task.finishedAt?.slice(0, 16).replace("T", " ") ?? task.createdAt.slice(0, 16)} UTC on ${where} (${task.status})`,
@@ -74,10 +119,15 @@ function historySection(history: Task[]): string {
     if (task.error) lines.push(`Error: ${clip(task.error, 500)}`);
     return lines.join("\n");
   });
+}
+
+function historySection(entries: string[], lost: number): string {
+  if (!entries.length) return "";
   return [
     "## Your previous work here",
     "You have worked on this thread before. Use this as context and build on it rather than starting over.",
     "",
+    ...leftOut(lost, "run"),
     entries.join("\n\n"),
   ].join("\n");
 }
@@ -184,8 +234,8 @@ function fieldsLines(fields: NonNullable<BoardStage["fields"]>): string[] {
   ];
 }
 
-function boardSection(stage: BoardStage): string {
-  const notes = stage.handoffs.map((handoff) => `**${handoff.agent}** (${handoff.fromColumn} → ${handoff.toColumn}, ${handoff.ts.slice(0, 16).replace("T", " ")}):\n${quote(clip(handoff.note, 3000))}`);
+/** `notes` are the handoff notes that fit (see handoffEntry), `lost` how many older ones didn't. */
+function boardSection(stage: BoardStage, notes: string[], lost = 0): string {
   return [
     `## Your stage on the ${stage.board} board: "${stage.column}"`,
     "This issue is a card on a GitHub Project board. Each column has an agent with its own job; yours is below.",
@@ -211,7 +261,7 @@ function boardSection(stage: BoardStage): string {
       ? `Other agents are working this card in this column at the same time: ${stage.peers.join(", ")}. Your move_to_column is a vote: the card moves when all of you finish, and if any of you sends it back, it goes back. Don't push changes another agent might also be making.`
       : "If you don't move the card, it stays in this column.",
     stage.mergeIntoParent ? "Never merge into the default branch: merge_into_parent only merges a sub-issue's work into its parent issue's branch." : "Never merge pull requests.",
-    ...(notes.length ? ["", "### Handoff notes from earlier stages (oldest first)", notes.join("\n\n")] : []),
+    ...(notes.length ? ["", "### Handoff notes from earlier stages (oldest first)", ...leftOut(lost, "note"), notes.join("\n\n")] : []),
   ]
     .filter((line, index, all) => line !== "" || all[index - 1] !== "")
     .join("\n");
@@ -233,7 +283,7 @@ export function buildFollowUpPrompt(input: {
   const kind = KIND_LABEL[thread.kind];
   const repo = `${task.owner}/${task.repo}`;
   const fresh = thread.comments.filter((comment) => !comment.fromOrchestrator && (!since || comment.createdAt > since) && comment.body.trim() !== task.requestText.trim());
-  const sections = [
+  const head = [
     interrupted
       ? `You were interrupted while working on this (a usage limit, or the orchestrator restarted). Your uncommitted changes are still in the working copy. Continue where you left off.`
       : input.schedule
@@ -244,25 +294,30 @@ export function buildFollowUpPrompt(input: {
     quote(clip(task.requestText, 20_000)),
     ...(input.schedule ? ["", scheduleSection(input.schedule)] : []),
   ];
-  if (fresh.length) {
-    sections.push(
-      "",
-      "## New on the thread since your last run (oldest first)",
-      fresh.map((comment) => `**@${comment.author}** (${comment.createdAt.slice(0, 16).replace("T", " ")}):\n${quote(clip(comment.body, 4000))}`).join("\n\n"),
-    );
-  }
-  sections.push(
+  const related = relatedSection(task, thread, workspace, input.agent);
+  const tail = (notes: string[], lostNotes = 0) => [
     "",
     "## Working copy",
     `${workspaceSection(repo, thread, workspace)}\nThe branch has been refreshed from GitHub, so it includes anything pushed since your last run.`,
-    ...(relatedSection(task, thread, workspace, input.agent) ? ["", relatedSection(task, thread, workspace, input.agent)] : []),
-    ...(input.board ? ["", boardSection(input.board)] : []),
+    ...(related ? ["", related] : []),
+    ...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []),
     "",
     "## How to reply",
     REPLY_INSTRUCTIONS,
+  ];
+  // When it's too long, the oldest comments and handoff notes go, never the end of the prompt.
+  const comments = fresh.map(commentEntry);
+  const notes = (input.board?.handoffs ?? []).map(handoffEntry);
+  const room = MAX_PROMPT - head.join("\n").length - tail([]).join("\n").length - HEADINGS;
+  const [lostComments, lostNotes] = fit(
+    [
+      { entries: comments, share: 0.7 },
+      { entries: notes, share: 0.3 },
+    ],
+    room,
   );
-  const prompt = sections.join("\n");
-  return prompt.length > MAX_PROMPT ? prompt.slice(0, MAX_PROMPT) + "\n…(prompt truncated)" : prompt;
+  if (comments.length) head.push("", "## New on the thread since your last run (oldest first)", ...leftOut(lostComments!, "comment", `; the thread has them: ${thread.url}`), comments.join("\n\n"));
+  return assemble(head, tail(notes, lostNotes));
 }
 
 export function buildPrompt(input: {
@@ -280,15 +335,13 @@ export function buildPrompt(input: {
 
   const workspaceText = workspaceSection(repo, thread, workspace);
 
-  const conversation = thread.comments
-    .filter((comment) => !comment.fromOrchestrator)
-    .map((comment) => `**@${comment.author}** (${comment.createdAt.slice(0, 16).replace("T", " ")}):\n${quote(clip(comment.body, 4000))}`);
+  const conversation = thread.comments.filter((comment) => !comment.fromOrchestrator).map(commentEntry);
 
   const inline = thread.reviewComments.map(
     (comment) => `**@${comment.author}** on \`${comment.path}${comment.line ? `:${comment.line}` : ""}\`:\n${quote(clip(comment.body, 2000))}`,
   );
 
-  const sections = [
+  const head = [
     `You are "${agent.name}" (GitHub handle @${agent.handle}), an AI agent working on the GitHub repository ${repo}.`,
     input.schedule
       ? `It's time for a scheduled run of "${input.schedule.name}" on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`
@@ -306,21 +359,29 @@ export function buildPrompt(input: {
     thread.body.trim() ? clip(thread.body, 20_000) : "_(no description)_",
   ];
   if (thread.pull) {
-    sections.push("", `Head branch: \`${thread.pull.headRef}\`${thread.pull.isFork ? ` (from fork ${thread.pull.headRepo ?? "unknown"})` : ""} → base \`${thread.pull.baseRef}\``);
+    head.push("", `Head branch: \`${thread.pull.headRef}\`${thread.pull.isFork ? ` (from fork ${thread.pull.headRepo ?? "unknown"})` : ""} → base \`${thread.pull.baseRef}\``);
   }
   const related = relatedSection(task, thread, workspace, agent);
-  if (related) sections.push("", related);
-  if (conversation.length) sections.push("", "## Conversation so far (oldest first)", conversation.join("\n\n"));
-  if (inline.length) sections.push("", "## Inline review comments", inline.join("\n\n"));
-  const historyText = historySection(history);
-  if (historyText) sections.push("", historyText);
-  sections.push(
-    ...(input.board ? ["", boardSection(input.board)] : []),
-    "",
-    "## How to reply",
-    REPLY_INSTRUCTIONS,
-  );
+  if (related) head.push("", related);
+  const tail = (notes: string[], lostNotes = 0) => [...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []), "", "## How to reply", REPLY_INSTRUCTIONS];
 
-  const prompt = sections.join("\n");
-  return prompt.length > MAX_PROMPT ? prompt.slice(0, MAX_PROMPT) + "\n…(prompt truncated)" : prompt;
+  // A long thread doesn't fit: the oldest comments go first, then the oldest inline comments,
+  // handoff notes and earlier runs. The request, the issue and the end of the prompt always stay.
+  const notes = (input.board?.handoffs ?? []).map(handoffEntry);
+  const runs = historyEntries(history);
+  const room = MAX_PROMPT - head.join("\n").length - tail([]).join("\n").length - HEADINGS;
+  const [lostComments, lostInline, lostNotes, lostRuns] = fit(
+    [
+      { entries: conversation, share: 0.5 },
+      { entries: inline, share: 0.15 },
+      { entries: notes, share: 0.15 },
+      { entries: runs, share: 0.2 },
+    ],
+    room,
+  );
+  if (conversation.length) head.push("", "## Conversation so far (oldest first)", ...leftOut(lostComments!, "comment", `; the thread has them: ${thread.url}`), conversation.join("\n\n"));
+  if (inline.length) head.push("", "## Inline review comments", ...leftOut(lostInline!, "inline comment"), inline.join("\n\n"));
+  const historyText = historySection(runs, lostRuns!);
+  if (historyText) head.push("", historyText);
+  return assemble(head, tail(notes, lostNotes));
 }

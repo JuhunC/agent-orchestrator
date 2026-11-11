@@ -306,7 +306,10 @@ export function TaskDetail({ id }: { id: number }) {
       )}
 
       {task.prompt && (
-        <Panel title="Prompt" hint="what the agent was given, including its history" actions={<Button label={showPrompt ? "Hide" : "Show"} size="sm" onClick={() => setShowPrompt((value) => !value)} />}>
+        <Panel
+          title="Prompt"
+          hint={/left out to keep this prompt short|cut here to keep the prompt short/.test(task.prompt) ? "the thread was too long to fit: the oldest comments were left out" : "what the agent was given, including its history"}
+          actions={<Button label={showPrompt ? "Hide" : "Show"} size="sm" onClick={() => setShowPrompt((value) => !value)} />}>
           {showPrompt ? <CodeBlock code={task.prompt} isWrapped width="100%" maxHeight={640} size="sm" /> : <Meta>{task.prompt.length.toLocaleString()} characters</Meta>}
         </Panel>
       )}

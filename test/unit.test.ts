@@ -223,3 +223,50 @@ test("the options reference covers every GitHub permission, evidence kind, hando
   assert.deepEqual(match("boards/product.yaml"), ["board"]);
   assert.deepEqual(match("groups/devs.yml"), ["group"]);
 });
+
+test("a prompt that's too long loses its oldest comments, notes and runs, never its end", async () => {
+  const { buildPrompt, buildFollowUpPrompt } = await import("../src/agents/prompt.ts");
+  const at = (index: number) => `2026-01-01T${String(Math.floor(index / 60)).padStart(2, "0")}:${String(index % 60).padStart(2, "0")}:00Z`;
+  const comments = (count: number) => Array.from({ length: count }, (_, index) => ({ author: "alice", body: `comment-${index}. ${"x".repeat(3000)}`, createdAt: at(index), fromOrchestrator: false }));
+  const thread = (count: number) => ({
+    kind: "issue" as const, number: 7, title: "A long thread", body: "THE ISSUE BODY", url: "https://github.test/acme/widgets/issues/7", author: "alice", state: "open", nodeId: "I", databaseId: 1,
+    defaultBranch: "main", relations: NO_RELATIONS, comments: comments(count), reviewComments: [], pull: null,
+  });
+  const task = { id: 9, owner: "acme", repo: "widgets", threadKind: "issue", threadNumber: 7, requestedBy: "alice", requestText: "THE REQUEST" } as never;
+  const run = (id: number) => ({ id, threadKind: "issue", threadNumber: 7, status: "succeeded", createdAt: at(id), finishedAt: at(id), requestedBy: "alice", requestText: `run-${id}`, resultText: "y".repeat(2500) }) as never;
+  const workspace = { branch: "agent/coder/issue-7", baseBranch: "main", canPush: true, willPush: true };
+  const board = {
+    board: "product", column: "Build", role: "Build it.", moves: ["Review"], needsHuman: "Needs human",
+    handoffs: Array.from({ length: 12 }, (_, index) => ({ agent: "planner", fromColumn: "Plan", toColumn: "Build", note: `note-${index}. ${"z".repeat(2900)}`, ts: at(index) })),
+  };
+  const agent = { name: "coder", handle: "aorch-coder" };
+
+  const long = buildPrompt({ agent, task, thread: thread(60), history: Array.from({ length: 10 }, (_, index) => run(index + 1)), workspace, board });
+  assert.ok(long.length <= 100_000, String(long.length));
+  assert.ok(long.endsWith("It is posted as a comment."), "the reply instructions are still the end");
+  assert.match(long, /## Your stage on the product board: "Build"/);
+  for (const kept of ["THE REQUEST", "THE ISSUE BODY", "comment-59.", "note-11.", "run-10"]) assert.ok(long.includes(kept), kept);
+  assert.ok(!long.includes("comment-0."), "the oldest comment went");
+  const lost = Number(/_\((\d+) earlier comments left out to keep this prompt short; the thread has them: https:\/\/github\.test\/acme\/widgets\/issues\/7\)_/.exec(long)?.[1]);
+  assert.ok(lost > 20 && long.includes(`comment-${lost}.`) && !long.includes(`comment-${lost - 1}.`), `${lost} left out, the rest kept in order`);
+  assert.match(long, /_\(\d+ earlier notes? left out/);
+  assert.doesNotMatch(long, /cut here/);
+
+  // Room nobody else needs goes to the conversation: with no notes or runs, more comments fit.
+  const plain = buildPrompt({ agent, task, thread: thread(60), history: [], workspace });
+  assert.ok(Number(/_\((\d+) earlier comments/.exec(plain)?.[1]) < lost);
+
+  const short = buildPrompt({ agent, task, thread: thread(3), history: [run(1)], workspace, board: { ...board, handoffs: board.handoffs.slice(0, 2) } });
+  assert.doesNotMatch(short, /left out/);
+  for (const kept of ["comment-0.", "comment-2.", "note-0.", "run-1"]) assert.ok(short.includes(kept), kept);
+
+  const followUp = buildFollowUpPrompt({ agent, task, thread: thread(60), workspace, since: null, interrupted: false, board });
+  assert.ok(followUp.length <= 100_000 && followUp.endsWith("It is posted as a comment."));
+  assert.ok(followUp.includes("comment-59.") && !followUp.includes("comment-0.") && followUp.includes("note-11."));
+  assert.match(followUp, /_\(\d+ earlier comments left out/);
+
+  // Even a request and description that fill the prompt leave the end intact.
+  const huge = buildPrompt({ agent, task: { ...(task as object), requestText: "r".repeat(30_000) } as never, thread: { ...thread(40), body: "b".repeat(30_000) }, history: [], workspace, board: { ...board, role: "ROLE ".repeat(12_000) } });
+  assert.ok(huge.length <= 100_000 && huge.endsWith("It is posted as a comment."));
+  assert.match(huge, /## Your stage on the product board/);
+});

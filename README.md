@@ -301,7 +301,7 @@ Only people with write access (`TRIGGER_MIN_PERMISSION`) can start agents; bots,
 
 **Dry runs**: to try a change to an agent's profile (its prompt, skills, tools, model), open one of its past tasks and press **Dry run**. The same request runs again with the agent's current profile, in a checkout and session of its own, and nothing is changed on GitHub or the board: tools that would post, push, open or move something only record what they would have done ("Dry run: would …" in the log). Compare its reply with the original's. Dry runs count toward spending, but not toward outcomes, the thread's memory or its live session.
 
-**Memory**: every run (request, reply, branch, PR, session) is stored per thread. A live agent keeps its Claude session open between tasks on the same thread (`LIVE_SESSION_IDLE_MINUTES`); a closed session is resumed by id next time, and a fresh one gets the thread's history in its prompt. **History** in the admin UI shows it all and can make an agent forget a thread.
+**Memory**: every run (request, reply, branch, PR, session) is stored per thread. A live agent keeps its Claude session open between tasks on the same thread (`LIVE_SESSION_IDLE_MINUTES`); a closed session is resumed by id next time, and a fresh one gets the thread's history in its prompt. When a thread is too long for the prompt, the oldest comments (then the oldest inline comments, handoff notes and earlier runs) are left out and the prompt says how many; the request, the description, the board stage and the instructions always stay. **History** in the admin UI shows it all and can make an agent forget a thread.
 
 ## Configuration
 
