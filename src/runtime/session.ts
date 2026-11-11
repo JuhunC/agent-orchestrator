@@ -19,6 +19,10 @@ export interface TurnOutcome {
   error: string | null;
   cancelled: boolean;
   timedOut: boolean;
+  /** Stopped because nothing happened for too long (a hung command or request). */
+  stalled: boolean;
+  /** Stopped at a limit from the agent's profile (max_turns, max_budget_usd): more of the same wouldn't help. */
+  capped: boolean;
   /** The process ended before the turn finished. */
   exited: boolean;
   toolEvents: number;
@@ -36,6 +40,13 @@ export function serverErrorOf(text: string, apiErrors: string[]): string | null 
   }
   const line = text.split("\n").find((candidate) => SERVER_ERROR.test(candidate));
   return line ? line.trim().slice(0, 200) : null;
+}
+
+/** "45 minutes", "1 minute", "20 seconds": a time limit in words. */
+export function minutes(ms: number): string {
+  if (ms < 60_000) return `${Math.round(ms / 1000)} seconds`;
+  const count = Math.round(ms / 60_000);
+  return `${count} minute${count === 1 ? "" : "s"}`;
 }
 
 /** Messages for the agent, delivered one per task; the SDK reads it as an async iterable. */
@@ -90,6 +101,8 @@ export class AgentSession {
   private current: CurrentTurn | null = null;
   private rejectedUntil: number | null = null;
   private done = false;
+  /** When the session last said anything (any SDK message), for the stall watchdog. */
+  private lastMessageAt = Date.now();
   /** The session's running totals after the previous turn (from an earlier run, when resumed). */
   private totals: SessionTotals | null;
   private readonly rel: (path: unknown) => string;
@@ -146,6 +159,7 @@ export class AgentSession {
   onSessionId: ((id: string) => void) | null = null;
 
   private handle(message: SDKMessage): void {
+    this.lastMessageAt = Date.now();
     if ("session_id" in message && message.session_id && message.session_id !== this.sessionId) {
       this.sessionId = message.session_id;
       this.onSessionId?.(message.session_id);
@@ -199,7 +213,8 @@ export class AgentSession {
         const used = turnUsage(this.totals, totals);
         this.totals = totals;
         if (this.sessionId) saveTotals(this.sessionId, totals);
-        turn.finish({ result: text, costUsd: used.costUsd, usage: used.usage, isError: !success || message.is_error, error });
+        const capped = message.subtype === "error_max_turns" || message.subtype === "error_max_budget_usd";
+        turn.finish({ result: text, costUsd: used.costUsd, usage: used.usage, isError: !success || message.is_error, error, capped });
         return;
       }
       default:
@@ -207,8 +222,11 @@ export class AgentSession {
     }
   }
 
-  /** Sends one prompt and resolves when Claude finishes that turn. */
-  turn(prompt: string, onEvent: EventSink, signal: AbortSignal, timeoutMs: number): Promise<TurnOutcome> {
+  /**
+   * Sends one prompt and resolves when Claude finishes that turn. The turn is stopped after
+   * `timeoutMs`, and (with `stallMs`) when the session says nothing at all for that long.
+   */
+  turn(prompt: string, onEvent: EventSink, signal: AbortSignal, timeoutMs: number, stallMs = 0): Promise<TurnOutcome> {
     if (this.done) {
       return Promise.resolve(this.outcome({ isError: true, exited: true, error: this.stderrTail.at(-1) ?? "The agent session has ended" }, 0, []));
     }
@@ -222,10 +240,18 @@ export class AgentSession {
       };
       const timer = setTimeout(() => {
         ended = { timedOut: true };
-        onEvent("error", `Timed out after ${Math.round(timeoutMs / 60_000)} minutes`);
+        onEvent("error", `Timed out after ${minutes(timeoutMs)}`);
         interrupt();
       }, timeoutMs);
       timer.unref();
+      this.lastMessageAt = Date.now();
+      const watchdog = stallMs > 0 ? setInterval(() => {
+        if (Date.now() - this.lastMessageAt < stallMs || ended.timedOut || ended.cancelled || ended.stalled) return;
+        ended = { stalled: true };
+        onEvent("error", `Nothing happened for ${minutes(stallMs)}: stopped the turn`);
+        interrupt();
+      }, Math.max(250, Math.min(stallMs / 4, 15_000))) : null;
+      watchdog?.unref();
       const onAbort = () => {
         ended = { cancelled: true };
         interrupt();
@@ -238,6 +264,7 @@ export class AgentSession {
         apiErrors: [],
         finish: (outcome) => {
           clearTimeout(timer);
+          if (watchdog) clearInterval(watchdog);
           signal.removeEventListener("abort", onAbort);
           resolve(this.outcome({ ...outcome, ...ended }, turn.toolEvents, turn.apiErrors));
         },
@@ -253,7 +280,7 @@ export class AgentSession {
     const isError = partial.isError ?? false;
     let limit: DetectedLimit | null = null;
     let serverError: string | null = null;
-    if (isError && !partial.cancelled && !partial.timedOut) {
+    if (isError && !partial.cancelled && !partial.timedOut && !partial.stalled) {
       const text = [partial.error ?? "", partial.result ?? "", ...this.stderrTail].join("\n");
       limit = detectUsageLimit(text);
       if (this.rejectedUntil) limit = { resetAt: new Date(this.rejectedUntil), message: limit?.message ?? "Usage limit reached", kind: "usage" };
@@ -269,6 +296,8 @@ export class AgentSession {
       error: partial.error ?? null,
       cancelled: partial.cancelled ?? false,
       timedOut: partial.timedOut ?? false,
+      stalled: partial.stalled ?? false,
+      capped: partial.capped ?? false,
       exited: partial.exited ?? false,
       toolEvents,
       limit,

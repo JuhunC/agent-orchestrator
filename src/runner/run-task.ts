@@ -12,7 +12,8 @@ import { editComment, fetchThread, postComment, type ThreadContext } from "../gi
 import { errorMessage, log } from "../log.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import { commitAndPush, openOrUpdatePullRequest, PullRequestLimitError, type BoardContext, type SubIssueMove, type ToolContext } from "../runtime/github-tools.ts";
-import { sessions } from "../runtime/manager.ts";
+import { sessions, type RunTurnOutcome } from "../runtime/manager.ts";
+import { minutes } from "../runtime/session.ts";
 import { cardMoveProblems, cardWorkType, moveProblems } from "../runtime/evidence.ts";
 import { agentEnv, fallbackModels, taskEnv } from "../runtime/options.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
@@ -20,7 +21,7 @@ import { RELATION_NAME, runRelatedStart } from "../runtime/related-agents.ts";
 import { addUsage } from "../runtime/usage.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
 import { baseForTask } from "../runtime/base-branch.ts";
-import type { EventKind, Task, ThreadRef } from "../types.ts";
+import type { EventKind, Task, TaskUsage, ThreadRef } from "../types.ts";
 import { git } from "./git.ts";
 import { settleInbox } from "./inbox.ts";
 import { retryTime, type DetectedLimit } from "./limits.ts";
@@ -46,6 +47,39 @@ const FALLBACK_PROMPT =
 
 const RETRY_PROMPT =
   "The model service failed while you were working, so your last turn was cut off. Continue the task from where you left off: your earlier work in this session and the working copy are intact. Finish as instructed before.";
+
+/** The model service refused the request itself (a bad key, an invalid request): asking again gets the same answer. */
+const REFUSED = /API Error: 4\d\d|invalid_request_error|authentication_error|permission_error|not_found_error|Invalid API key|prompt is too long|credit balance/i;
+
+/**
+ * A turn that ended badly but is worth continuing: out of time, hung, or an error. Not when it
+ * was cancelled, hit a usage limit (those wait), reached a limit its profile sets (max_turns,
+ * max_budget_usd), or the model service kept failing (already retried).
+ */
+function recoverable(outcome: RunTurnOutcome): boolean {
+  if (outcome.cancelled || outcome.limit || outcome.capped || outcome.serverError) return false;
+  if (outcome.timedOut || outcome.stalled) return true;
+  return outcome.isError && !REFUSED.test(`${outcome.error ?? ""}\n${outcome.result ?? ""}`);
+}
+
+/** What the agent is told when its task continues after such a turn. */
+function recoveryPrompt(outcome: RunTurnOutcome, stallMs: number, wrapUpMs: number): string {
+  const intact = "Your earlier work in this session and the working copy are intact.";
+  if (outcome.timedOut) {
+    return `You ran out of time: this task's time limit was reached and your last turn was stopped. ${intact} You get ${minutes(wrapUpMs)} more to wrap up, not to carry on as before: commit and publish what is worth keeping, then reply as instructed before with what is done, what is left, and how to continue. Don't start anything long.`;
+  }
+  if (outcome.stalled) {
+    return `Your last turn was stopped because nothing happened for ${minutes(stallMs)}: a command or a request seems to have hung. ${intact} Continue the task from where you left off, but don't run the step that hung the same way again (give long commands a time limit, or run them in the background). Finish as instructed before.`;
+  }
+  return `Your last turn stopped with an error:\n\n${(outcome.error ?? "The agent stopped with an error.").slice(0, 2000)}\n\n${intact} Continue the task from where you left off and finish as instructed before. If the same error would stop you again, don't repeat it: reply with what is done and what is in the way.`;
+}
+
+const SETUP_ERROR = /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENOTFOUND|socket hang up|fetch failed|network error|timed out|\b50[0234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|Could not resolve host|Connection (reset|refused)|The remote end hung up|early EOF|RPC failed|secondary rate limit/i;
+
+/** Does a failure before the agent started look temporary (the network, GitHub having a bad moment)? */
+export function temporarySetupError(message: string): boolean {
+  return SETUP_ERROR.test(message);
+}
 
 /** Waits, unless the task is cancelled first. Resolves false when cancelled. */
 function wait(ms: number, signal: AbortSignal): Promise<boolean> {
@@ -75,7 +109,7 @@ async function unpublishedWork(workspace: Workspace): Promise<{ dirty: boolean; 
 /** Runs one task from start to finish. Never throws. */
 export async function executeTask(initial: Task, signal: AbortSignal): Promise<void> {
   const startedAt = Date.now();
-  let task = patch(initial.id, { status: "running", startedAt: new Date(startedAt).toISOString(), error: null, retryAt: null });
+  let task = patch(initial.id, { status: "running", startedAt: new Date(startedAt).toISOString(), error: null, retryAt: null, waitReason: null });
   const profiles = loadProfiles();
   const profile = profiles.agents.find((candidate) => candidate.name === task.agent) ?? null;
   const ref: ThreadRef = { owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber };
@@ -86,6 +120,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
   // Past setup, so a cancellation is worth telling the thread about.
   let begun = false;
   let boardContext: BoardContext | null = null;
+  // Once the agent has had a turn, a failure is no longer a setup failure.
+  let sessionStarted = false;
   const target = () => ({ owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber, threadNodeId: thread?.nodeId });
   // The body last posted, so an edit that changes nothing isn't sent.
   let lastProgress = "";
@@ -198,6 +234,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     if (usingFallback) onEvent("system", `The usage limit is in force, so this runs on the fallback model ${startModel}`);
     state.phase = "working";
     throttle.markDirty();
+    const timeoutMs = (profile.timeoutMinutes ?? config.defaultTimeoutMinutes) * 60_000;
+    const stallMs = config.taskStallMinutes * 60_000;
     const runOptions = {
       task,
       profile,
@@ -216,46 +254,67 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       effort: column?.effort ?? null,
       onEvent,
       signal,
-      timeoutMs: (profile.timeoutMinutes ?? config.defaultTimeoutMinutes) * 60_000,
+      timeoutMs,
+      stallMs,
     };
-    let outcome = await sessions.run(runOptions);
-    let costUsd = outcome.costUsd ?? 0;
-    let usage = outcome.usage;
-    // The model service failed to answer even after Claude Code's own retries: wait and continue
-    // the same session (the working copy is untouched), up to MODEL_ERROR_RETRIES times.
+    let costUsd = 0;
+    let usage: TaskUsage | null = null;
     let retries = 0;
-    while (outcome.serverError && !outcome.cancelled && retries < config.modelErrorRetries) {
-      retries++;
-      const delay = config.modelErrorRetryDelaySeconds * 2 ** (retries - 1);
-      onEvent("system", `The model service failed (${outcome.serverError}). Retrying in ${delay}s (${retries}/${config.modelErrorRetries})`);
-      if (!(await wait(delay * 1000, signal))) {
-        outcome = { ...outcome, cancelled: true };
-        break;
+    /**
+     * One turn of the session. When the model service fails to answer even after Claude Code's
+     * own retries, waits and continues the same session (the working copy is untouched), up to
+     * MODEL_ERROR_RETRIES times for the task.
+     */
+    const turn = async (changes: Partial<typeof runOptions> = {}): Promise<RunTurnOutcome> => {
+      const options = { ...runOptions, ...changes };
+      sessionStarted = true;
+      let result = await sessions.run(options);
+      costUsd += result.costUsd ?? 0;
+      usage = addUsage(usage, result.usage);
+      while (result.serverError && !result.cancelled && retries < config.modelErrorRetries) {
+        retries++;
+        const delay = config.modelErrorRetryDelaySeconds * 2 ** (retries - 1);
+        onEvent("system", `The model service failed (${result.serverError}). Retrying in ${delay}s (${retries}/${config.modelErrorRetries})`);
+        if (!(await wait(delay * 1000, signal))) return { ...result, cancelled: true };
+        result = await sessions.run({ ...options, resumeSessionId: result.sessionId ?? options.resumeSessionId, prompts: { full: prompts.full, followUp: RETRY_PROMPT } });
+        costUsd += result.costUsd ?? 0;
+        usage = addUsage(usage, result.usage);
       }
-      outcome = await sessions.run({
-        ...runOptions,
-        resumeSessionId: outcome.sessionId ?? runOptions.resumeSessionId,
-        prompts: { full: prompts.full, followUp: RETRY_PROMPT },
-      });
-      costUsd += outcome.costUsd ?? 0;
-      usage = addUsage(usage, outcome.usage);
-    }
+      return result;
+    };
+    const turnsBegan = Date.now();
+    let outcome = await turn();
+    // The prompt the task started with, whatever it was told later to continue.
+    const firstPrompt = outcome.prompt;
     // A usage limit on the model: carry on with the fallback model at once instead of pausing.
     if (outcome.limit && outcome.limit.kind !== "rate" && !outcome.cancelled && !usingFallback && fallbacks.length) {
       setLimit(retryTime(outcome.limit), outcome.limit.message);
       usingFallback = true;
       onEvent("system", `Usage limit reached (${outcome.limit.message}). Continuing with the fallback model ${fallbacks[0]}`);
-      outcome = await sessions.run({
-        ...runOptions,
-        model: fallbacks[0]!,
-        resumeSessionId: outcome.sessionId ?? runOptions.resumeSessionId,
-        prompts: { full: prompts.full, followUp: FALLBACK_PROMPT },
-      });
-      costUsd += outcome.costUsd ?? 0;
-      usage = addUsage(usage, outcome.usage);
+      outcome = await turn({ model: fallbacks[0]!, resumeSessionId: outcome.sessionId ?? runOptions.resumeSessionId, prompts: { full: prompts.full, followUp: FALLBACK_PROMPT } });
     }
+    // Out of time, gone silent or stopped with an error: before the task fails, the same session
+    // continues (TASK_FAILURE_RETRIES times), told what happened. After a timeout it only gets
+    // time to wrap up; otherwise what's left of the time limit, at least that much.
+    const wrapUpMs = Math.min(timeoutMs, Math.max(5 * 60_000, timeoutMs / 4));
+    const continued: string[] = [];
+    while (recoverable(outcome) && task.recoveries < config.taskFailureRetries) {
+      const why = outcome.timedOut ? "it ran out of time" : outcome.stalled ? "it went silent" : "it stopped with an error";
+      continued.push(why);
+      task = patch(task.id, { recoveries: task.recoveries + 1 });
+      onEvent("system", `Continuing the task because ${why}${outcome.timedOut || outcome.stalled ? "" : ` (${(outcome.error ?? "unknown error").split("\n")[0]!.slice(0, 200)})`} (${task.recoveries}/${config.taskFailureRetries})`);
+      state.note = outcome.timedOut ? `Ran out of time; it has ${minutes(wrapUpMs)} to wrap up.` : `Continuing after ${why.replace(/^it /, "")}.`;
+      throttle.markDirty();
+      outcome = await turn({
+        model: usingFallback ? fallbacks[0]! : runOptions.model,
+        resumeSessionId: outcome.sessionId ?? runOptions.resumeSessionId,
+        prompts: { full: prompts.full, followUp: recoveryPrompt(outcome, stallMs, wrapUpMs) },
+        timeoutMs: outcome.timedOut ? wrapUpMs : Math.max(wrapUpMs, timeoutMs - (Date.now() - turnsBegan)),
+      });
+    }
+    state.note = "";
     task = patch(task.id, {
-      prompt: outcome.prompt,
+      prompt: firstPrompt,
       sessionId: outcome.sessionId,
       // Add to earlier attempts (a usage-limit pause resumes the same task).
       costUsd: (task.costUsd ?? 0) + costUsd,
@@ -280,11 +339,14 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
     if (outcome.timedOut || outcome.isError) {
       const reason = outcome.timedOut
-        ? `Timed out after ${profile.timeoutMinutes ?? config.defaultTimeoutMinutes} minutes.`
-        : outcome.serverError
-          ? `The model service kept failing (${outcome.serverError})${retries ? ` after ${retries} ${retries === 1 ? "retry" : "retries"}` : ""}.`
-          : (outcome.error ?? "The agent stopped with an error.");
-      await finish("failed", outcome.result, reason);
+        ? `Timed out after ${minutes(continued.length ? wrapUpMs : timeoutMs)}${continued.length ? " of extra time" : ""}.`
+        : outcome.stalled
+          ? `Stopped because nothing happened for ${minutes(stallMs)} (a command or request seems to have hung).`
+          : outcome.serverError
+            ? `The model service kept failing (${outcome.serverError})${retries ? ` after ${retries} ${retries === 1 ? "retry" : "retries"}` : ""}.`
+            : (outcome.error ?? "The agent stopped with an error.");
+      const before = continued.length ? ` It had already been continued ${continued.length === 1 ? "once" : `${continued.length} times`} (${[...new Set(continued)].join(", ")}).` : "";
+      await finish("failed", outcome.result, `${reason}${before}`);
       return;
     }
 
@@ -400,9 +462,28 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       const account = await agentAccount(task.agent).catch(() => null);
       if (account?.login) message += ` (${task.agent} acts on GitHub as @${account.login}: check that this account can access ${task.owner}/${task.repo} and that its token is still valid, or remove the account from the agent to use the GitHub App.)`;
     }
+    // Before the agent started, something that looks temporary (the network, GitHub having a
+    // bad moment): the task tries again shortly instead of failing.
+    if (!sessionStarted && !signal.aborted && temporarySetupError(message) && task.recoveries < config.taskFailureRetries) {
+      log.warn("Task setup failed; trying again", { task: task.id, error: message });
+      await retrySetup(message);
+      return;
+    }
     log.error("Task failed", { task: task.id, error: message });
     onEvent("error", message);
     await finish("failed", task.resultText ?? "", message);
+  }
+
+  /** Setup failed in a way that looks temporary: queue the task again for a little later. */
+  async function retrySetup(message: string) {
+    const until = new Date(Date.now() + config.modelErrorRetryDelaySeconds * 3000);
+    const at = until.toISOString().slice(11, 19);
+    onEvent("system", `Couldn't get started (${message.split("\n")[0]!.slice(0, 200)}). Trying again at ${at} UTC`);
+    state.phase = "retrying";
+    state.note = `Couldn't get started: _${message.split("\n")[0]!.slice(0, 200).replace(/[_*`]/g, "")}_. It tries again at **${at} UTC**.`;
+    task = patch(task.id, { status: "queued", retryAt: until.toISOString(), waitReason: "setup", recoveries: task.recoveries + 1, error: null });
+    await throttle.flush(true);
+    await throttle.stop();
   }
 
   /** After the reply: move the sub-issue cards the agent moved, and put the sub-issues it created on the board. */
@@ -468,7 +549,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     onEvent("system", `${limit.message}. This task retries at ${at} UTC; others carry on`);
     state.phase = "waiting";
     state.note = `The model service is rate limiting requests. This continues automatically at **${at} UTC**.`;
-    task = patch(task.id, { status: "queued", retryAt: until.toISOString(), attempts: task.attempts + 1, error: null });
+    task = patch(task.id, { status: "queued", retryAt: until.toISOString(), waitReason: "rate_limit", attempts: task.attempts + 1, error: null });
     await throttle.flush(true);
     await throttle.stop();
   }
@@ -484,7 +565,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     onEvent("system", `Usage limit reached (${limit.message}). Paused until ${at} UTC`);
     state.phase = "waiting";
     state.note = `Hit the model service's usage limit: _${limit.message.replace(/[_*`]/g, "")}_. It continues automatically at **${at} UTC**${until.toDateString() !== new Date().toDateString() ? ` on ${until.toISOString().slice(0, 10)}` : ""}.`;
-    task = patch(task.id, { status: "queued", retryAt: until.toISOString(), attempts: task.attempts + 1, error: null });
+    task = patch(task.id, { status: "queued", retryAt: until.toISOString(), waitReason: "usage_limit", attempts: task.attempts + 1, error: null });
     await throttle.flush(true);
     await throttle.stop();
   }

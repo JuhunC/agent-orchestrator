@@ -44,6 +44,8 @@ export interface Task {
   forgotten: boolean;
   /** Set while the task waits for a usage limit to reset. */
   retryAt: string | null;
+  /** Why it waits for retryAt: the usage limit, a rate limit, or a start that failed and is tried again. */
+  waitReason: "usage_limit" | "rate_limit" | "setup" | null;
   /** How many times a usage limit paused the task. */
   attempts: number;
   /** Commit the first attempt started from, so retries count earlier commits. */
@@ -61,6 +63,8 @@ export interface Task {
   dryRun: boolean;
   /** How many times the orchestrator restarted under this task (it resumes each time, up to RESTART_RESUMES). */
   restarts: number;
+  /** How many times it was continued after timing out, going silent or stopping with an error (up to TASK_FAILURE_RETRIES). */
+  recoveries: number;
   /** Fingerprint of the agent's profile that ran it, and the profiles folder's commit (see profiles/version.ts). */
   profileVersion: string | null;
   profileCommit: string | null;

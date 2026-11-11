@@ -7,7 +7,7 @@ import { githubThrottled } from "../github/app.ts";
 
 type Agent = { name: string };
 
-export type ProgressPhase = "queued" | "starting" | "working" | "waiting" | "publishing" | "succeeded" | "failed" | "cancelled";
+export type ProgressPhase = "queued" | "starting" | "working" | "waiting" | "retrying" | "publishing" | "succeeded" | "failed" | "cancelled";
 
 export interface ProgressState {
   phase: ProgressPhase;
@@ -66,6 +66,7 @@ const HEADLINE: Record<ProgressPhase, string> = {
   starting: "🔄 is getting ready",
   working: "🔄 is working on this",
   waiting: "⏸️ is paused until its usage limit resets",
+  retrying: "🔁 will try again shortly",
   publishing: "📤 is pushing its changes",
   succeeded: "✅ finished",
   failed: "❌ stopped with an error",

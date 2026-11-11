@@ -171,6 +171,10 @@ export interface Task {
   forgotten: boolean;
   retryAt: string | null;
   attempts: number;
+  /** Times it was continued after timing out, going silent or stopping with an error. */
+  restarts: number;
+  recoveries: number;
+  waitReason: "usage_limit" | "rate_limit" | "setup" | null;
   live: boolean;
   board: string | null;
   boardColumn: string | null;

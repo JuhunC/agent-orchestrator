@@ -117,6 +117,9 @@ addColumn("tasks", "started_by_task", "INTEGER");
 // Dry runs replay a task without changing anything on GitHub (see run-task.ts).
 addColumn("tasks", "dry_run", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "restarts", "INTEGER NOT NULL DEFAULT 0");
+// Times the task was continued after a timeout, a stall or an error (see run-task.ts).
+addColumn("tasks", "recoveries", "INTEGER NOT NULL DEFAULT 0");
+addColumn("tasks", "wait_reason", "TEXT");
 addColumn("tasks", "profile_version", "TEXT");
 addColumn("tasks", "profile_commit", "TEXT");
 // Set for runs a schedule started (see schedules/runner.ts).
@@ -239,6 +242,8 @@ function toTask(row: Row): Task {
     startedByTask: row.started_by_task === null || row.started_by_task === undefined ? null : Number(row.started_by_task),
     dryRun: Boolean(row.dry_run),
     restarts: Number(row.restarts ?? 0),
+    recoveries: Number(row.recoveries ?? 0),
+    waitReason: (row.wait_reason as Task["waitReason"]) ?? null,
     profileVersion: (row.profile_version as string | null) ?? null,
     profileCommit: (row.profile_commit as string | null) ?? null,
     scheduleId: row.schedule_id === null || row.schedule_id === undefined ? null : Number(row.schedule_id),
@@ -340,6 +345,8 @@ const TASK_COLUMNS: Record<string, string> = {
   boardRound: "board_round",
   startedByTask: "started_by_task",
   restarts: "restarts",
+  recoveries: "recoveries",
+  waitReason: "wait_reason",
   profileVersion: "profile_version",
   profileCommit: "profile_commit",
 };

@@ -102,7 +102,11 @@ class Scheduler {
   /** Recovers from a restart: tasks that were running go back in the queue to resume (or fail after RESTART_RESUMES). */
   async start(): Promise<void> {
     this.stopping = false;
-    for (const task of tasksWithStatus("running")) await recoverInterrupted(task);
+    for (const task of tasksWithStatus("running")) {
+      await recoverInterrupted(task);
+      // One that failed for good (restarted too often) leaves its card for a person.
+      if (getTask(task.id)?.status === "failed") void boardTaskSettled(task.id).catch((error) => log.warn("Board follow-up failed", { task: task.id, error: errorMessage(error) }));
+    }
     this.kick();
   }
 

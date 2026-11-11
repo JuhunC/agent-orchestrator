@@ -67,6 +67,8 @@ export interface RunTurnOptions {
   onEvent: EventSink;
   signal: AbortSignal;
   timeoutMs: number;
+  /** Stop the turn when the session says nothing for this long (0: never). */
+  stallMs?: number;
   /** The session's id, as soon as it's known (and again if it changes). */
   onSessionId?: (id: string) => void;
 }
@@ -231,7 +233,7 @@ class Sessions {
   }
 
   async run(options: RunTurnOptions): Promise<RunTurnOutcome> {
-    const { task, profile, env, prompts, context, onEvent, signal, timeoutMs } = options;
+    const { task, profile, env, prompts, context, onEvent, signal, timeoutMs, stallMs } = options;
     const key = sessionKey(task);
     const stableEnv = Object.fromEntries(Object.entries(env).filter(([name]) => !PER_TASK_ENV.has(name)));
     const configHash = hash({
@@ -265,10 +267,10 @@ class Sessions {
     this.changed();
     try {
       let prompt = reused || entry.session.resumed ? prompts.followUp : prompts.full;
-      let outcome = await entry.session.turn(prompt, onEvent, signal, timeoutMs);
+      let outcome = await entry.session.turn(prompt, onEvent, signal, timeoutMs, stallMs);
 
       // A resumed session that fails at once usually means the old conversation is gone.
-      const failedFast = outcome.isError && !outcome.cancelled && !outcome.timedOut && !outcome.limit && outcome.toolEvents === 0;
+      const failedFast = outcome.isError && !outcome.cancelled && !outcome.timedOut && !outcome.stalled && !outcome.limit && outcome.toolEvents === 0;
       if (failedFast && !reused && entry.session.resumed) {
         onEvent("system", `Couldn't resume the previous session (${outcome.error ?? "unknown error"}); starting a new one`);
         this.close(key, "resume failed");
@@ -277,7 +279,7 @@ class Sessions {
         entry.context.current = context;
         entry.session.onSessionId = options.onSessionId ?? null;
         prompt = prompts.full;
-        outcome = await entry.session.turn(prompt, onEvent, signal, timeoutMs);
+        outcome = await entry.session.turn(prompt, onEvent, signal, timeoutMs, stallMs);
       }
       entry.turns++;
       return { ...outcome, prompt, live: profile.live };
@@ -291,6 +293,8 @@ class Sessions {
         error: errorMessage(error),
         cancelled: false,
         timedOut: false,
+        stalled: false,
+        capped: false,
         exited: false,
         toolEvents: 0,
         limit: null,

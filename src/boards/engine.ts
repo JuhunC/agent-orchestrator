@@ -292,13 +292,34 @@ export async function startColumnAgent(board: Board, itemId: string, extra?: Col
 }
 
 /**
- * Called when any board task ends. For "all" columns, once every agent in the round is done,
- * the votes decide where the card goes: needs-human wins, then sending it back (the earliest
- * column), then the most common choice. If an agent failed or didn't vote, the card stays.
+ * A column's agent failed for good (its retries are used up): the card goes to the board's
+ * needs-human column with the reason, so it isn't left looking like someone is working on it.
+ * Only from where the agent left it, and not when another task has the card again.
+ */
+async function parkFailedCard(task: Task): Promise<void> {
+  if (task.status !== "failed" || task.dryRun || !task.board || !task.boardItemId || !task.boardColumn) return;
+  const board = loadBoards().boards.find((candidate) => candidate.name === task.board);
+  const row = getBoardItem(task.board, task.boardItemId);
+  if (!board?.needsHuman || !row || row.status === board.needsHuman) return;
+  if (row.status !== task.boardColumn && row.status !== board.columns[task.boardColumn]?.onStart) return;
+  if (activeBoardTasks(board.name, row.itemId).length) return;
+  const reason = (task.error ?? "it stopped with an error").split("\n")[0]!.slice(0, 300);
+  addHandoff(board.name, row.itemId, { taskId: task.id, agent: task.agent, fromColumn: task.boardColumn, toColumn: board.needsHuman, note: `${task.agent} failed here and didn't finish: ${reason}` });
+  await moveCard(board, row.itemId, board.needsHuman, { agentMove: false, trigger: false });
+  const gh = await installationClient(task.installationId);
+  await postComment(gh, { owner: row.owner, repo: row.repo, kind: row.kind, number: row.number }, `**${task.agent}** couldn't finish its work in **${task.boardColumn}**, so the card moved to **${board.needsHuman}** for a person to look at. Move it back to start the agent again.`).catch(() => undefined);
+}
+
+/**
+ * Called when any board task ends. A lone agent that failed sends its card to needs-human. For
+ * "all" columns, once every agent in the round is done, the votes decide where the card goes:
+ * needs-human wins, then sending it back (the earliest column), then the most common choice. If
+ * an agent failed, the card goes to needs-human; if one was stopped or didn't vote, it stays.
  */
 export async function boardTaskSettled(taskId: number): Promise<void> {
   const task = getTask(taskId);
-  if (!task?.board || !task.boardRound || !task.boardItemId) return;
+  if (!task?.board || !task.boardItemId) return;
+  if (!task.boardRound) return parkFailedCard(task);
   const tasks = tasksInRound(task.boardRound);
   if (tasks.some((member) => member.status === "queued" || member.status === "running")) return;
   if (!claimRound(task.boardRound)) return;
@@ -311,6 +332,13 @@ export async function boardTaskSettled(taskId: number): Promise<void> {
   const target = { owner: row.owner, repo: row.repo, kind: row.kind, number: row.number };
   if (missing.length || !votes.length) {
     const who = missing.map((member) => `${member.agent} (${member.status === "succeeded" ? "didn't move the card" : member.status})`).join(", ");
+    const failed = missing.filter((member) => member.status === "failed" && !member.dryRun);
+    if (failed.length && board.needsHuman) {
+      for (const member of failed) addHandoff(board.name, row.itemId, { taskId: member.id, agent: member.agent, fromColumn: task.boardColumn!, toColumn: board.needsHuman, note: `${member.agent} failed here and didn't finish: ${(member.error ?? "it stopped with an error").split("\n")[0]!.slice(0, 300)}` });
+      await moveCard(board, row.itemId, board.needsHuman, { agentMove: false, trigger: false }).catch((error) => log.warn("Could not move the card", { error: errorMessage(error) }));
+      await postComment(gh, target, `The agents in **${task.boardColumn}** didn't all finish: ${who}. Moved the card to **${board.needsHuman}** for a person to look at.`).catch(() => undefined);
+      return;
+    }
     await postComment(gh, target, `The agents in **${task.boardColumn}** didn't all finish: ${who}. The card stays here for a person to decide.`).catch(() => undefined);
     return;
   }

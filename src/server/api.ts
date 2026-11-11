@@ -711,6 +711,8 @@ export function registerApi(app: FastifyInstance): void {
         { name: "Comments per task", setting: "built in", value: String(MAX_COMMENTS_PER_TASK), what: "post_comment calls per task" },
         { name: "Sub-issues per task", setting: "built in", value: String(MAX_SUB_ISSUES_PER_TASK), what: "create_sub_issue calls per task" },
         { name: "Task timeout", setting: "TASK_TIMEOUT_MINUTES", value: `${config.defaultTimeoutMinutes} min`, what: "a task is stopped after this long (agents can set their own timeout_minutes)" },
+        { name: "Failure retries", setting: "TASK_FAILURE_RETRIES", value: config.taskFailureRetries ? String(config.taskFailureRetries) : "off", what: "a task that timed out, went silent or stopped with an error continues in the same session this many times before it fails" },
+        { name: "Silence before a task is stopped", setting: "TASK_STALL_MINUTES", value: config.taskStallMinutes ? `${config.taskStallMinutes} min` : "never", what: "a task whose agent does nothing at all for this long is taken to hang: it's stopped and counts as a failure to retry" },
         { name: "Agents at once", setting: "MAX_CONCURRENT_TASKS", value: String(scheduler.maxConcurrent), what: "tasks running at the same time" },
         { name: "Time between scheduled runs", setting: "SCHEDULE_MIN_MINUTES", value: `${config.scheduleMinMinutes} min`, what: "the shortest gap a schedule may have between two runs" },
         { name: "Schedules per agent", setting: "SCHEDULES_PER_AGENT", value: config.schedulesPerAgent ? String(config.schedulesPerAgent) : "no limit", what: "schedules one agent may have, its agent.md ones included" },

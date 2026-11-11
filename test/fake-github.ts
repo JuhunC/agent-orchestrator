@@ -37,6 +37,8 @@ export class FakeGitHub {
   userTokens = new Map<string, { login: string; id: number; name?: string; push?: boolean; expires?: string }>();
   /** The next this many comment writes get GitHub's "secondary rate limit" answer (retry after 1 s). */
   secondaryLimit = 0;
+  /** The next this many GETs of an issue get a 502 (Octokit retries each request three times itself). */
+  badGateway = 0;
   /** Who added each 👀 reaction. */
   reactionsBy: string[] = [];
   issues = new Map<number, FakeIssue>();
@@ -191,6 +193,11 @@ export class FakeGitHub {
     if (this.secondaryLimit > 0 && method !== "GET" && /\/comments/.test(path)) {
       this.secondaryLimit--;
       return { status: 403, body: { message: "You have exceeded a secondary rate limit. Please wait a few minutes before you try again." }, headers: { "retry-after": "1" } };
+    }
+
+    if (this.badGateway > 0 && method === "GET" && /^\/repos\/[^/]+\/[^/]+\/issues\/\d+$/.test(path)) {
+      this.badGateway--;
+      return { status: 502, body: { message: "Bad Gateway" } };
     }
 
     if (method === "POST" && (match = path.match(/^\/app\/installations\/(\d+)\/access_tokens$/))) {

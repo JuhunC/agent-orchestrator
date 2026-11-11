@@ -11,6 +11,12 @@ function int(name: string, fallback: number): number {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+/** Like int, but fractions are allowed (minutes given as 0.5). */
+function num(name: string, fallback: number): number {
+  const parsed = Number(env(name, String(fallback)));
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function list(name: string): string[] {
   return env(name)
     .split(/[\s,]+/)
@@ -142,6 +148,12 @@ export const config = {
   // times by the orchestrator, waiting MODEL_ERROR_RETRY_DELAY_SECONDS (doubling) in between.
   modelErrorRetries: Math.max(0, int("MODEL_ERROR_RETRIES", 3)),
   modelErrorRetryDelaySeconds: Math.max(1, int("MODEL_ERROR_RETRY_DELAY_SECONDS", 20)),
+  // A task that timed out, went silent or stopped with an error continues in the same session
+  // this many times (told what happened) before it fails. 0: it fails at once.
+  taskFailureRetries: Math.max(0, int("TASK_FAILURE_RETRIES", 1)),
+  // A task whose agent does nothing at all for this long (no reply, no tool call, no tool result)
+  // is taken to hang: its turn is stopped and it counts as a failure to retry. 0 = never.
+  taskStallMinutes: Math.max(0, num("TASK_STALL_MINUTES", 30)),
   // What agents run instead of the Claude Code bundled with the Agent SDK. It must take the same
   // flags and speak the same stream-json protocol. Empty = the bundled one.
   claudeCodeExecutable: executable("CLAUDE_CODE_EXECUTABLE"),

@@ -189,8 +189,23 @@ export function TaskDetail({ id }: { id: number }) {
 
       {task.error && task.status !== "succeeded" && <Notice tone="error" title={task.error} />}
       {task.status === "queued" && task.retryAt && (
-        <Notice title="Waiting for the usage limit to reset." action={<Button label="Run now" onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)} />}>
-          It continues automatically at {new Date(task.retryAt).toLocaleString()} (attempt {task.attempts + 1}).
+        <Notice
+          tone={task.waitReason === "setup" ? "info" : "warning"}
+          title={task.waitReason === "setup" ? "It couldn't get started, and tries again shortly." : task.waitReason === "rate_limit" ? "Waiting because the model service is rate limiting requests." : "Waiting for the usage limit to reset."}
+          action={<Button label="Run now" onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)} />}
+        >
+          {task.waitReason === "setup"
+            ? `What stopped it looked temporary (the log below has it). It starts again at ${new Date(task.retryAt).toLocaleString()}.`
+            : `It continues automatically at ${new Date(task.retryAt).toLocaleString()} (attempt ${task.attempts + 1}).`}
+        </Notice>
+      )}
+      {task.recoveries > 0 && task.status !== "queued" && (
+        <Notice tone="info" title={`Continued ${task.recoveries === 1 ? "once" : `${task.recoveries} times`} after a failure`}>
+          {task.status === "running"
+            ? "It ran out of time, went silent or stopped with an error, so it carries on in the same session, told what happened. The log below shows where."
+            : task.status === "succeeded"
+              ? "It ran out of time, went silent or stopped with an error on the way, and finished after carrying on in the same session. The log below shows where."
+              : "It ran out of time, went silent or stopped with an error, and carrying on in the same session didn't get it through. The log below shows where."}
         </Notice>
       )}
 
@@ -300,6 +315,9 @@ export function TaskDetail({ id }: { id: number }) {
               ],
               ["Session", task.sessionId ? <Code size="inherit">{task.sessionId}</Code> : "—"],
               ["Exit code", task.exitCode ?? "—"],
+              ...(task.recoveries || task.restarts
+                ? ([["Continued", [task.recoveries ? `${task.recoveries}× after a failure` : "", task.restarts ? `${task.restarts}× after a restart` : ""].filter(Boolean).join(" · ")]] as [string, string][])
+                : []),
               ...(task.costUsd !== null ? ([["Cost", `$${task.costUsd.toFixed(4)}`]] as [string, string][]) : []),
               ["Thread history", <A to={`/history/${task.owner}/${task.repo}/${task.threadKind}/${task.threadNumber}`}>All runs on this thread</A>],
             ]}
