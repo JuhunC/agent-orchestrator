@@ -40,7 +40,8 @@ import { wakeTask } from "../runner/waits.ts";
 import { listIncidents, renderMetrics } from "../runner/incidents.ts";
 import { outcomeReport } from "../runner/outcomes.ts";
 import { MAX_COMMENTS_PER_TASK, MAX_SUB_ISSUES_PER_TASK } from "../runtime/github-tools.ts";
-import { MAX_RELATED_STARTS_PER_TASK } from "../runtime/related-agents.ts";
+import { MAX_RELATED_STARTS_PER_TASK, MAX_ROUTES_PER_TASK } from "../runtime/related-agents.ts";
+import { routing, setRouting, triageProblem } from "../routing.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { loadProfiles, setProfileEnabled } from "../profiles/loader.ts";
 import { configReference } from "../profiles/reference.ts";
@@ -84,6 +85,8 @@ function agentView(profile: Profile) {
     baseBranch: describeBaseSetting(profile.github.baseBranch),
     /** Whether it posts live activity: its github.live_activity, else the Settings default. */
     liveActivity: liveActivityFor(profile),
+    /** It's the triage agent (Settings → Routing): new issues that name no agent come to it. */
+    triage: routing().agent === profile.name,
     dir: undefined,
   };
 }
@@ -151,6 +154,8 @@ function settingsView() {
     spendBlocked: spendBlockReason(),
     /** Live activity comments for agents that don't set github.live_activity. */
     liveActivity: liveActivityDefault(),
+    /** The triage agent for new issues that name no agent, and why it wouldn't start. */
+    routing: { ...routing(), problem: triageProblem() },
   };
 }
 
@@ -713,9 +718,25 @@ export function registerApi(app: FastifyInstance): void {
   app.get("/api/settings", async () => ({ ...settingsView(), setup: await setupView() }));
 
   app.put<{
-    Body: { paused?: boolean; maxConcurrent?: number; liveIdleMinutes?: number; maxLiveSessions?: number; spendLimitDailyUsd?: number | null; spendLimitMonthlyUsd?: number | null; liveActivity?: boolean };
+    Body: {
+      paused?: boolean;
+      maxConcurrent?: number;
+      liveIdleMinutes?: number;
+      maxLiveSessions?: number;
+      spendLimitDailyUsd?: number | null;
+      spendLimitMonthlyUsd?: number | null;
+      liveActivity?: boolean;
+      routing?: { agent?: string | null; repos?: string[] };
+    };
   }>("/api/settings", async (request, reply) => {
     if (request.body && "liveActivity" in request.body && typeof request.body.liveActivity !== "boolean") return reply.code(400).send({ error: "liveActivity must be true or false" });
+    if (request.body && "routing" in request.body) {
+      const next = request.body.routing;
+      if (!next || typeof next !== "object" || (next.repos !== undefined && !Array.isArray(next.repos))) return reply.code(400).send({ error: "routing must be { agent, repos }" });
+      const result = setRouting(next);
+      if (typeof result === "string") return reply.code(400).send({ error: result });
+      bus.publish({ type: "agents" });
+    }
     if (typeof request.body?.paused === "boolean") scheduler.setPaused(request.body.paused);
     if (typeof request.body?.liveActivity === "boolean") setLiveActivityDefault(request.body.liveActivity);
     const limits: { dailyUsd?: number | null; monthlyUsd?: number | null } = {};
@@ -751,8 +772,9 @@ export function registerApi(app: FastifyInstance): void {
       global: [
         { name: "Spending per day", setting: "SPEND_LIMIT_DAILY_USD", value: money(spend.dailyUsd), what: "new tasks wait until the next UTC day once agents have spent this" },
         { name: "Spending per month", setting: "SPEND_LIMIT_MONTHLY_USD", value: money(spend.monthlyUsd), what: "new tasks wait until the next UTC month" },
-        { name: "Agents starting agents", setting: "MAX_AGENT_CHAIN", value: config.maxAgentChain === 0 ? "off" : String(config.maxAgentChain), what: "how many agents in a row may start each other on related issues (start_related_agent), counted through board moves" },
+        { name: "Agents starting agents", setting: "MAX_AGENT_CHAIN", value: config.maxAgentChain === 0 ? "off" : String(config.maxAgentChain), what: "how many agents in a row may start each other on related issues (start_related_agent) or pass a thread on (route_to_agent), counted through board moves" },
         { name: "Related starts per task", setting: "built in", value: String(MAX_RELATED_STARTS_PER_TASK), what: "agents one task may start on related issues" },
+        { name: "Routes per task", setting: "built in", value: String(MAX_ROUTES_PER_TASK), what: "agents one task may pass its thread to (route_to_agent); MAX_AGENT_CHAIN limits how often it's passed on in a row" },
         { name: "Pull requests per issue", setting: "MAX_PULL_REQUESTS_PER_ISSUE", value: config.maxPullRequestsPerIssue ? String(config.maxPullRequestsPerIssue) : "no limit", what: "pull requests agents may open for one issue, closed ones included" },
         { name: "Open agent PRs per repository", setting: "MAX_OPEN_AGENT_PRS_PER_REPO", value: config.maxOpenAgentPullsPerRepo ? String(config.maxOpenAgentPullsPerRepo) : "no limit", what: "past it, board and agent-started work that would open another pull request waits until some are merged or closed" },
         { name: "Comments per task", setting: "built in", value: String(MAX_COMMENTS_PER_TASK), what: "post_comment calls per task" },

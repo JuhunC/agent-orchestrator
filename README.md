@@ -101,6 +101,7 @@ github:
   parent_branch: true          # a sub-issue branches from and merges into its parent's branch
   # base_branch: develop       # optional: pull requests go here instead of the default branch (see below)
   start_related: false         # start_related_agent: true, or some of [parent, sub_issue, blocked_by, blocks]
+  route: false                 # route_to_agent: pass this thread to another agent when the task finishes
   # account_token_env: CODER_GITHUB_TOKEN  # optional: act as this GitHub account (see below)
 max_turns: 300
 max_budget_usd: 20
@@ -163,6 +164,7 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 | `link_issue` | `relations: true`: add or remove `blocked_by`, `blocks`, `parent` or `sub_issue` links to another issue |
 | `merge_into_parent` | `merge_into_parent: true`: merge this sub-issue's pushed work into the parent's branch with a merge commit, and close the sub-issue |
 | `start_related_agent` | `start_related`: when this task finishes, start the agent responsible for a related issue (parent, sub-issue, blocker, or an issue this one blocks) with a message |
+| `route_to_agent` | `route: true`, and always for the triage agent: when this task finishes, start another agent on this same thread, with a reason and instructions (see [Routing](#routing)) |
 | `create_schedule`, `list_schedules`, `update_schedule`, `delete_schedule` | `can_schedule` (on by default): run itself again and again on a timetable, on this thread or another issue (see [Schedules](#schedules)) |
 
 **Wikis** have no REST API: each is a git repository (`<repo>.wiki.git`), so the orchestrator keeps a checkout under `DATA_DIR/wikis` and pushes page changes with the installation token (the App's `contents: write` permission covers it). GitHub creates a wiki's repository only when its first page is saved, so turn on Wikis in the repository settings and create the first page in the web UI once. If someone edits the wiki at the same moment, the write is redone on top of their version.
@@ -216,6 +218,18 @@ An agent can hand work over to a related issue: a sub-issue that merged its work
 - **When.** When the asking task finishes, and only if it succeeds: after its card moves and after its issue is closed, so the other agent sees the finished work. An agent already working on the related issue gets the message instead, and one already queued there gets it added to its request.
 - **Loops.** A task started this way records which task started it, and so does a board stage an agent's card move started. Once `MAX_AGENT_CHAIN` (default 3) agents have started each other in a row, counting through board moves in between, the last one can't start another. Each task can start at most 5.
 - Only issues related on GitHub count; link others first with `link_issue`. A task's page shows its **Chain**: the tasks that led to it and the ones it started, across issues and board stages. The related issue gets the usual progress comment.
+
+### Routing
+
+Work doesn't have to name its agent. Choose a **triage agent** under **Settings → Routing** (or with `TRIAGE_AGENT`), and a new issue that mentions and assigns no agent goes to it. It reads the issue, decides whose kind of work it is, and passes it on with `route_to_agent`: the agent it chose starts on the same issue, with the triage agent's reason and instructions, the person who opened the issue as the requester, and the issue's priority. The triage agent's comment says who took it and why.
+
+- **What it chooses by.** Its prompt lists every other agent that is switched on, with its `description` and how many tasks it has running and waiting, so write each description as the work that agent should get. Between agents that fit equally, it takes the one with less to do. An issue no agent fits stays with a person: the triage agent reports itself blocked and says what it needs to know.
+- **The triage agent** is an ordinary agent.md. Make it cheap and read-only: a small model, `push: false`, `pull_request: false`, `finalize: false`, a low `max_turns`. It needs no `route: true`.
+- **Where.** In every repository the App is installed on, or only in the ones listed in Settings (`TRIAGE_REPOS`): `owner/name`, or `owner/*`. Only issues opened by people who may start agents (`TRIGGER_MIN_PERMISSION`) are triaged, and never ones from blocked users.
+- **Other agents can pass work on too.** With `route: true` in its `github` block, an agent that finds a request isn't its kind of work (a front-end agent asked about a database migration) passes the thread to the agent that fits instead of doing it badly. An agent already working on that thread gets the message instead of a second task.
+- **Limits.** A route runs when the asking task finishes, and only if it succeeds. One task can pass its thread to at most 3 agents. Passing on counts toward `MAX_AGENT_CHAIN`, so agents can't hand a thread round in circles; a refusal is recorded as an incident. Cards on a board can't be routed: there the column says who works.
+
+**Tasks** shows a triage run as *no agent named: to route*, the routed task as *started by an agent*, and the task's page shows both in its **Chain**. `PUT /api/settings` with `{ "routing": { "agent": "triage", "repos": ["acme/*"] } }` sets it over the API (`"agent": null` turns it off).
 
 ### Schedules
 
@@ -291,6 +305,7 @@ columns:
 | Where | How | What happens |
 | --- | --- | --- |
 | New issue | mention the handle, or assign it | branch `agent/<name>/issue-<n>`, then a PR |
+| New issue | name no agent, with a triage agent set | the triage agent passes it to the agent that fits (see [Routing](#routing)) |
 | Issue comment | mention the handle | continues on the same branch and PR |
 | PR, review, inline comment | mention, assign or request review | works on the PR's branch (forks: replies only) |
 | Discussion | mention the handle | branch and PR if it changes anything |
@@ -354,7 +369,9 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `WORKSPACE_CLOSED_RETENTION_DAYS` | `2` | Checkouts of closed issues and pull requests are removed after this many days unused |
 | `WORKSPACE_RETENTION_DAYS` | `14` | Agents' checkouts (a full clone per agent and thread) nobody has used for this long are removed, hourly; ones with uncommitted or unpushed work are kept. The next task clones again. `0` keeps them. **Settings → Workspaces** shows the last cleanup and can run one |
 | `SPEND_LIMIT_DAILY_USD`, `SPEND_LIMIT_MONTHLY_USD` | none | Spending limits for all agents together (UTC days and months, Claude Code's estimates). When one is reached, new tasks wait until the next day or month; running ones finish. The Dashboard warns at 80%. **Settings** can change them |
-| `MAX_AGENT_CHAIN` | `3` | How many agents in a row may start each other on related issues with `start_related_agent`; `0` turns it off |
+| `MAX_AGENT_CHAIN` | `3` | How many agents in a row may start each other, on related issues with `start_related_agent` or on one thread with `route_to_agent`; `0` turns both off |
+| `TRIAGE_AGENT` | none | The agent that new issues naming no agent go to, to be passed to the agent that fits (see [Routing](#routing)). **Settings → Routing** can change it |
+| `TRIAGE_REPOS` | all | Comma-separated `owner/name` or `owner/*`: the repositories whose new issues are triaged |
 | `SCHEDULE_TIMEZONE` | `UTC` | The time zone of schedules that don't name one (see [Schedules](#schedules)) |
 | `SCHEDULE_MIN_MINUTES` | `15` | The shortest time allowed between two runs of a schedule |
 | `SCHEDULES_PER_AGENT` | `20` | Most schedules one agent may have, its agent.md ones included; `0` for no limit |

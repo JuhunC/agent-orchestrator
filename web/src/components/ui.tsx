@@ -91,6 +91,12 @@ const PRIORITIES: { value: TaskPriority; label: string }[] = [
   { value: "low", label: "Low" },
 ];
 
+/** How a task was started, in words. */
+export function triggerLabel(task: Pick<Task, "triggerKind" | "boardColumn">): string {
+  if (task.triggerKind === "board") return task.boardColumn ? `board stage (${task.boardColumn})` : "board stage";
+  return { agent: "started by an agent", schedule: "scheduled run", triage: "no agent named: to route" }[task.triggerKind as string] ?? task.triggerKind;
+}
+
 /** Moves a queued task up or down the queue: high goes before the rest, low after it. */
 export function PrioritySelect({ task, width = 104 }: { task: Task; width?: number }) {
   return (

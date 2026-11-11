@@ -7,6 +7,7 @@ import { getSetting, setSetting } from "../db.ts";
 import { takeInbox } from "../runner/inbox.ts";
 import { errorMessage, log } from "../log.ts";
 import type { Effort, Library, Profile } from "../profiles/types.ts";
+import { mayRoute } from "../routing.ts";
 import type { Task } from "../types.ts";
 import { modelAccess, revokeModelAccess, startModelProxy } from "./model-proxy.ts";
 import { createGithubServer, type ToolContext } from "./github-tools.ts";
@@ -244,6 +245,8 @@ class Sessions {
       model: options.model ?? null,
       effort: options.effort ?? null,
       cardFields: anyBoardTracksFields(),
+      // The triage agent has route_to_agent whatever its agent.md says: Settings → Routing changes its tools.
+      routes: mayRoute(profile),
     });
 
     await startModelProxy();

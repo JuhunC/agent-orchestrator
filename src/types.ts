@@ -2,10 +2,11 @@ export type ThreadKind = "issue" | "pull" | "discussion";
 export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
 /** Where a queued task stands in the queue: before the rest, in the usual order, or after the rest (see runner/queue-order.ts). */
 export type TaskPriority = "high" | "normal" | "low";
-/** "agent": another issue's agent started it (start_related_agent). */
+/** "agent": another agent started it (start_related_agent on a related issue, route_to_agent on the same thread). */
+/** "triage": a new issue named no agent, so the triage agent was started to route it (see routing.ts). */
 /** "maintenance": the orchestrator started it itself (e.g. to fix a pull request that conflicts with its base). */
 /** "schedule": one of the agent's schedules came round (see schedules/runner.ts). */
-export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance" | "schedule";
+export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance" | "schedule" | "triage";
 /** "github": something a person did on the thread while the agent was working. */
 /**
  * What the agent itself said about a task that ended without an error (report_outcome): all of it

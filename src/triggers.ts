@@ -12,6 +12,7 @@ import { extractMentions } from "./mentions.ts";
 import { handleProjectItemWebhook } from "./boards/engine.ts";
 import { activityFor, deliver } from "./runner/inbox.ts";
 import { scheduler } from "./runner/scheduler.ts";
+import { triageAgentFor } from "./routing.ts";
 import { priorityFromLabels } from "./runner/queue-order.ts";
 import { notePullEvent } from "./runner/outcomes.ts";
 import { noteWaitEvent, wakeTask } from "./runner/waits.ts";
@@ -256,7 +257,11 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
     if (ownAgent && ownAction(event, payload)) return record(deliveryId, event, payload, "ignored", `Made by agent ${ownAgent} as @${senderLogin}`);
     if (!loadProfiles().agents.length) return record(deliveryId, event, payload, "ignored", "No agents configured");
 
-    const intents = intentsFor(event, payload, await accountAliases());
+    const aliases = await accountAliases();
+    const intents = intentsFor(event, payload, aliases);
+    // A new issue that names no agent goes to the triage agent, which passes it to the agent that fits.
+    const triage = intents.length ? null : triageIntent(event, payload, aliases);
+    if (triage) intents.push(triage);
     // Agents already working on this thread hear about what people do there.
     const activity = activityFor(event, payload);
     const working = activity ? runningTasksForThread(activity.ref) : [];
@@ -291,8 +296,9 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
       outcomes.push(`Passed to ${task.agent} (task #${task.id})`);
     }
     if (intents.length && !trusted) {
-      outcomes.push(`@${sender} has ${permission} access; ${config.triggerMinPermission} is required to start agents`);
-      return record(deliveryId, event, payload, working.length ? "forwarded" : "rejected", outcomes.join("; "));
+      // Nobody was turned away when no agent was asked for: the issue just isn't triaged.
+      outcomes.push(triage ? `No agent named, and @${sender} has ${permission} access; ${config.triggerMinPermission} is required for ${triage.agent.name} to triage it` : `@${sender} has ${permission} access; ${config.triggerMinPermission} is required to start agents`);
+      return record(deliveryId, event, payload, working.length ? "forwarded" : triage ? "ignored" : "rejected", outcomes.join("; "));
     }
     for (const intent of intents) {
       if (told.has(intent.agent.name)) {
@@ -312,6 +318,32 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
     log.error("Webhook handling failed", { event, deliveryId, error: errorMessage(error) });
     record(deliveryId, event, payload, "error", errorMessage(error));
   }
+}
+
+/**
+ * A new issue that names no agent: the triage agent's to route (Settings → Routing), when one is
+ * set for the repository. Not one a blocked user opened, nor one assigned to an agent as it was
+ * opened (the assignment starts that agent).
+ */
+function triageIntent(event: string, payload: Payload, aliases: Aliases): Intent | null {
+  if (event !== "issues" || payload.action !== "opened" || !payload.issue) return null;
+  const issue = payload.issue;
+  const agent = triageAgentFor(String(payload.repository?.full_name ?? ""));
+  if (!agent || isBlockedUser(String(payload.sender?.login ?? ""))) return null;
+  const assignees = (issue.assignees ?? []) as { login?: string }[];
+  if (assignees.some(({ login }) => login && (profileByHandle(login) || aliases.has(login.toLowerCase())))) return null;
+  return {
+    agent,
+    trigger: "triage",
+    kind: "issue",
+    number: issue.number,
+    title: issue.title,
+    url: issue.html_url,
+    requestText: [issue.title, issue.body ?? ""].join("\n\n").trim(),
+    requestUrl: issue.html_url,
+    reactTo: issue.node_id,
+    dedupeWindow: true,
+  };
 }
 
 /**
@@ -394,7 +426,7 @@ async function accept(
       ? markAgentOnThread(as, context.owner, context.repo, intent.number, (await agentAccount(agent).catch(() => null))?.login || agent.handle, label)
       : undefined,
   ]);
-  return `Queued task #${task.id} for ${agent.name}`;
+  return intent.trigger === "triage" ? `Queued task #${task.id} for ${agent.name} to route: no agent was named` : `Queued task #${task.id} for ${agent.name}`;
 }
 
 /** Starts an agent from the admin UI as if it had been mentioned. */

@@ -222,6 +222,11 @@ export const config = {
   // How many times in a row agents may start each other on related issues (start_related_agent):
   // a task started that way may start another only while the chain is shorter than this. 0 = never.
   maxAgentChain: Math.max(0, int("MAX_AGENT_CHAIN", 3)),
+  // Routing: the agent started on new issues that name no agent, to pass each to the agent that
+  // fits (route_to_agent), and the repositories it does that for (empty: all). Settings → Routing
+  // changes both; these are the values to start with.
+  triageAgent: env("TRIAGE_AGENT"),
+  triageRepos: list("TRIAGE_REPOS").map((repo) => repo.toLowerCase()),
 
   // Schedules (agents run again and again on a timetable): the time zone a schedule uses when it
   // names none, the shortest time allowed between two runs, how many one agent may have (file

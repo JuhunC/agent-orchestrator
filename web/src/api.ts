@@ -32,6 +32,8 @@ export interface GithubPermissions {
   parentBranch: boolean;
   /** Related issues whose agents it may start (start_related_agent). */
   startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
+  /** github.route: it may hand a thread to another agent (route_to_agent). */
+  route: boolean;
   /** github.account_token_env: the variable holding its GitHub account's token. */
   accountTokenEnv: string | null;
   /** Mentioning or assigning its account starts it. */
@@ -88,6 +90,8 @@ export interface Agent {
   baseBranch?: string | null;
   /** Whether it posts live activity (its github.live_activity, else the Settings default). */
   liveActivity?: boolean;
+  /** It's the triage agent (Settings → Routing): new issues that name no agent come to it. */
+  triage?: boolean;
   modelFrom: "agent" | "group" | null;
   effortFrom: "agent" | "group" | null;
   stats?: AgentStats | null;
@@ -166,7 +170,7 @@ export interface Task {
   threadNumber: number;
   threadTitle: string;
   threadUrl: string;
-  triggerKind: "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance" | "schedule";
+  triggerKind: "mention" | "assignment" | "manual" | "retry" | "board" | "agent" | "maintenance" | "schedule" | "triage";
   requestedBy: string;
   requestText: string;
   requestUrl: string;
@@ -412,6 +416,8 @@ export interface Settings {
   isolation: { mode: "off" | "sudo" | "direct"; user: string | null; required: boolean; problem: string | null };
   /** Live activity comments for agents that don't set github.live_activity. */
   liveActivity: boolean;
+  /** Routing: the triage agent for new issues that name no agent, the repositories it triages (empty: all), and why it wouldn't start. */
+  routing: { agent: string | null; repos: string[]; problem: string | null };
 }
 
 /** What agents' work came to: tasks, pull requests merged or closed, cards sent to a person. */

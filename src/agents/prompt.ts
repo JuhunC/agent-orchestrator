@@ -231,6 +231,38 @@ function relatedSection(task: Task, thread: ThreadContext, workspace: WorkspaceI
   return ["## Related issues", ...lines].join("\n");
 }
 
+/** Who the agent may pass the thread to (route_to_agent). */
+export interface RoutingInfo {
+  /** Nobody named an agent, and routing the thread is this task's whole job. */
+  triage: boolean;
+  /** The other agents, with how much each has to do right now. */
+  agents: { name: string; handle: string; description: string; running: number; queued: number }[];
+}
+
+function routingSection(routing: RoutingInfo, kind: string): string {
+  const load = (agent: RoutingInfo["agents"][number]) => [agent.running ? `${agent.running} running` : "", agent.queued ? `${agent.queued} waiting` : ""].filter(Boolean).join(", ") || "free";
+  const agents = routing.agents.length
+    ? routing.agents.map((agent) => `- **${agent.name}** (@${agent.handle}): ${clip(agent.description, 300) || "no description"} (now: ${load(agent)})`)
+    : ["- _(there's no other agent right now)_"];
+  if (routing.triage) {
+    return [
+      "## Routing",
+      `Nobody said which agent this ${kind} is for, so it came to you to route. Read it, decide whose kind of work it is, and pass it on with route_to_agent, giving the reason in a sentence. Don't do the work yourself and don't change the ${kind}.`,
+      "When two agents fit equally, prefer the one with less to do. When it takes more than one (a design, then the code), pass it to the one that goes first and say so in the instructions. When no agent fits, or it isn't clear what is being asked, pass it to nobody: say in your reply what's missing, for a person to answer, and call report_outcome (blocked).",
+      "",
+      "The agents:",
+      ...agents,
+    ].join("\n");
+  }
+  return [
+    "## Passing this on",
+    "If this is another agent's kind of work and not yours, pass it on with route_to_agent (with the reason) rather than do it badly or turn it down. The agent starts when you finish. It hands the whole request over: it isn't for getting help with part of it.",
+    "",
+    "The other agents:",
+    ...agents,
+  ].join("\n");
+}
+
 /** How to end a task. The wait_for sentence is left out when pausing is switched off (WAIT_MAX_HOURS=0). */
 function replyInstructions(): string {
   return [
@@ -345,6 +377,8 @@ export function buildFollowUpPrompt(input: {
   others?: Task[];
   /** The task is resumed after its agent paused it; `since` is then when it paused. */
   woke?: Woke | null;
+  /** The agents it may pass the thread to; null when it may not (or there are none). */
+  routing?: RoutingInfo | null;
 }): string {
   const { task, thread, workspace, since, interrupted, woke } = input;
   const kind = KIND_LABEL[thread.kind];
@@ -379,6 +413,7 @@ export function buildFollowUpPrompt(input: {
     }`,
     ...(related ? ["", related] : []),
     ...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []),
+    ...(input.routing ? ["", routingSection(input.routing, kind)] : []),
     "",
     "## How to reply",
     replyInstructions(),
@@ -413,6 +448,8 @@ export function buildPrompt(input: {
   schedule?: ScheduleRun | null;
   /** The task is resumed after its agent paused it, in a session that doesn't remember it. */
   woke?: Woke | null;
+  /** The agents it may pass the thread to; null when it may not (or there are none). */
+  routing?: RoutingInfo | null;
 }): string {
   const { agent, task, thread, history, workspace, woke } = input;
   const kind = KIND_LABEL[thread.kind];
@@ -426,14 +463,16 @@ export function buildPrompt(input: {
     (comment) => `**@${comment.author}** on \`${comment.path}${comment.line ? `:${comment.line}` : ""}\`:\n${quote(clip(comment.body, 2000))}`,
   );
 
+  // A triage task's request is the issue itself, which is shown below.
+  const triage = Boolean(input.routing?.triage);
   const head = [
     `You are "${agent.name}" (GitHub handle @${agent.handle}), an AI agent working on the GitHub repository ${repo}.`,
     input.schedule
       ? `It's time for a scheduled run of "${input.schedule.name}" on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`
-      : `@${task.requestedBy} asked you for help on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
-    "",
-    input.schedule ? "## What to do on each run" : "## Request",
-    quote(clip(task.requestText, 20_000)),
+      : triage
+        ? `@${task.requestedBy} opened ${kind} #${thread.number}: "${thread.title}" (${thread.url}) and named no agent, so it came to you, the triage agent, to pass to the agent that fits.`
+        : `@${task.requestedBy} asked you for help on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
+    ...(triage ? [] : ["", input.schedule ? "## What to do on each run" : "## Request", quote(clip(task.requestText, 20_000))]),
     ...(input.schedule ? ["", scheduleSection(input.schedule)] : []),
     ...(woke
       ? [
@@ -456,7 +495,13 @@ export function buildPrompt(input: {
   }
   const related = relatedSection(task, thread, workspace, agent);
   if (related) head.push("", related);
-  const tail = (notes: string[], lostNotes = 0) => [...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []), "", "## How to reply", replyInstructions()];
+  const tail = (notes: string[], lostNotes = 0) => [
+    ...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []),
+    ...(input.routing ? ["", routingSection(input.routing, kind)] : []),
+    "",
+    "## How to reply",
+    replyInstructions(),
+  ];
 
   // A long thread doesn't fit: the oldest comments go first, then the oldest inline comments,
   // handoff notes, other agents' runs and its own earlier runs. The request, the issue and the end of the prompt always stay.

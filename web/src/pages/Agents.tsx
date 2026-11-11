@@ -103,6 +103,11 @@ export function Agents() {
                       <HStack gap={1.5} vAlign="center" wrap="wrap">
                         <Text weight="semibold">{agent.name}</Text>
                         {agent.live && <Tag accent>live</Tag>}
+                        {agent.triage && (
+                          <span title="The triage agent (Settings → Routing): new issues that name no agent come to it, and it passes each to the agent that fits">
+                            <Tag accent>triage</Tag>
+                          </span>
+                        )}
                         {agent.replicas ? <Tag>{`×${agent.replicas}`}</Tag> : null}
                         {agent.errors.length > 0 && (
                           <Pill tone="failed">

@@ -36,7 +36,9 @@ import {
   type IssueRef,
 } from "../github/relations.ts";
 import { cardMoveProblems, cardWorkType, moveProblems, type ReviewRecord, type TestRun } from "./evidence.ts";
-import { chainProblem, describePlan, MAX_RELATED_STARTS_PER_TASK, planStart, RELATION_NAME, relationOf, type RelatedStart } from "./related-agents.ts";
+import { cardColumn, chainProblem, describePlan, findAgent, MAX_RELATED_STARTS_PER_TASK, MAX_ROUTES_PER_TASK, planStart, RELATION_NAME, relationOf, routeChainProblem, usable, type RelatedStart, type Route } from "./related-agents.ts";
+import { loadProfiles } from "../profiles/loader.ts";
+import { mayRoute, routableAgents, routing } from "../routing.ts";
 import { makeSharedDir } from "./isolation.ts";
 import { checkSubIssues, describeSubIssueWork, fetchBranch, isAncestor } from "./sub-issues.ts";
 import { ensureBaseBranch, excludeFromGit, parentBranchFor, type Workspace } from "./workspace.ts";
@@ -95,6 +97,8 @@ export interface ToolContext {
   issueState?: { state: "open" | "closed"; reason: "completed" | "not_planned" | "duplicate" | "reopened" } | null;
   /** Agents to start on related issues when the task finishes successfully (start_related_agent). */
   relatedStarts?: RelatedStart[];
+  /** Agents to pass this thread to when the task finishes successfully (route_to_agent). */
+  routes?: Route[];
   /** What the agent said about its own work (report_outcome); nothing said counts as done. */
   outcome?: { outcome: TaskOutcome; note: string } | null;
   /** What the agent asked to be paused for (wait_for): the task goes back to the queue when the turn ends. */
@@ -874,6 +878,48 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
     );
   }
 
+  // The triage agent routes whatever its agent.md says (Settings → Routing); a change there reopens the session.
+  if (mayRoute(profile)) {
+    tools.push(
+      tool(
+        "route_to_agent",
+        "Pass this thread to another agent, because the work is its kind and not yours (or, as the triage agent, because nobody said whose it is). Give the reason in a sentence: people see it. The agent starts when you finish, as if the person who asked you had asked it, and reads the thread itself; one already working here gets your message instead. Nothing is passed on if your task fails. It hands the work over: it isn't for getting help with part of your own.",
+        {
+          agent: z.string().min(1).describe("The agent to pass it to, by name or handle"),
+          reason: z.string().min(1).max(500).describe('Why it\'s that agent\'s, in a sentence, e.g. "A bug in the billing API: backend work"'),
+          instructions: z.string().max(4000).optional().describe("What it should do, when the thread doesn't already say"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { owner, repo, threadKind, threadNumber } = ctx.task;
+            const kind = threadKind === "pull" ? "pull request" : threadKind;
+            if (ctx.board) return fail(`This task is a card on the ${ctx.board.board.name} board, where the card's column says who works on it: it can't be passed to an agent. Move the card if another column should take it.`);
+            const chain = routeChainProblem(ctx.task);
+            if (chain) {
+              recordIncident("loop_guard", "info", `${profile.name} on ${owner}/${repo}#${threadNumber} couldn't pass it to another agent: ${chain.split(".")[0]}.`, { taskId: ctx.task.id });
+              return fail(chain);
+            }
+            const others = routableAgents(profile.name);
+            const list = others.length ? `Agents you can pass it to: ${others.map((other) => `${other.name} (${other.description})`).join("; ")}.` : "There's no other agent to pass it to: say in your reply who should take it, for a person to decide.";
+            const target = findAgent(args.agent, loadProfiles().agents);
+            if (!target) return fail(`There's no agent called "${args.agent}". ${list}`);
+            if (target.name === profile.name) return fail(`That's you. Do the work yourself, or pass it to another agent. ${list}`);
+            if (!usable(target)) return fail(`${target.name} is ${target.errors.length ? "invalid (its agent.md has errors)" : "turned off"}. ${list}`);
+            if (target.name === routing().agent) return fail(`${target.name} is the triage agent: it only passes new issues on, and does no work itself. ${list}`);
+            const card = threadKind === "issue" ? cardColumn(owner, repo, threadNumber) : null;
+            if (card) return fail(`#${threadNumber} is in "${card.column}" on the ${card.board} board, which ${card.agents.join(", ")} ${card.agents.length === 1 ? "works" : "work"}: there the board says who works on it. Say in your reply what you think should happen, for a person to move the card.`);
+            const pending = ctx.routes ?? [];
+            const same = (route: Route) => route.agent === target.name;
+            if (!pending.some(same) && pending.length >= MAX_ROUTES_PER_TASK) return fail(`You've already passed this ${kind} to ${MAX_ROUTES_PER_TASK} agents in this task (${pending.map((route) => route.agent).join(", ")}).`);
+            const route: Route = { agent: target.name, reason: args.reason.trim(), instructions: args.instructions?.trim() ?? "" };
+            ctx.routes = [...pending.filter((other) => !same(other)), route];
+            ctx.onEvent("tool", `Will pass this ${kind} to ${target.name} when the task finishes: ${route.reason}`);
+            return ok(`When you finish, **${target.name}** starts on this ${kind} with your reason${route.instructions ? " and instructions" : ""}${pending.some(same) ? ", replacing what you passed it earlier" : ""}. If it's already working here, it gets them as a message instead. Nothing is passed on if your task fails. Say in your reply who takes it from here and why, and leave the work to it.`);
+          })(),
+      ),
+    );
+  }
+
   if (profile.github.mergeIntoParent) {
     tools.push(
       tool(
@@ -1049,6 +1095,7 @@ const WRITE_TOOLS = new Set([
   "link_issue",
   "merge_into_parent",
   "start_related_agent",
+  "route_to_agent",
   "wait_for",
   "write_wiki_page",
   "delete_wiki_page",

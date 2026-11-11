@@ -6,6 +6,7 @@ import { BaseBranches } from "../components/BaseBranches.tsx";
 import { BlockedUsers } from "../components/BlockedUsers.tsx";
 import { Guards } from "../components/Guards.tsx";
 import { LiveActivityPanel } from "../components/LiveActivity.tsx";
+import { RoutingPanel } from "../components/Routing.tsx";
 import { api, useApi, type Installation, type ModelInfo, type Settings as SettingsData, type Setup } from "../api.ts";
 import { A, Columns, Empty, ErrorText, KV, LinkButton, Meta, Notice, Panel, Tag } from "../components/ui.tsx";
 import { useRoute } from "../router.ts";
@@ -314,6 +315,7 @@ export function Settings() {
       </Columns>
 
       <Columns>
+        <RoutingPanel routing={data.routing} onSaved={() => void reload()} />
         <LiveActivityPanel on={data.liveActivity} onChange={(on) => void update({ liveActivity: on })} />
         <BlockedUsers />
         <LivePanel settings={data} onSave={update} />

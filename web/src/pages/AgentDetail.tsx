@@ -46,6 +46,7 @@ export function githubPermissions(github: GithubPermissions): string[] {
     ...(github.subIssues !== "none" ? [`sub-issues: ${github.subIssues}`] : []),
     ...on(github.relations, "link issues"),
     ...on(github.mergeIntoParent, "merge into parent"),
+    ...on(github.route, "pass work to agents"),
     ...(github.startRelated?.length ? [github.startRelated.length === 4 ? "start related agents" : `start agents: ${github.startRelated.map((relation) => relation.replace("_", "-")).join(", ")}`] : []),
   ];
 }
@@ -75,11 +76,18 @@ export function AgentDetail({ name }: { name: string }) {
           <HStack gap={2} vAlign="center" wrap="wrap">
             <Heading level={2}>{agent.name}</Heading>
             <Meta>@{agent.handle}</Meta>
+            {agent.triage && <Tag accent>triage</Tag>}
           </HStack>
         </StackItem>
         <Button label="Duplicate" onClick={() => setDuplicating(true)} />
         <LinkButton to="/agents" label="All agents" />
       </HStack>
+
+      {agent.triage && (
+        <Notice tone="info" title="This is the triage agent." action={<LinkButton to="/settings" label="Routing" size="sm" />}>
+          New issues that name no agent come to it, and it passes each to the agent that fits (route_to_agent). Its prompt lists the other agents with their descriptions and how busy each is.
+        </Notice>
+      )}
 
       {agent.errors.length > 0 && (
         <Notice tone="error" title="This agent won't start until these are fixed:">

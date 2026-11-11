@@ -3,23 +3,41 @@ import { loadBoards, type Board } from "../boards/loader.ts";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { activeBoardTasks, createTask, getTask, listBoardItems, queuedTaskForThread, runningTasksForThread, tasksForThread, updateTask } from "../db.ts";
+import { agentAccount, clientFor } from "../github/accounts.ts";
 import { findInstallation } from "../github/app.ts";
 import { refText, sameRepo, type IssueRef, type Relation, type Relations } from "../github/relations.ts";
+import { markAgentOnThread } from "../github/threads.ts";
 import { loadProfiles } from "../profiles/loader.ts";
 import type { Profile } from "../profiles/types.ts";
 import { deliver } from "../runner/inbox.ts";
 import { scheduler } from "../runner/scheduler.ts";
 import { wakeTask } from "../runner/waits.ts";
-import type { Task } from "../types.ts";
+import type { Task, ThreadRef } from "../types.ts";
 
 /**
  * An agent on one issue starting (or messaging) the agent responsible for a related issue: its
  * parent, a sub-issue, a blocker, or an issue it blocks (start_related_agent). The start waits
  * until the asking task finishes, so the other agent sees its finished work.
+ *
+ * And an agent passing its own thread to another agent (route_to_agent): the triage agent sending
+ * a new issue to the agent that fits, or any agent handing on work that isn't its kind.
  */
 
 /** Most related-issue starts one task may ask for. */
 export const MAX_RELATED_STARTS_PER_TASK = 5;
+
+/** Most agents one task may pass its thread to. */
+export const MAX_ROUTES_PER_TASK = 3;
+
+/** One "pass this thread to that agent" a task asked for (route_to_agent). */
+export interface Route {
+  /** The agent's name. */
+  agent: string;
+  /** Why it's that agent's, in a sentence: it's shown to people and to the agent. */
+  reason: string;
+  /** What the agent should do, when the thread doesn't already say; may be empty. */
+  instructions: string;
+}
 
 export interface RelatedStart {
   target: IssueRef;
@@ -92,12 +110,72 @@ export function chainProblem(task: Task): string | null {
   return `This task is the end of a chain of ${depth} agent${depth === 1 ? "" : "s"} starting each other, and MAX_AGENT_CHAIN is ${config.maxAgentChain}, so it can't start another. Say in your reply what the other issue needs, for a person to pick up.`;
 }
 
-function findAgent(name: string, agents: Profile[]): Profile | null {
+export function findAgent(name: string, agents: Profile[]): Profile | null {
   const wanted = name.replace(/^@/, "").toLowerCase();
   return agents.find((agent) => agent.name.toLowerCase() === wanted || agent.handle.toLowerCase() === wanted) ?? null;
 }
 
-const usable = (agent: Profile) => agent.enabled && !agent.errors.length;
+export const usable = (agent: Profile) => agent.enabled && !agent.errors.length;
+
+/** The board column with agents that an issue's card is in, if any: there the board says who works on it. */
+export function cardColumn(owner: string, repo: string, number: number): { board: string; column: string; agents: string[] } | null {
+  for (const board of loadBoards().boards) {
+    if (board.errors.length) continue;
+    const card = listBoardItems(board.name).find((row) => row.kind === "issue" && row.number === number && sameRepo(row, owner, repo));
+    const column = card?.status ? board.columns[card.status] : undefined;
+    if (column?.agents.length) return { board: board.name, column: column.name, agents: column.agents };
+  }
+  return null;
+}
+
+/** Why this task may not pass its thread to another agent (MAX_AGENT_CHAIN), or null when it may. */
+export function routeChainProblem(task: Task): string | null {
+  if (config.maxAgentChain === 0) return "Passing work between agents is turned off on this orchestrator (MAX_AGENT_CHAIN=0). Say in your reply who should take this, for a person to pick up.";
+  const depth = chainDepth(task);
+  if (depth < config.maxAgentChain) return null;
+  return `This task is the end of a chain of ${depth} agent${depth === 1 ? "" : "s"} passing work to each other, and MAX_AGENT_CHAIN is ${config.maxAgentChain}, so it can't be passed on again. Do what you can here, or say in your reply who should take it, for a person to decide.`;
+}
+
+const quoted = (text: string) =>
+  text
+    .trim()
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+
+/** What an agent sends another: as a message to one that's working, as a request to one that isn't. */
+interface Handover {
+  /** The task sending it, and its agent. */
+  task: Task;
+  profile: Profile;
+  activity: { ref: ThreadRef; author: string; summary: string; body: string; url: string };
+  request: string;
+  /** Where the sender is, as the receiver reads it ("acme/widgets#12"). */
+  from: string;
+  /** Where the receiver is, as the sender's log reads it ("#13"). */
+  where: string;
+}
+
+/**
+ * The receiving agent is already working there (or about to): it's told rather than started again.
+ * Returns the line for the sender's log, or null when nobody is busy there.
+ */
+function tellBusy(busy: Task[], { task, profile, activity, request, from, where }: Handover): string | null {
+  const running = busy.filter((other) => other.status === "running");
+  for (const other of running) deliver(other, activity, { trusted: true, mention: true, startedByTask: task.id });
+  // A task its agent paused (wait_for) is woken by the message and reads it when it resumes.
+  const paused = busy.filter((other) => other.status === "queued" && other.waitReason === "wake");
+  for (const other of paused) {
+    deliver(other, activity, { trusted: true, mention: true, startedByTask: task.id });
+    wakeTask(other.id, `${profile.name} wrote to you from ${from}`);
+  }
+  const queued = busy.filter((other) => other.status === "queued" && other.waitReason !== "wake");
+  for (const other of queued) bus.publish({ type: "task", task: updateTask(other.id, { requestText: `${other.requestText}\n\n---\n\n${request}` }) });
+  if (!busy.length) return null;
+  const names = [...new Set(busy.map((other) => other.agent))].join(", ");
+  const state = running.length ? "working on it" : paused.length ? "paused on it (now woken)" : "queued for it";
+  return `Passed the message to ${names} on ${where}, already ${state} (task ${busy.map((other) => `#${other.id}`).join(", ")})`;
+}
 
 /** Who a start would reach right now, or why there's no one. */
 export function planStart(start: Pick<RelatedStart, "target" | "agent">): StartPlan | string {
@@ -166,11 +244,7 @@ export async function runRelatedStart(start: RelatedStart, source: { task: Task;
   const request = [
     `**${profile.name}** (@${profile.handle}) asked you to pick this up from ${from} "${source.title}", ${SEEN_FROM_TARGET[start.relation]} (orchestrator task #${task.id}):`,
     "",
-    start.message
-      .trim()
-      .split("\n")
-      .map((line) => `> ${line}`)
-      .join("\n"),
+    quoted(start.message),
   ].join("\n");
   const activity = {
     ref: { owner: target.owner, repo: target.repo, kind: "issue" as const, number: target.number },
@@ -180,22 +254,7 @@ export async function runRelatedStart(start: RelatedStart, source: { task: Task;
     url: source.url,
   };
   // Already working (or about to): tell it rather than start another.
-  const tell = (busy: Task[]): string | null => {
-    const running = busy.filter((other) => other.status === "running");
-    for (const other of running) deliver(other, activity, { trusted: true, mention: true, startedByTask: task.id });
-    // A task its agent paused (wait_for) is woken by the message and reads it when it resumes.
-    const paused = busy.filter((other) => other.status === "queued" && other.waitReason === "wake");
-    for (const other of paused) {
-      deliver(other, activity, { trusted: true, mention: true, startedByTask: task.id });
-      wakeTask(other.id, `${profile.name} wrote to you from ${from}`);
-    }
-    const queued = busy.filter((other) => other.status === "queued" && other.waitReason !== "wake");
-    for (const other of queued) bus.publish({ type: "task", task: updateTask(other.id, { requestText: `${other.requestText}\n\n---\n\n${request}` }) });
-    if (!busy.length) return null;
-    const names = [...new Set(busy.map((other) => other.agent))].join(", ");
-    const state = running.length ? "working on it" : paused.length ? "paused on it (now woken)" : "queued for it";
-    return `Passed the message to ${names} on ${where}, already ${state} (task ${busy.map((other) => `#${other.id}`).join(", ")})`;
-  };
+  const tell = (busy: Task[]) => tellBusy(busy, { task, profile, activity, request, from, where });
 
   if (plan.kind === "board") {
     const busy = activeBoardTasks(plan.board.name, plan.itemId).filter((other) => other.boardColumn === plan.column && (!plan.agent || other.agent === plan.agent));
@@ -233,4 +292,70 @@ export async function runRelatedStart(start: RelatedStart, source: { task: Task;
   bus.publish({ type: "task", task: created });
   scheduler.kick();
   return `Started ${plan.agent.name} on ${where} (task #${created.id})`;
+}
+
+const THREAD_KIND = { issue: "issue", pull: "pull request", discussion: "discussion" } as const;
+
+/**
+ * Passes a finished task's thread to the agent it named (route_to_agent). The agent starts as if
+ * the person who asked the routing agent had asked it; one already working there gets the message.
+ * Returns one line saying what happened, for the task's events.
+ */
+export async function runRoute(route: Route, source: { task: Task; profile: Profile; title: string; url: string }): Promise<string> {
+  const { task, profile } = source;
+  const agent = findAgent(route.agent, loadProfiles().agents);
+  if (!agent) return `Didn't pass this to ${route.agent}: there's no such agent any more`;
+  if (!usable(agent)) return `Didn't pass this to ${agent.name}: it's ${agent.errors.length ? "invalid (its agent.md has errors)" : "turned off"}`;
+
+  const kind = THREAD_KIND[task.threadKind];
+  const from = `${task.owner}/${task.repo}#${task.threadNumber}`;
+  const instructions = route.instructions.trim();
+  // What the person asked the routing agent, unless that's the issue itself (which the agent reads anyway).
+  const asked = task.triggerKind !== "triage" && task.requestText.trim() ? task.requestText.trim() : "";
+  const request = [
+    `**${profile.name}** (@${profile.handle}) passed this ${kind} to you (orchestrator task #${task.id}): ${route.reason.trim()}`,
+    ...(instructions ? ["", quoted(instructions)] : []),
+    ...(asked ? ["", `What @${task.requestedBy} asked ${profile.name}:`, "", quoted(asked.length > 4000 ? `${asked.slice(0, 4000)}…` : asked)] : []),
+  ].join("\n");
+  const ref: ThreadRef = { owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber };
+  const activity = {
+    ref,
+    author: profile.handle,
+    summary: `(agent ${profile.name}) passed this ${kind} to you: ${route.reason.trim()}`,
+    body: instructions,
+    url: source.url,
+  };
+  const busy = runningTasksForThread(ref).filter((other) => other.id !== task.id && other.agent === agent.name && other.threadKind === task.threadKind && other.threadNumber === task.threadNumber);
+  const queued = queuedTaskForThread(ref, agent.name);
+  if (queued) busy.push(queued);
+  const told = tellBusy(busy, { task, profile, activity, request, from, where: `this ${kind}` });
+  if (told) return `${told}: ${route.reason.trim()}`;
+
+  const created = createTask({
+    agent: agent.name,
+    installationId: task.installationId,
+    owner: task.owner,
+    repo: task.repo,
+    threadKind: task.threadKind,
+    threadNumber: task.threadNumber,
+    threadTitle: task.threadTitle || source.title,
+    threadUrl: task.threadUrl || source.url,
+    triggerKind: "agent",
+    // Still the person's request: the answer is for them, and their share of the queue.
+    requestedBy: task.requestedBy,
+    requestText: request,
+    requestUrl: task.requestUrl || source.url,
+    startedByTask: task.id,
+    priority: task.priority,
+    requestedBase: task.requestedBase,
+  });
+  bus.publish({ type: "task", task: created });
+  // On GitHub the thread now shows whose it is, as when a person mentions the agent.
+  if (task.threadKind !== "discussion") {
+    const label = config.labelPrefix && config.labelPrefix !== "none" ? `${config.labelPrefix}${agent.name}` : null;
+    const as = await clientFor({ agent: agent.name, installationId: task.installationId }).catch(() => null);
+    if (as) await markAgentOnThread(as, task.owner, task.repo, task.threadNumber, (await agentAccount(agent).catch(() => null))?.login || agent.handle, label).catch(() => undefined);
+  }
+  scheduler.kick();
+  return `Passed this ${kind} to ${agent.name} (task #${created.id}): ${route.reason.trim()}`;
 }

@@ -17,7 +17,8 @@ import { minutes } from "../runtime/session.ts";
 import { cardMoveProblems, cardWorkType, moveProblems } from "../runtime/evidence.ts";
 import { agentEnv, fallbackModels, taskEnv } from "../runtime/options.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
-import { RELATION_NAME, runRelatedStart } from "../runtime/related-agents.ts";
+import { RELATION_NAME, runRelatedStart, runRoute } from "../runtime/related-agents.ts";
+import { mayRoute, routableAgents } from "../routing.ts";
 import { addUsage } from "../runtime/usage.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
 import { baseForTask } from "../runtime/base-branch.ts";
@@ -235,8 +236,13 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       woke = { waited: describeWait(resumed), happened, note: takeInbox(task.id), said };
       onEvent("system", `Resumed after a pause: ${happened}`);
     }
+    // Who it may pass the thread to (route_to_agent): on a board the card's column decides instead.
+    const mayPass = !boardContext && mayRoute(profile);
+    const routable = mayPass ? routableAgents(profile.name) : [];
+    const triage = mayPass && task.triggerKind === "triage";
+    const routing = triage || routable.length ? { triage, agents: routable } : null;
     const prompts = {
-      full: buildPrompt({ agent: profile, task, thread, history, others, workspace, board: stage, schedule, woke }),
+      full: buildPrompt({ agent: profile, task, thread, history, others, workspace, board: stage, schedule, woke, routing }),
       followUp: buildFollowUpPrompt({
         agent: profile,
         task,
@@ -248,6 +254,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         schedule,
         others,
         woke,
+        routing,
       }),
     };
 
@@ -469,6 +476,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     if (issueState) subLines.push(issueState.state === "closed" ? `**Closed the issue** as ${issueState.reason.replace("_", " ")}.` : "**Reopened the issue.**");
     const relatedStarts = context.relatedStarts ?? [];
     for (const start of relatedStarts) subLines.push(`**Asked the agent of ${refText(start.target, task.owner, task.repo)} to pick it up** (${RELATION_NAME[start.relation]}).`);
+    const routes = context.routes ?? [];
+    for (const route of routes) subLines.push(`**Passed this to ${route.agent}**: ${route.reason}`);
     details = [own, ...subLines, details].filter(Boolean).join("\n\n");
     if (task.dryRun) {
       // Nothing from a dry run reaches GitHub or the board.
@@ -508,6 +517,12 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       const line = await runRelatedStart(start, { task, profile, title: thread.title, url: thread.url }).catch((error) => `Couldn't start an agent on ${refText(start.target, task.owner, task.repo)}: ${errorMessage(error)}`);
       emit(task.id, "system", line);
       log.info("Related-issue start", { task: task.id, target: `${start.target.owner}/${start.target.repo}#${start.target.number}`, result: line });
+    }
+    // And last of all, the agents this thread was passed to: they start on its finished state.
+    for (const route of routes) {
+      const line = await runRoute(route, { task, profile, title: thread.title, url: thread.url }).catch((error) => `Couldn't pass this to ${route.agent}: ${errorMessage(error)}`);
+      emit(task.id, "system", line);
+      log.info("Route", { task: task.id, agent: route.agent, result: line });
     }
   } catch (error) {
     let message = errorMessage(error);

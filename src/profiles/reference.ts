@@ -106,6 +106,14 @@ const AGENT: FileDoc = {
       example: "github:\n  start_related: [parent]",
     },
     {
+      key: "github.route",
+      type: "boolean",
+      default: bool(GITHUB_DEFAULTS.route),
+      description:
+        "route_to_agent: hand the thread it's working on to another agent, with a reason and what it found. That agent starts when its task finishes, as if it had been asked by whoever asked this one; one already working there gets the message instead. Its prompt lists the agents and how busy each is. The triage agent (Settings → Routing) has the tool without this. Not for board cards in a column with an agent: the board decides there. MAX_AGENT_CHAIN limits how many agents may pass work on in a row.",
+      example: "github:\n  route: true",
+    },
+    {
       key: "github.account_token_env",
       type: "string",
       default: "none (the GitHub App, or the account registered on the agent's page)",

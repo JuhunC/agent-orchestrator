@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Blockquote, Button, CheckboxInput, Code, CodeBlock, Heading, HStack, StackItem, Text, VStack } from "@astryxdesign/core";
 import { ago, api, duration, fromNow, isPaused, KIND_LABEL, useNow, useStream, waitText, type Task, type TaskEvent } from "../api.ts";
-import { A, Columns, Empty, KV, LinkButton, Meta, Notice, Panel, PrioritySelect, PriorityTag, StatusPill, Tag, who } from "../components/ui.tsx";
+import { A, Columns, Empty, KV, LinkButton, Meta, Notice, Panel, PrioritySelect, PriorityTag, StatusPill, Tag, triggerLabel, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
 /** Something that happened on GitHub while the agent works, which it hasn't been told yet. */
@@ -41,8 +41,7 @@ interface ChainNode {
 }
 
 function ChainRow({ node, depth, current }: { node: ChainNode; depth: number; current?: boolean }) {
-  const how =
-    node.triggerKind === "agent" ? "started by an agent" : node.triggerKind === "schedule" ? "scheduled run" : node.triggerKind === "board" ? `board stage${node.boardColumn ? ` (${node.boardColumn})` : ""}` : node.triggerKind;
+  const how = triggerLabel(node);
   return (
     <>
       <HStack gap={2} vAlign="center" wrap="wrap" paddingInlineStart={depth === 0 ? 0 : depth === 1 ? 4 : depth === 2 ? 8 : 10}>
@@ -88,7 +87,7 @@ function Others({ others, task, now }: { others: ChainNode[]; task: Task; now: n
               {other.threadNumber !== task.threadNumber ? ` on ${KIND_LABEL[other.threadKind]} #${other.threadNumber}` : ""}
             </Text>
             <Meta>
-              · {other.triggerKind === "board" && other.boardColumn ? `board stage (${other.boardColumn})` : other.triggerKind}
+              · {triggerLabel(other)}
               {other.createdAt ? ` · ${ago(other.createdAt, now)}` : ""}
             </Meta>
           </HStack>
@@ -330,7 +329,7 @@ export function TaskDetail({ id }: { id: number }) {
             <span className="ao-prose">{task.requestText}</span>
           </Blockquote>
           <Meta block>
-            {who(task.requestedBy)} · {task.triggerKind}
+            {who(task.requestedBy)} · {triggerLabel(task)}
             {task.requestUrl && (
               <>
                 {" · "}

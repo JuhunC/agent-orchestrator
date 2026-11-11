@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button, HStack, Selector, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, TextInput, VStack } from "@astryxdesign/core";
 import { ago, api, duration, isPaused, useApi, useNow, waitText, type AgentsResponse, type Task } from "../api.ts";
-import { DataTable, Empty, Meta, Panel, StatusPill, ThreadCell, who } from "../components/ui.tsx";
+import { DataTable, Empty, Meta, Panel, StatusPill, ThreadCell, triggerLabel, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
 const PAGE = 50;
@@ -115,7 +115,7 @@ export function Tasks() {
                     <VStack gap={0.5}>
                       <Text>{who(task.requestedBy)}</Text>
                       <Meta>
-                        {task.triggerKind}
+                        {triggerLabel(task)}
                         {task.dryRun ? " · dry run" : ""}
                       </Meta>
                     </VStack>

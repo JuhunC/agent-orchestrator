@@ -61,6 +61,8 @@ export interface GithubPermissions {
   baseBranch: BaseBranchSetting | null;
   /** start_related_agent: the related issues whose agents it may start (empty = none). */
   startRelated: ("blocked_by" | "blocks" | "parent" | "sub_issue")[];
+  /** route_to_agent: hand a thread to the agent whose kind of work it is. The triage agent (Settings → Routing) may anyway. */
+  route: boolean;
   /** Environment variable with a token for the GitHub account it acts as; null = the admin UI's, or the App. */
   accountTokenEnv: string | null;
   /** Mentioning or assigning its GitHub account starts it, like its handle. */
