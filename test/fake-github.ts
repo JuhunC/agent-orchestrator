@@ -54,7 +54,7 @@ export class FakeGitHub {
   repoLabels = new Set<string>(["type:refactor"]);
   assignees: string[] = [];
   reactions = 0;
-  reviews: { number: number; event: string; body: string }[] = [];
+  reviews: { number: number; event: string; body: string; login?: string; submittedAt?: string }[] = [];
   prOpened?: (number: number) => void;
   /** The commit a branch points at in the test's git remote (set by the harness). */
   branchSha: (branch: string) => string = () => "";
@@ -391,8 +391,13 @@ export class FakeGitHub {
       const pr = this.issues.get(Number(match[1]));
       // Like GitHub: an app can't approve or block a PR it opened itself.
       if (pr?.user.login === actor.login && body.event !== "COMMENT") return { status: 422, body: { message: `Unprocessable Entity: "Can not ${body.event === "APPROVE" ? "approve" : "request changes on"} your own pull request"` } };
-      this.reviews.push({ number: Number(match[1]), event: body.event, body: body.body });
+      this.reviews.push({ number: Number(match[1]), event: body.event, body: body.body, login: actor.login, submittedAt: new Date().toISOString() });
       return { status: 200, body: { id: this.nextId++ } };
+    }
+    if (method === "GET" && (match = path.match(/^\/repos\/[^/]+\/[^/]+\/pulls\/(\d+)\/reviews$/))) {
+      const states: Record<string, string> = { APPROVE: "APPROVED", REQUEST_CHANGES: "CHANGES_REQUESTED", COMMENT: "COMMENTED" };
+      const reviews = this.reviews.filter((review) => review.number === Number(match![1]));
+      return { status: 200, body: reviews.map((review, index) => ({ id: index + 1, state: states[review.event] ?? review.event, body: review.body, submitted_at: review.submittedAt ?? new Date().toISOString(), user: { login: review.login ?? "alice" } })) };
     }
     if (method === "POST" && path === "/graphql") {
       const query = String(body.query);

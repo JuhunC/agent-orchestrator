@@ -1,5 +1,6 @@
+import { config } from "../config.ts";
 import { describeRelations, isIssueBranch } from "../github/relations.ts";
-import type { ThreadContext } from "../github/threads.ts";
+import { RESULT_MARKER, type ThreadContext } from "../github/threads.ts";
 import type { GithubPermissions } from "../profiles/types.ts";
 import type { Task } from "../types.ts";
 
@@ -14,6 +15,8 @@ export interface WorkspaceInfo {
   canPush: boolean;
   /** False when the agent is configured not to push or open PRs. */
   willPush: boolean;
+  /** The working copy is as the last attempt left it, not refreshed from GitHub. */
+  kept?: boolean;
 }
 
 /** A run one of the agent's schedules started. */
@@ -30,6 +33,22 @@ export interface ScheduleRun {
   canChange: boolean;
   /** When the run before this one started. */
   previousRunAt: string | null;
+}
+
+/** A task that paused itself (wait_for) and is being resumed. */
+export interface Woke {
+  /** What it waited for ("this issue's sub-issues are closed"). */
+  waited: string;
+  /** Why it goes on now ("all 3 sub-issues are closed (#4, #5, #6)"). */
+  happened: string;
+  /** What reached the agent while it was paused, as a message for it. */
+  note: string | null;
+  /** The texts in that message, so the same comments aren't shown twice. */
+  said: string[];
+}
+
+function wokeLine(woke: Woke): string {
+  return `You paused this task until ${woke.waited}. It has been resumed because ${woke.happened}.`;
 }
 
 function scheduleSection(schedule: ScheduleRun): string {
@@ -125,7 +144,7 @@ function historyEntries(history: Task[]): string[] {
 function otherEntries(others: Task[]): string[] {
   return others.map((task) => {
     const where = `${KIND_LABEL[task.threadKind]} #${task.threadNumber}`;
-    const active = task.status === "running" ? "working on it now" : task.status === "queued" ? "waiting to start" : null;
+    const active = task.status === "running" ? "working on it now" : task.status !== "queued" ? null : task.waitReason === "wake" ? `paused until other work is done${task.waitFor?.note ? ` (${clip(task.waitFor.note, 200).split("\n").join(" ")})` : ""}` : "waiting to start";
     const lines = [
       active
         ? `### ${task.agent} — ${active} on ${where} (task ${task.id})`
@@ -212,8 +231,16 @@ function relatedSection(task: Task, thread: ThreadContext, workspace: WorkspaceI
   return ["## Related issues", ...lines].join("\n");
 }
 
-const REPLY_INSTRUCTIONS =
-  "When you are done, end with a concise summary for the people on GitHub: what you changed (or found), anything left to do, and any question you need answered. It is posted as a comment. If you did not fully do what was asked, call report_outcome first (partial, blocked or gave_up, with a short note), so the task isn't shown as done.";
+/** How to end a task. The wait_for sentence is left out when pausing is switched off (WAIT_MAX_HOURS=0). */
+function replyInstructions(): string {
+  return [
+    "When you are done, end with a concise summary for the people on GitHub: what you changed (or found), anything left to do, and any question you need answered. It is posted as a comment.",
+    ...(config.waitMaxHours > 0
+      ? ["If you can only go on once other work is done (sub-issues, a blocking issue, a merge or a review), call wait_for instead of finishing: the task pauses and you are resumed here when that has happened."]
+      : []),
+    "If you did not fully do what was asked, call report_outcome first (partial, blocked or gave_up, with a short note), so the task isn't shown as done.",
+  ].join(" ");
+}
 
 /** How a finished run ended, for the prompt: its status, and what its agent reported when that wasn't "done". */
 function ended(task: Task): string {
@@ -316,32 +343,45 @@ export function buildFollowUpPrompt(input: {
   schedule?: ScheduleRun | null;
   /** Other agents' tasks on the thread (db.othersOnThread); those since this agent's last run are shown. */
   others?: Task[];
+  /** The task is resumed after its agent paused it; `since` is then when it paused. */
+  woke?: Woke | null;
 }): string {
-  const { task, thread, workspace, since, interrupted } = input;
+  const { task, thread, workspace, since, interrupted, woke } = input;
   const kind = KIND_LABEL[thread.kind];
   const repo = `${task.owner}/${task.repo}`;
-  const fresh = thread.comments.filter((comment) => !comment.fromOrchestrator && (!since || comment.createdAt > since) && comment.body.trim() !== task.requestText.trim());
+  // The task's own "paused" comment is no news to the agent that paused it.
+  const ownNotice = (body: string) => Boolean(woke) && body.includes(RESULT_MARKER) && body.includes(`[task #${task.id}](`);
+  const fresh = thread.comments.filter(
+    (comment) => !comment.fromOrchestrator && !ownNotice(comment.body) && (!since || comment.createdAt > since) && comment.body.trim() !== task.requestText.trim() && !woke?.said.includes(comment.body.trim()),
+  );
   const head = [
-    interrupted
-      ? `You were interrupted while working on this (a usage limit, or the orchestrator restarted). Your uncommitted changes are still in the working copy. Continue where you left off.`
-      : input.schedule
-        ? `It's time for a scheduled run of "${input.schedule.name}" on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`
-        : `@${task.requestedBy} has a new request for you on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
+    woke
+      ? `${wokeLine(woke)} Your work so far is in the working copy and in this session. Carry on where you left off and finish as instructed before. If you still can't go on, call wait_for again, or report_outcome.`
+      : interrupted
+        ? `You were interrupted while working on this (a usage limit, or the orchestrator restarted). Your uncommitted changes are still in the working copy. Continue where you left off.`
+        : input.schedule
+          ? `It's time for a scheduled run of "${input.schedule.name}" on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`
+          : `@${task.requestedBy} has a new request for you on ${kind} #${thread.number}: "${thread.title}" (${thread.url}).`,
     "",
     input.schedule ? "## What to do on each run" : "## Request",
     quote(clip(task.requestText, 20_000)),
     ...(input.schedule ? ["", scheduleSection(input.schedule)] : []),
+    ...(woke?.note ? ["", "## What came in while you were paused", woke.note] : []),
   ];
   const related = relatedSection(task, thread, workspace, input.agent);
   const tail = (notes: string[], lostNotes = 0) => [
     "",
     "## Working copy",
-    `${workspaceSection(repo, thread, workspace)}\nThe branch has been refreshed from GitHub, so it includes anything pushed since your last run.`,
+    `${workspaceSection(repo, thread, workspace)}\n${
+      workspace.kept
+        ? `Your unpublished work is still in it, so it hasn't been refreshed from GitHub. \`origin/${workspace.branch}\` is up to date: merge it if you need what was pushed since.`
+        : "The branch has been refreshed from GitHub, so it includes anything pushed since your last run."
+    }`,
     ...(related ? ["", related] : []),
     ...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []),
     "",
     "## How to reply",
-    REPLY_INSTRUCTIONS,
+    replyInstructions(),
   ];
   // When it's too long, the oldest comments and handoff notes go, never the end of the prompt.
   const comments = fresh.map(commentEntry);
@@ -356,7 +396,7 @@ export function buildFollowUpPrompt(input: {
     ],
     room,
   );
-  if (comments.length) head.push("", "## New on the thread since your last run (oldest first)", ...leftOut(lostComments!, "comment", `; the thread has them: ${thread.url}`), comments.join("\n\n"));
+  if (comments.length) head.push("", woke ? "## New on the thread since you paused (oldest first)" : "## New on the thread since your last run (oldest first)", ...leftOut(lostComments!, "comment", `; the thread has them: ${thread.url}`), comments.join("\n\n"));
   if (others.length) head.push("", othersSection(others, lostOthers!, Boolean(since)));
   return assemble(head, tail(notes, lostNotes));
 }
@@ -371,8 +411,10 @@ export function buildPrompt(input: {
   workspace: WorkspaceInfo;
   board?: BoardStage | null;
   schedule?: ScheduleRun | null;
+  /** The task is resumed after its agent paused it, in a session that doesn't remember it. */
+  woke?: Woke | null;
 }): string {
-  const { agent, task, thread, history, workspace } = input;
+  const { agent, task, thread, history, workspace, woke } = input;
   const kind = KIND_LABEL[thread.kind];
   const repo = `${task.owner}/${task.repo}`;
 
@@ -393,6 +435,14 @@ export function buildPrompt(input: {
     input.schedule ? "## What to do on each run" : "## Request",
     quote(clip(task.requestText, 20_000)),
     ...(input.schedule ? ["", scheduleSection(input.schedule)] : []),
+    ...(woke
+      ? [
+          "",
+          "## You paused this task earlier",
+          `${wokeLine(woke)} What you did before the pause is in the working copy and on the thread, not in this session: look at it first, then carry on from there instead of starting over. If you still can't go on, call wait_for again, or report_outcome.`,
+          ...(woke.note ? ["", woke.note] : []),
+        ]
+      : []),
     "",
     "## Working copy",
     workspaceText,
@@ -406,7 +456,7 @@ export function buildPrompt(input: {
   }
   const related = relatedSection(task, thread, workspace, agent);
   if (related) head.push("", related);
-  const tail = (notes: string[], lostNotes = 0) => [...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []), "", "## How to reply", REPLY_INSTRUCTIONS];
+  const tail = (notes: string[], lostNotes = 0) => [...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []), "", "## How to reply", replyInstructions()];
 
   // A long thread doesn't fit: the oldest comments go first, then the oldest inline comments,
   // handoff notes, other agents' runs and its own earlier runs. The request, the issue and the end of the prompt always stay.

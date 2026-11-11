@@ -141,6 +141,21 @@ export interface ModelInfo {
   limit: { until: string; reason: string } | null;
 }
 
+/** What a paused task waits for: its agent's wait_for call. */
+export interface WaitFor {
+  until: "sub_issues_done" | "blockers_closed" | "issues_closed" | "pull_merged" | "pull_reviewed" | "time";
+  issues: number[];
+  pull: number | null;
+  /** The agent's reason for pausing. */
+  note: string;
+  /** When it paused. */
+  since: string;
+  /** When it resumes at the latest. */
+  deadline: string;
+  /** Why it was woken, once it has been. */
+  woke: string | null;
+}
+
 export interface Task {
   id: number;
   agent: string;
@@ -176,7 +191,12 @@ export interface Task {
   /** Times it was continued after timing out, going silent or stopping with an error. */
   restarts: number;
   recoveries: number;
-  waitReason: "usage_limit" | "rate_limit" | "setup" | null;
+  /** "wake": its agent paused it until other work is done (see waitFor). */
+  waitReason: "usage_limit" | "rate_limit" | "setup" | "wake" | null;
+  /** Set while the task is paused, and until its agent has been told why it's back. */
+  waitFor: WaitFor | null;
+  /** Times its agent paused it. */
+  waits: number;
   outcome: TaskOutcome | null;
   outcomeNote: string | null;
   live: boolean;
@@ -474,6 +494,8 @@ export interface Overview {
   agents: Agent[];
   running: Task[];
   queued: Task[];
+  /** Tasks their agents paused until other work is done, the one that resumes first on top. */
+  waiting: Task[];
   recent: Task[];
   /** Tasks whose agent said it's blocked or gave up, with nothing from that agent on the thread since. */
   attention: Task[];
@@ -675,6 +697,39 @@ export function duration(fromIso: string | null, toIso: string | null, now = Dat
   if (h) return `${h}h ${m}m`;
   if (m) return `${m}m ${String(s).padStart(2, "0")}s`;
   return `${s}s`;
+}
+
+/** A task its agent paused until other work is done: queued, but not in line for a slot. */
+export const isPaused = (task: Pick<Task, "status" | "waitReason">) => task.status === "queued" && task.waitReason === "wake";
+
+/** What a paused task waits for, to follow "until". */
+export function waitText(wait: WaitFor): string {
+  const list = wait.issues.map((number) => `#${number}`).join(", ");
+  switch (wait.until) {
+    case "sub_issues_done":
+      return "this issue's sub-issues are closed";
+    case "blockers_closed":
+      return "the issues blocking this one are closed";
+    case "issues_closed":
+      return `${list} ${wait.issues.length === 1 ? "is" : "are"} closed`;
+    case "pull_merged":
+      return `pull request #${wait.pull} is merged`;
+    case "pull_reviewed":
+      return `pull request #${wait.pull} is reviewed`;
+    case "time":
+      return new Date(wait.deadline).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  }
+}
+
+/** "in 5m", "in 3h", "in 2 days": how far off a time is. */
+export function fromNow(iso: string | null, now = Date.now()): string {
+  if (!iso) return "—";
+  const seconds = Math.round((Date.parse(iso) - now) / 1000);
+  if (seconds < 45) return "any moment";
+  if (seconds < 3600) return `in ${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `in ${Math.round(seconds / 3600)}h`;
+  const days = Math.round(seconds / 86400);
+  return `in ${days} day${days === 1 ? "" : "s"}`;
 }
 
 export function ago(iso: string | null, now = Date.now()): string {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Button, Card, Divider, Grid, HStack, StackItem, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, VStack } from "@astryxdesign/core";
-import { ago, api, duration, useApi, useNow, useStream, type Agent, type Overview, type Task, type TaskEvent } from "../api.ts";
+import { ago, api, duration, fromNow, useApi, useNow, useStream, waitText, type Agent, type Overview, type Task, type TaskEvent } from "../api.ts";
 import { RunAgentDialog } from "../components/RunAgentDialog.tsx";
 import { A, DataTable, Empty, LinkButton, Meta, Notice, Panel, Pill, StatGrid, StatTile, StatusPill, StepText, Switch, ThreadCell, who, Columns } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
@@ -150,6 +150,7 @@ export function Dashboard() {
       <StatGrid>
         <StatTile label="Working now" value={<>{data.running.length} <Meta>/ {data.settings.maxConcurrent}</Meta></>} />
         <StatTile label="Queued" value={data.queued.length} />
+        <StatTile label="Paused" value={data.waiting.length} />
         <StatTile label="Finished" value={totals.succeeded} />
         <StatTile label="Failed" value={totals.failed} />
       </StatGrid>
@@ -250,7 +251,7 @@ export function Dashboard() {
                     <TableCell>
                       <VStack gap={0.5}>
                         <Text weight="semibold">{task.agent}</Text>
-                        <Meta>{ago(task.createdAt, now)}</Meta>
+                        <Meta>{task.waitFor ? "resuming after a pause" : ago(task.createdAt, now)}</Meta>
                       </VStack>
                     </TableCell>
                     <TableCell>
@@ -274,6 +275,62 @@ export function Dashboard() {
           )}
         </Panel>
       </Columns>
+
+      {data.waiting.length > 0 && (
+        <Panel title="Paused for other work" hint="agents that paused their task until something else is done · they hold no slot and carry on in the same session" tight>
+          <DataTable hover>
+            <TableHeader>
+              <TableRow>
+                <TableHeaderCell>Agent</TableHeaderCell>
+                <TableHeaderCell>Thread</TableHeaderCell>
+                <TableHeaderCell>Carries on when</TableHeaderCell>
+                <TableHeaderCell>At the latest</TableHeaderCell>
+                <TableHeaderCell />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.waiting.map((task) => (
+                <TableRow key={task.id} className="ao-clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
+                  <TableCell>
+                    <VStack gap={0.5}>
+                      <Text weight="semibold">{task.agent}</Text>
+                      <Meta>paused {task.waitFor ? ago(task.waitFor.since, now) : ""}</Meta>
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <ThreadCell task={task} />
+                  </TableCell>
+                  <TableCell>
+                    <VStack gap={0.5} maxWidth={360}>
+                      <Text>{task.waitFor ? (task.waitFor.until === "time" ? "the time below comes" : waitText(task.waitFor)) : "—"}</Text>
+                      <Text type="supporting" maxLines={2} display="block">
+                        {task.waitFor?.note}
+                      </Text>
+                    </VStack>
+                  </TableCell>
+                  <TableCell>
+                    <span title={task.retryAt ? new Date(task.retryAt).toLocaleString() : undefined}>
+                      <Text type="supporting" textWrap="nowrap">
+                        {fromNow(task.retryAt, now)}
+                      </Text>
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    <Button
+                      label="Wake now"
+                      size="sm"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void api.post(`/api/tasks/${task.id}/run-now`);
+                      }}
+                    />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </DataTable>
+        </Panel>
+      )}
 
       <Panel title="Agent sessions" hint={data.sessions.length ? `${data.sessions.length} open · kept ${data.settings.liveIdleMinutes} min after the last task` : undefined} tight>
         {data.sessions.length === 0 ? (

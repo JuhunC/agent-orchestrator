@@ -13,6 +13,7 @@ import { handleProjectItemWebhook } from "./boards/engine.ts";
 import { activityFor, deliver } from "./runner/inbox.ts";
 import { scheduler } from "./runner/scheduler.ts";
 import { notePullEvent } from "./runner/outcomes.ts";
+import { noteWaitEvent, wakeTask } from "./runner/waits.ts";
 import type { Delivery, ThreadKind, TriggerKind } from "./types.ts";
 
 type Agent = Profile;
@@ -240,6 +241,8 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
     }
     // What became of agents' pull requests (merged, closed), whoever closed them.
     if (event === "pull_request") notePullEvent(payload);
+    // An issue closing, a merge or a review may be what a paused task waits for.
+    noteWaitEvent(event, payload);
     const repoFull = String(payload.repository?.full_name ?? "");
     const installationId = Number(payload.installation?.id ?? 0);
     if (!repoFull || !installationId) return record(deliveryId, event, payload, "ignored", "No repository or installation in payload");
@@ -298,7 +301,8 @@ async function handleDelivery(event: string, deliveryId: string, payload: Payloa
       outcomes.push(await accept(gh, intent, { owner, repo, installationId, sender }));
     }
     const started = outcomes.filter((outcome) => outcome.startsWith("Queued"));
-    record(deliveryId, event, payload, started.length ? "triggered" : working.length ? "forwarded" : "ignored", outcomes.join("; "));
+    const passedOn = working.length > 0 || outcomes.some((outcome) => outcome.startsWith("Woke"));
+    record(deliveryId, event, payload, started.length ? "triggered" : passedOn ? "forwarded" : "ignored", outcomes.join("; "));
     scheduler.kick();
   } catch (error) {
     log.error("Webhook handling failed", { event, deliveryId, error: errorMessage(error) });
@@ -316,6 +320,15 @@ async function accept(
   if (!agent.enabled) return `${agent.name} is turned off`;
   if (intent.dedupeWindow && recentTaskForThread(ref, agent.name, 120)) return `${agent.name} already started for this ${intent.kind}`;
   const queued = queuedTaskForThread(ref, agent.name);
+  if (queued?.waitReason === "wake") {
+    // The agent paused its task here until other work is done: this wakes it, and it reads the request when it resumes.
+    const summary = intent.trigger === "assignment" ? "assigned this to you" : "wrote to you";
+    deliver(queued, { ref, author: context.sender, summary, body: intent.requestText, url: intent.requestUrl }, { trusted: true, mention: true });
+    wakeTask(queued.id, `@${context.sender} ${summary} on the thread`);
+    const as = await clientFor({ agent: agent.name, installationId: context.installationId }).catch(() => null);
+    if (intent.reactTo && as) await addEyesReaction(as, intent.reactTo).catch(() => undefined);
+    return `Woke ${agent.name} (task #${queued.id}), which had paused`;
+  }
   if (queued) {
     // The agent is busy here and already has a follow-up waiting: fold this request into it.
     const merged = updateTask(queued.id, {

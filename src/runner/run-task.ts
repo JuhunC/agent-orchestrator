@@ -1,4 +1,4 @@
-import { buildFollowUpPrompt, buildPrompt, type BoardStage } from "../agents/prompt.ts";
+import { buildFollowUpPrompt, buildPrompt, type BoardStage, type Woke } from "../agents/prompt.ts";
 import { addIssueToBoard, moveCard, startColumnAgent } from "../boards/engine.ts";
 import { allowedMoves, getBoard } from "../boards/loader.ts";
 import { describeRules, hasCardFields, hasRules } from "../boards/rules.ts";
@@ -21,14 +21,15 @@ import { RELATION_NAME, runRelatedStart } from "../runtime/related-agents.ts";
 import { addUsage } from "../runtime/usage.ts";
 import { prepareWorkspace, type Workspace } from "../runtime/workspace.ts";
 import { baseForTask } from "../runtime/base-branch.ts";
-import type { EventKind, Task, TaskUsage, ThreadRef } from "../types.ts";
+import type { EventKind, Task, TaskUsage, ThreadRef, WaitFor } from "../types.ts";
 import { git } from "./git.ts";
-import { settleInbox } from "./inbox.ts";
+import { settleInbox, takeInbox, waitingBodies, waitingNotes } from "./inbox.ts";
 import { retryTime, type DetectedLimit } from "./limits.ts";
 import { getLimit, setLimit } from "./limit-store.ts";
-import { liveActivityFor, progressEditAllowed, ProgressThrottle, renderProgress, renderResult, type ProgressState } from "./progress.ts";
+import { liveActivityFor, progressEditAllowed, ProgressThrottle, renderPauseCancelled, renderProgress, renderResult, renderWaiting, stamp, type ProgressState } from "./progress.ts";
 import { recordIncident } from "./incidents.ts";
 import { scheduler } from "./scheduler.ts";
+import { checkWait, describeWait } from "./waits.ts";
 import { profileCommit, profileVersion } from "../profiles/version.ts";
 import { scheduleRunInfo } from "../schedules/runner.ts";
 
@@ -110,6 +111,9 @@ async function unpublishedWork(workspace: Workspace): Promise<{ dirty: boolean; 
 export async function executeTask(initial: Task, signal: AbortSignal): Promise<void> {
   const startedAt = Date.now();
   let task = patch(initial.id, { status: "running", startedAt: new Date(startedAt).toISOString(), error: null, retryAt: null, waitReason: null });
+  // The task's agent paused it (wait_for) and it's back. Kept on the task until the agent has had
+  // its turn, so a start that fails and is tried again still resumes the pause.
+  const resumed = initial.waitFor;
   const profiles = loadProfiles();
   const profile = profiles.agents.find((candidate) => candidate.name === task.agent) ?? null;
   const ref: ThreadRef = { owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber };
@@ -221,9 +225,30 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
           }
         : null;
     const schedule = scheduleRunInfo(task, profile);
+    // Resumed from a pause: what it waited for, why it goes on, and what was written to it meanwhile.
+    let woke: Woke | null = null;
+    if (resumed) {
+      const check = resumed.woke || resumed.until === "time" ? null : await checkWait(gh, task, resumed).catch(() => null);
+      const late = `the longest time to wait is over (${stamp(resumed.deadline)})`;
+      const happened = resumed.woke ?? (resumed.until === "time" ? "the time you asked for has passed" : !check ? late : check.met ? check.text : `${late}, though ${check.text}`);
+      const said = waitingBodies(task.id);
+      woke = { waited: describeWait(resumed), happened, note: takeInbox(task.id), said };
+      onEvent("system", `Resumed after a pause: ${happened}`);
+    }
     const prompts = {
-      full: buildPrompt({ agent: profile, task, thread, history, others, workspace, board: stage, schedule }),
-      followUp: buildFollowUpPrompt({ agent: profile, task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0 || task.restarts > 0, board: stage, schedule, others }),
+      full: buildPrompt({ agent: profile, task, thread, history, others, workspace, board: stage, schedule, woke }),
+      followUp: buildFollowUpPrompt({
+        agent: profile,
+        task,
+        thread,
+        workspace,
+        since: resumed ? resumed.since : (history.at(-1)?.finishedAt ?? null),
+        interrupted: task.attempts > 0 || task.restarts > 0,
+        board: stage,
+        schedule,
+        others,
+        woke,
+      }),
     };
 
     const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0, board: boardContext };
@@ -242,9 +267,9 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       library: profiles.library,
       workspace,
       env: agentEnv(profile, taskEnv(task, workspace)),
-      // An interrupted task resumes its own session. A dry run otherwise starts afresh (the thread's
-      // history is in its prompt), so it can't change the real session.
-      resumeSessionId: (task.attempts > 0 || task.restarts > 0) && task.sessionId ? task.sessionId : task.dryRun ? null : lastSessionId(ref, profile.name),
+      // An interrupted or paused task resumes its own session. A dry run otherwise starts afresh
+      // (the thread's history is in its prompt), so it can't change the real session.
+      resumeSessionId: (task.attempts > 0 || task.restarts > 0 || task.waits > 0) && task.sessionId ? task.sessionId : task.dryRun ? null : lastSessionId(ref, profile.name),
       onSessionId: (id: string) => {
         if (task.sessionId !== id) task = patch(task.id, { sessionId: id });
       },
@@ -322,11 +347,19 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       resultText: outcome.result,
       live: outcome.live,
       exitCode: outcome.isError ? 1 : 0,
+      waitFor: null,
     });
 
     if (outcome.cancelled) {
       if (signal.reason === "shutdown") await requeueForRestart(outcome.result);
       else await finish("cancelled", outcome.result, typeof signal.reason === "string" && signal.reason !== "admin" ? signal.reason : "Cancelled from the admin UI.");
+      return;
+    }
+    if (outcome.limit && context.wait) {
+      // The agent had asked to pause before the limit cut off its closing note: pause as it asked.
+      if (outcome.limit.kind === "rate") scheduler.noteRateLimit();
+      else setLimit(retryTime(outcome.limit), outcome.limit.message);
+      await park(context.wait, outcome.result, "");
       return;
     }
     if (outcome.limit?.kind === "rate") {
@@ -358,7 +391,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         await throttle.flush(true);
         onEvent("system", "Publishing changes the agent left unpushed");
         const pushed = await commitAndPush(context, `${profile.name}: ${thread.title}`.slice(0, 72));
-        if (pushed.pushed && task.threadKind !== "pull" && profile.github.pullRequest && !state.prNumber) {
+        // Not when the agent paused the task: it opens the pull request itself once it's done.
+        if (pushed.pushed && task.threadKind !== "pull" && profile.github.pullRequest && !state.prNumber && !context.wait) {
           await openOrUpdatePullRequest(context, thread.title, outcome.result || "_No summary from the agent._").catch((error) => {
             if (!(error instanceof PullRequestLimitError)) throw error;
             onEvent("system", error.message);
@@ -369,7 +403,9 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       }
     }
     let details = "";
-    const commits = Number(await git(workspace.dir, ["rev-list", "--count", `${workspace.startSha}..HEAD`]).catch(() => "0"));
+    // After a pause the working copy starts from the refreshed branch, so commits from before it are added.
+    const earlierCommits = resumed && workspace.startSha !== initial.startSha ? (initial.commits ?? 0) : 0;
+    const commits = earlierCommits + Number(await git(workspace.dir, ["rev-list", "--count", `${workspace.startSha}..HEAD`]).catch(() => "0"));
     if (commits) {
       const files = (await git(workspace.dir, ["diff", "--name-only", `${workspace.startSha}..HEAD`])).split("\n").filter(Boolean);
       const list = files.slice(0, 30).map((file) => `- \`${file}\``).join("\n");
@@ -416,18 +452,19 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
     if (newCards.length) subLines.push(`**Added sub-issue${newCards.length === 1 ? "" : "s"} ${newCards.map((issue) => `#${issue.number}`).join(", ")} to the board in ${newColumn}.**`);
     const quoted = (note: string) => note.split("\n").map((line) => `> ${line}`).join("\n");
-    const own =
-      boardContext && move && task.boardRound
-        ? `**Voted to move the card to ${move.to}** (it moves when every agent in this column has finished). Handoff:\n\n${quoted(move.note)}`
-        : boardContext && move && parked
-          ? `**Moved the card to ${move.to}** for a person to look at, because the agent ${reported!.outcome === "blocked" ? "is blocked" : "gave up"}.`
-          : boardContext && move
-            ? `**Moved the card to ${move.to}.** Handoff:\n\n${quoted(move.note)}`
-            : boardContext
-              ? refused
+    const own = !boardContext
+      ? ""
+      : context.wait
+        ? `The card stays in **${boardContext.column}** while this is paused.`
+        : move && task.boardRound
+          ? `**Voted to move the card to ${move.to}** (it moves when every agent in this column has finished). Handoff:\n\n${quoted(move.note)}`
+          : move && parked
+            ? `**Moved the card to ${move.to}** for a person to look at, because the agent ${reported!.outcome === "blocked" ? "is blocked" : "gave up"}.`
+            : move
+              ? `**Moved the card to ${move.to}.** Handoff:\n\n${quoted(move.note)}`
+              : refused
                 ? `The card stays in **${boardContext.column}**. ${refused}`
-                : `The card stays in **${boardContext.column}** (the agent didn't move it).`
-              : "";
+                : `The card stays in **${boardContext.column}** (the agent didn't move it).`;
     const issueState = context.issueState ?? null;
     if (issueState) subLines.push(issueState.state === "closed" ? `**Closed the issue** as ${issueState.reason.replace("_", " ")}.` : "**Reopened the issue.**");
     const relatedStarts = context.relatedStarts ?? [];
@@ -438,19 +475,25 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
       await finish("succeeded", outcome.result, "", "", commits);
       return;
     }
-    if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
-    await finish("succeeded", outcome.result, "", details, commits);
-    if (reported && reported.outcome !== "partial") {
-      recordIncident("task_blocked", "info", `${task.agent} ${reported.outcome === "blocked" ? "is blocked" : "gave up"} on ${task.owner}/${task.repo}#${task.threadNumber}: ${reported.note.split("\n")[0]!.slice(0, 300)}`, { taskId: task.id });
-    }
-    if (boardContext && move && !task.boardRound) {
-      // After the reply is posted: hand the card to the next column (and its agent).
-      addHandoff(boardContext.board.name, boardContext.itemId, { taskId: task.id, agent: profile.name, fromColumn: boardContext.column, toColumn: move.to, note: move.note });
-      const landed = await moveCard(boardContext.board, boardContext.itemId, move.to, { agentMove: true, excludeTaskId: task.id, startedBy: task.id, actor: task }).catch((error) => {
-        log.warn("Could not move the card", { task: task.id, error: errorMessage(error) });
-        return null;
-      });
-      if (landed) emit(task.id, "system", `Moved the card to ${landed}`);
+    if (context.wait) {
+      // The agent asked to wait for other work: the task goes back to the queue until that has
+      // happened. What it set going (sub-issues, related agents) still starts below.
+      await park(context.wait, outcome.result, details);
+    } else {
+      if (boardContext && move && task.boardRound) addVote(task.boardRound, { taskId: task.id, agent: profile.name, to: move.to, note: move.note });
+      await finish("succeeded", outcome.result, "", details, commits);
+      if (reported && reported.outcome !== "partial") {
+        recordIncident("task_blocked", "info", `${task.agent} ${reported.outcome === "blocked" ? "is blocked" : "gave up"} on ${task.owner}/${task.repo}#${task.threadNumber}: ${reported.note.split("\n")[0]!.slice(0, 300)}`, { taskId: task.id });
+      }
+      if (boardContext && move && !task.boardRound) {
+        // After the reply is posted: hand the card to the next column (and its agent).
+        addHandoff(boardContext.board.name, boardContext.itemId, { taskId: task.id, agent: profile.name, fromColumn: boardContext.column, toColumn: move.to, note: move.note });
+        const landed = await moveCard(boardContext.board, boardContext.itemId, move.to, { agentMove: true, excludeTaskId: task.id, startedBy: task.id, actor: task }).catch((error) => {
+          log.warn("Could not move the card", { task: task.id, error: errorMessage(error) });
+          return null;
+        });
+        if (landed) emit(task.id, "system", `Moved the card to ${landed}`);
+      }
     }
     if (boardContext) await settleSubIssues(boardContext, subMoves, newCards, newColumn);
     if (issueState) {
@@ -528,7 +571,26 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     }
   }
 
-  /** The model service hit its usage limit: wait for the reset and carry on, instead of failing. */
+  /**
+   * The agent paused the task until other work is done (wait_for): back to the queue, holding no
+   * slot, until that has happened, someone writes to the agent, or the deadline passes. The same
+   * session then carries on. What the agent wrote so far is posted, so people know where it stands.
+   */
+  async function park(pause: WaitFor, text: string, details: string) {
+    // Someone wrote to the agent just as it paused, too late for it to see: it carries on at once.
+    const mentioned = waitingNotes(task.id).some((note) => note.mention);
+    const wait: WaitFor = mentioned ? { ...pause, woke: "someone wrote to you on the thread just as you paused" } : pause;
+    const waitingFor = describeWait(wait);
+    onEvent("system", `Paused until ${waitingFor}${wait.until === "time" ? "" : ` (at the latest ${stamp(wait.deadline)})`}`);
+    state.phase = "parked";
+    state.note = `Waiting until **${waitingFor}**${wait.until === "time" ? "" : `, at the latest ${stamp(wait.deadline)}`}: _${wait.note.replace(/[_*`]/g, "").split("\n").join(" ")}_`;
+    task = patch(task.id, { status: "queued", retryAt: mentioned ? null : wait.deadline, waitReason: mentioned ? null : "wake", waitFor: wait, waits: task.waits + 1, error: null, resultText: text || task.resultText });
+    await throttle.flush(true);
+    await throttle.stop();
+    if (!gh || !profile) return;
+    await postComment(gh, target(), renderWaiting(profile, task, { text, wait, waitingFor, details })).catch((error) => log.warn("Could not post the paused comment", { task: task.id, error: errorMessage(error) }));
+  }
+
   /** The orchestrator is shutting down: queue the task again, to resume its session when it's back. */
   async function requeueForRestart(text: string) {
     if (task.restarts + 1 > config.restartResumes) {
@@ -565,6 +627,7 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
     await throttle.stop();
   }
 
+  /** The model service hit its usage limit: wait for the reset and carry on, instead of failing. */
   async function pauseForLimit(limit: DetectedLimit, text: string) {
     const until = retryTime(limit);
     setLimit(until, limit.message);
@@ -664,5 +727,17 @@ export async function markInterrupted(task: Task): Promise<void> {
     await editComment(gh, { owner: task.owner, repo: task.repo, kind: task.threadKind }, task.progressCommentId, renderProgress({ name: task.agent }, updated, state));
   } catch (error) {
     log.warn("Could not update interrupted task's comment", { task: task.id, error: errorMessage(error) });
+  }
+}
+
+/** A task its agent had paused was cancelled before it resumed: says so on the thread, under its "paused" comment. */
+export async function notePausedCancelled(task: Task, reason: string): Promise<void> {
+  if (task.dryRun) return;
+  try {
+    const gh = await clientFor(task);
+    const threadNodeId = task.threadKind === "discussion" ? (await fetchThread(gh, task.owner, task.repo, task.threadKind, task.threadNumber)).nodeId : undefined;
+    await postComment(gh, { owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber, threadNodeId }, renderPauseCancelled({ name: task.agent }, task, reason));
+  } catch (error) {
+    log.warn("Could not say that a paused task was cancelled", { task: task.id, error: errorMessage(error) });
   }
 }

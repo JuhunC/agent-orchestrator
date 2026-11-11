@@ -156,6 +156,13 @@ export function waitingNotes(taskId: number): { author: string; summary: string;
   return inboxNotes<Note>(taskId).map((note) => ({ author: note.author, summary: note.summary, url: note.url, mention: note.mention, fromAgent: note.startedByTask !== null }));
 }
 
+/** The texts people wrote in the waiting notes, so a prompt that carries the notes doesn't repeat those comments. */
+export function waitingBodies(taskId: number): string[] {
+  return inboxNotes<Note>(taskId)
+    .map((note) => note.body.trim())
+    .filter(Boolean);
+}
+
 /** Takes the waiting notes as a message for the agent, or null when there are none. */
 export function takeInbox(taskId: number): string | null {
   const notes = inboxNotes<Note>(taskId, true);

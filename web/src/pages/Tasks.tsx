@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button, HStack, Selector, TableBody, TableCell, TableHeader, TableHeaderCell, TableRow, Text, TextInput, VStack } from "@astryxdesign/core";
-import { ago, api, duration, useApi, useNow, type AgentsResponse, type Task } from "../api.ts";
+import { ago, api, duration, isPaused, useApi, useNow, waitText, type AgentsResponse, type Task } from "../api.ts";
 import { DataTable, Empty, Meta, Panel, StatusPill, ThreadCell, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
@@ -10,6 +10,8 @@ const STATUSES = [
   { value: "", label: "All statuses" },
   { value: "running", label: "Running" },
   { value: "queued", label: "Queued" },
+  // Queued tasks their agents paused until other work is done.
+  { value: "waiting", label: "Paused" },
   { value: "succeeded", label: "Done" },
   { value: "failed", label: "Failed" },
   { value: "cancelled", label: "Cancelled" },
@@ -99,8 +101,8 @@ export function Tasks() {
                     </Text>
                   </TableCell>
                   <TableCell>
-                    <span title={task.outcomeNote ?? undefined}>
-                      <StatusPill status={task.status} outcome={task.outcome} />
+                    <span title={(isPaused(task) && task.waitFor ? `Until ${waitText(task.waitFor)}` : task.outcomeNote) ?? undefined}>
+                      <StatusPill status={task.status} outcome={task.outcome} paused={isPaused(task)} />
                     </span>
                   </TableCell>
                   <TableCell>

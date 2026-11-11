@@ -8,6 +8,7 @@ import { loadProfiles } from "./profiles/loader.ts";
 import { seedProfiles } from "./profiles/seed.ts";
 import { scheduler } from "./runner/scheduler.ts";
 import { startSchedules } from "./schedules/runner.ts";
+import { startWaitChecks } from "./runner/waits.ts";
 import { startWorkspaceCleanup } from "./runtime/cleanup.ts";
 import { startOutcomeChecks } from "./runner/outcomes.ts";
 import { startAccountChecks } from "./github/accounts.ts";
@@ -66,6 +67,7 @@ async function main(): Promise<void> {
   startBackups();
   startRetention();
   startSchedules();
+  startWaitChecks();
 
   let stopping = false;
   const stop = async (signal: string) => {

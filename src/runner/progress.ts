@@ -2,12 +2,12 @@ import { bus } from "../bus.ts";
 import { config } from "../config.ts";
 import { getSetting, setSetting } from "../db.ts";
 import { PROGRESS_MARKER, RESULT_MARKER } from "../github/threads.ts";
-import type { Task } from "../types.ts";
+import type { Task, WaitFor } from "../types.ts";
 import { githubThrottled } from "../github/app.ts";
 
 type Agent = { name: string };
 
-export type ProgressPhase = "queued" | "starting" | "working" | "waiting" | "retrying" | "publishing" | "succeeded" | "failed" | "cancelled";
+export type ProgressPhase = "queued" | "starting" | "working" | "waiting" | "parked" | "retrying" | "publishing" | "succeeded" | "failed" | "cancelled";
 
 export interface ProgressState {
   phase: ProgressPhase;
@@ -66,6 +66,7 @@ const HEADLINE: Record<ProgressPhase, string> = {
   starting: "🔄 is getting ready",
   working: "🔄 is working on this",
   waiting: "⏸️ is paused until its usage limit resets",
+  parked: "⏳ paused this until other work is done",
   retrying: "🔁 will try again shortly",
   publishing: "📤 is pushing its changes",
   succeeded: "✅ finished",
@@ -138,6 +139,29 @@ export function renderResult(
   if (outcome.details) parts.push("", outcome.details);
   parts.push("", `<sub>${meta.join(" · ")}</sub>`);
   return parts.join("\n");
+}
+
+/** `2026-03-01 14:30 UTC` */
+export function stamp(iso: string): string {
+  return `${iso.slice(0, 16).replace("T", " ")} UTC`;
+}
+
+/**
+ * The comment posted when an agent pauses its task (wait_for): what it waits for, and where things
+ * stand. The result comment follows when the task is resumed and finishes.
+ */
+export function renderWaiting(agent: Agent, task: Task, pause: { text: string; wait: WaitFor; waitingFor: string; details?: string }): string {
+  const until = pause.wait.until === "time" ? `it carries on at **${pause.waitingFor}**` : `it carries on when **${pause.waitingFor}**, or at the latest ${stamp(pause.wait.deadline)}`;
+  const parts = [RESULT_MARKER, `${mention(task.requestedBy)} **${agent.name}** paused this task ⏳ — ${until}.`, "", `**Why:** ${pause.wait.note}`];
+  if (pause.text.trim()) parts.push("", pause.text.trim());
+  if (pause.details) parts.push("", pause.details);
+  parts.push("", `<sub>Mention it here to wake it sooner · [task #${task.id}](${taskAdminUrl(task.id)})</sub>`);
+  return parts.join("\n");
+}
+
+/** A paused task was cancelled before it resumed: its "paused" comment on the thread would otherwise promise it carries on. */
+export function renderPauseCancelled(agent: Agent, task: Task, reason: string): string {
+  return [RESULT_MARKER, `${mention(task.requestedBy)} **${agent.name}**'s paused task was cancelled ⏹️ and won't carry on.`, "", reason, "", `<sub>Mention it here to start it again · [task #${task.id}](${taskAdminUrl(task.id)})</sub>`].join("\n");
 }
 
 /** When progress comments were edited in the last hour, by any task (PROGRESS_EDITS_PER_HOUR). */

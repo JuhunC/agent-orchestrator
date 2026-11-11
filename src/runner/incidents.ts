@@ -78,7 +78,7 @@ const escape = (value: string) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\
 const labels = (pairs: Record<string, string>) => `{${Object.entries(pairs).map(([key, value]) => `${key}="${escape(value)}"`).join(",")}}`;
 
 /** /metrics in the Prometheus text format. */
-export function renderMetrics(live: { atOnce?: number; running: number; queued: number; paused: boolean; sessions: number; limited: boolean; spendToday: number; spendMonth: number; isolated: boolean }): string {
+export function renderMetrics(live: { atOnce?: number; running: number; queued: number; waiting?: number; paused: boolean; sessions: number; limited: boolean; spendToday: number; spendMonth: number; isolated: boolean }): string {
   const lines: string[] = [];
   const metric = (name: string, type: "counter" | "gauge", help: string, samples: [Record<string, string>, number][]) => {
     lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`);
@@ -102,6 +102,7 @@ export function renderMetrics(live: { atOnce?: number; running: number; queued: 
   metric("ao_tasks_running", "gauge", "Tasks running now.", [[{}, live.running]]);
   if (live.atOnce !== undefined) metric("ao_concurrency", "gauge", "Tasks allowed to run at once now (lower while the model service rate-limits).", [[{}, live.atOnce]]);
   metric("ao_tasks_queued", "gauge", "Tasks waiting to start.", [[{}, live.queued]]);
+  if (live.waiting !== undefined) metric("ao_tasks_paused", "gauge", "Tasks their agents paused until other work is done.", [[{}, live.waiting]]);
   metric("ao_queue_paused", "gauge", "1 when the queue is paused.", [[{}, live.paused ? 1 : 0]]);
   metric("ao_usage_limited", "gauge", "1 while the model service's usage limit holds tasks.", [[{}, live.limited ? 1 : 0]]);
   metric("ao_live_sessions", "gauge", "Open agent sessions.", [[{}, live.sessions]]);

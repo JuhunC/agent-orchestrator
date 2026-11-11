@@ -34,6 +34,7 @@ import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { queueOrder } from "../runner/queue-order.ts";
 import { waitingNotes } from "../runner/inbox.ts";
+import { wakeTask } from "../runner/waits.ts";
 import { listIncidents, renderMetrics } from "../runner/incidents.ts";
 import { outcomeReport } from "../runner/outcomes.ts";
 import { MAX_COMMENTS_PER_TASK, MAX_SUB_ISSUES_PER_TASK } from "../runtime/github-tools.ts";
@@ -99,7 +100,7 @@ function modelView() {
 
 /** A task in a chain of agents starting each other, for the task page. */
 function chainEntry(task: Task) {
-  return { id: task.id, agent: task.agent, owner: task.owner, repo: task.repo, threadKind: task.threadKind, threadNumber: task.threadNumber, threadTitle: task.threadTitle, triggerKind: task.triggerKind, status: task.status, outcome: task.outcome, board: task.board, boardColumn: task.boardColumn, createdAt: task.createdAt };
+  return { id: task.id, agent: task.agent, owner: task.owner, repo: task.repo, threadKind: task.threadKind, threadNumber: task.threadNumber, threadTitle: task.threadTitle, triggerKind: task.triggerKind, status: task.status, outcome: task.outcome, paused: task.status === "queued" && task.waitReason === "wake", board: task.board, boardColumn: task.boardColumn, createdAt: task.createdAt };
 }
 
 /**
@@ -252,7 +253,9 @@ export function registerApi(app: FastifyInstance): void {
       sessions: sessions.list(),
       model: modelView(),
       running: listTasks({ status: "running", limit: 50 }),
-      queued: queueOrder(listTasks({ status: "queued", limit: 100 })),
+      queued: queueOrder(listTasks({ status: "queued", waiting: false, limit: 100 })),
+      /** Tasks their agents paused until other work is done (wait_for), the one that resumes first on top. */
+      waiting: listTasks({ waiting: true, limit: 100 }).sort((a, b) => (a.retryAt ?? "").localeCompare(b.retryAt ?? "")),
       incidents: listIncidents(20).filter((incident) => Date.now() - Date.parse(incident.ts) < 7 * 86_400_000),
       recent: listTasks({ status: "succeeded,failed,cancelled", limit: 15 }),
       attention: tasksNeedingPerson(new Date(Date.now() - 7 * 86_400_000).toISOString()),
@@ -264,7 +267,9 @@ export function registerApi(app: FastifyInstance): void {
   // ---------- tasks ----------
   app.get<{ Querystring: { status?: string; outcome?: string; agent?: string; repo?: string; limit?: string; before?: string } }>("/api/tasks", async (request) => {
     const { status, outcome, agent, repo, limit, before } = request.query;
-    return listTasks({ status, outcome, agent, repo, limit: limit ? Number(limit) : 50, beforeId: before ? Number(before) : undefined });
+    // "waiting" isn't a status of its own: it's a queued task its agent paused. "queued" leaves those out.
+    const state = status === "waiting" ? { waiting: true } : status === "queued" ? { status, waiting: false } : { status };
+    return listTasks({ ...state, outcome, agent, repo, limit: limit ? Number(limit) : 50, beforeId: before ? Number(before) : undefined });
   });
 
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/tasks/:id", async (request, reply) => {
@@ -607,6 +612,12 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/run-now", async (request, reply) => {
+    const task = getTask(Number(request.params.id));
+    // A task its agent paused is woken (it's told who did); one waiting for a limit or a retry just starts.
+    if (task?.status === "queued" && task.waitReason === "wake") {
+      if (!wakeTask(task.id, `${request.adminLogin ? `@${request.adminLogin}` : "someone"} resumed it from the admin UI`)) return reply.code(409).send({ error: "That task is already resuming" });
+      return { ok: true };
+    }
     if (!scheduler.runNow(Number(request.params.id))) return reply.code(409).send({ error: "That task isn't waiting" });
     return { ok: true };
   });
@@ -715,6 +726,8 @@ export function registerApi(app: FastifyInstance): void {
         { name: "Task timeout", setting: "TASK_TIMEOUT_MINUTES", value: `${config.defaultTimeoutMinutes} min`, what: "a task is stopped after this long (agents can set their own timeout_minutes)" },
         { name: "Failure retries", setting: "TASK_FAILURE_RETRIES", value: config.taskFailureRetries ? String(config.taskFailureRetries) : "off", what: "a task that timed out, went silent or stopped with an error continues in the same session this many times before it fails" },
         { name: "Silence before a task is stopped", setting: "TASK_STALL_MINUTES", value: config.taskStallMinutes ? `${config.taskStallMinutes} min` : "never", what: "a task whose agent does nothing at all for this long is taken to hang: it's stopped and counts as a failure to retry" },
+        { name: "Longest pause", setting: "WAIT_MAX_HOURS", value: config.waitMaxHours ? `${config.waitMaxHours} h` : "off", what: "how long a task may stay paused for other work (wait_for) before it resumes anyway; off: agents can't pause" },
+        { name: "Pauses per task", setting: "TASK_MAX_WAITS", value: String(config.taskMaxWaits), what: "times one task may pause for other work before it has to finish or report it's blocked" },
         { name: "Agents at once", setting: "MAX_CONCURRENT_TASKS", value: String(scheduler.maxConcurrent), what: "tasks running at the same time" },
         { name: "Time between scheduled runs", setting: "SCHEDULE_MIN_MINUTES", value: `${config.scheduleMinMinutes} min`, what: "the shortest gap a schedule may have between two runs" },
         { name: "Schedules per agent", setting: "SCHEDULES_PER_AGENT", value: config.schedulesPerAgent ? String(config.schedulesPerAgent) : "no limit", what: "schedules one agent may have, its agent.md ones included" },
@@ -748,7 +761,8 @@ export function registerApi(app: FastifyInstance): void {
     return renderMetrics({
       atOnce: scheduler.effectiveConcurrent(),
       running: scheduler.runningIds().length,
-      queued: listTasks({ status: "queued", limit: 10_000 }).length,
+      queued: listTasks({ status: "queued", waiting: false, limit: 10_000 }).length,
+      waiting: listTasks({ waiting: true, limit: 10_000 }).length,
       paused: scheduler.paused,
       sessions: sessions.list().length,
       limited: Boolean(getLimit()),

@@ -9,6 +9,7 @@ import { loadProfiles } from "../profiles/loader.ts";
 import type { Profile } from "../profiles/types.ts";
 import { deliver } from "../runner/inbox.ts";
 import { scheduler } from "../runner/scheduler.ts";
+import { wakeTask } from "../runner/waits.ts";
 import type { Task } from "../types.ts";
 
 /**
@@ -182,11 +183,18 @@ export async function runRelatedStart(start: RelatedStart, source: { task: Task;
   const tell = (busy: Task[]): string | null => {
     const running = busy.filter((other) => other.status === "running");
     for (const other of running) deliver(other, activity, { trusted: true, mention: true, startedByTask: task.id });
-    const queued = busy.filter((other) => other.status === "queued");
+    // A task its agent paused (wait_for) is woken by the message and reads it when it resumes.
+    const paused = busy.filter((other) => other.status === "queued" && other.waitReason === "wake");
+    for (const other of paused) {
+      deliver(other, activity, { trusted: true, mention: true, startedByTask: task.id });
+      wakeTask(other.id, `${profile.name} wrote to you from ${from}`);
+    }
+    const queued = busy.filter((other) => other.status === "queued" && other.waitReason !== "wake");
     for (const other of queued) bus.publish({ type: "task", task: updateTask(other.id, { requestText: `${other.requestText}\n\n---\n\n${request}` }) });
     if (!busy.length) return null;
     const names = [...new Set(busy.map((other) => other.agent))].join(", ");
-    return `Passed the message to ${names} on ${where}, already ${running.length ? "working on it" : "queued for it"} (task ${busy.map((other) => `#${other.id}`).join(", ")})`;
+    const state = running.length ? "working on it" : paused.length ? "paused on it (now woken)" : "queued for it";
+    return `Passed the message to ${names} on ${where}, already ${state} (task ${busy.map((other) => `#${other.id}`).join(", ")})`;
   };
 
   if (plan.kind === "board") {

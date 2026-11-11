@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Blockquote, Button, CheckboxInput, Code, CodeBlock, Heading, HStack, StackItem, Text, VStack } from "@astryxdesign/core";
-import { ago, api, duration, KIND_LABEL, useNow, useStream, type Task, type TaskEvent } from "../api.ts";
+import { ago, api, duration, fromNow, isPaused, KIND_LABEL, useNow, useStream, waitText, type Task, type TaskEvent } from "../api.ts";
 import { A, Columns, Empty, KV, Meta, Notice, Panel, StatusPill, Tag, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
@@ -25,6 +25,7 @@ interface ChainNode {
   triggerKind: Task["triggerKind"];
   status: Task["status"];
   outcome?: Task["outcome"];
+  paused?: boolean;
   board: string | null;
   boardColumn: string | null;
   createdAt?: string;
@@ -37,7 +38,7 @@ function ChainRow({ node, depth, current }: { node: ChainNode; depth: number; cu
   return (
     <>
       <HStack gap={2} vAlign="center" wrap="wrap" paddingInlineStart={depth === 0 ? 0 : depth === 1 ? 4 : depth === 2 ? 8 : 10}>
-        <StatusPill status={node.status} outcome={node.outcome} />
+        <StatusPill status={node.status} outcome={node.outcome} paused={node.paused} />
         <Text>
           {current ? <b>this task</b> : <A to={`/tasks/${node.id}`}>task #{node.id}</A>} · {node.agent} on {node.owner}/{node.repo}#{node.threadNumber}
           {node.threadTitle ? ` "${node.threadTitle}"` : ""}
@@ -73,7 +74,7 @@ function Others({ others, task, now }: { others: ChainNode[]; task: Task; now: n
       <VStack gap={1.5}>
         {others.map((other) => (
           <HStack key={other.id} gap={2} vAlign="center" wrap="wrap">
-            <StatusPill status={other.status} outcome={other.outcome} />
+            <StatusPill status={other.status} outcome={other.outcome} paused={other.paused} />
             <Text>
               <A to={`/tasks/${other.id}`}>task #{other.id}</A> · {other.agent}
               {other.threadNumber !== task.threadNumber ? ` on ${KIND_LABEL[other.threadKind]} #${other.threadNumber}` : ""}
@@ -144,7 +145,7 @@ export function TaskDetail({ id }: { id: number }) {
   if (!task) return <Empty>Loading…</Empty>;
 
   const active = task.status === "running" || task.status === "queued";
-  const cancel = () => confirm("Stop this agent?") && void api.post(`/api/tasks/${task.id}/cancel`);
+  const cancel = () => confirm(isPaused(task) ? "Cancel this paused task? It won't carry on, and the thread is told." : "Stop this agent?") && void api.post(`/api/tasks/${task.id}/cancel`);
   const retry = async () => {
     const created = await api.post<Task>(`/api/tasks/${task.id}/retry`);
     navigate(`/tasks/${created.id}`);
@@ -158,14 +159,14 @@ export function TaskDetail({ id }: { id: number }) {
   return (
     <VStack gap={4}>
       <HStack gap={3} vAlign="center" wrap="wrap">
-        <StatusPill status={task.status} outcome={task.outcome} />
+        <StatusPill status={task.status} outcome={task.outcome} paused={isPaused(task)} />
         <StackItem size="fill">
           <Heading level={2}>
             {task.agent} · {task.owner}/{task.repo}#{task.threadNumber}
           </Heading>
         </StackItem>
         {active ? (
-          <Button label={task.status === "queued" ? "Remove from queue" : "Stop agent"} variant="destructive" onClick={cancel} />
+          <Button label={isPaused(task) ? "Cancel task" : task.status === "queued" ? "Remove from queue" : "Stop agent"} variant="destructive" onClick={cancel} />
         ) : (
           <HStack gap={2}>
             <Button label="Run again" onClick={() => void retry()} />
@@ -198,7 +199,28 @@ export function TaskDetail({ id }: { id: number }) {
           {task.board && task.outcome !== "partial" ? " On the board, its card went to a person unless the agent moved it elsewhere." : ""}
         </Notice>
       )}
-      {task.status === "queued" && task.retryAt && (
+      {isPaused(task) && task.waitFor && (
+        <Notice
+          tone="info"
+          title={`The agent paused this until ${waitText(task.waitFor)}.`}
+          action={<Button label="Wake now" tooltip="Resume it without waiting any longer; the agent is told you did" onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)} />}
+        >
+          <VStack gap={1}>
+            <Text>{task.waitFor.note}</Text>
+            <Meta>
+              Paused {ago(task.waitFor.since, now)}
+              {task.waits > 1 ? ` (pause ${task.waits} of this task)` : ""}. It holds no slot meanwhile, and carries on in the same session
+              {task.waitFor.until === "time" ? "" : ` when that has happened, when someone mentions the agent on the thread, or at the latest ${fromNow(task.waitFor.deadline, now)} (${new Date(task.waitFor.deadline).toLocaleString()})`}.
+            </Meta>
+          </VStack>
+        </Notice>
+      )}
+      {task.status === "queued" && !isPaused(task) && task.waitFor?.woke && (
+        <Notice tone="info" title="Resuming after a pause, as soon as a slot is free.">
+          It was woken because {task.waitFor.woke}.
+        </Notice>
+      )}
+      {task.status === "queued" && task.retryAt && !isPaused(task) && (
         <Notice
           tone={task.waitReason === "setup" ? "info" : "warning"}
           title={task.waitReason === "setup" ? "It couldn't get started, and tries again shortly." : task.waitReason === "rate_limit" ? "Waiting because the model service is rate limiting requests." : "Waiting for the usage limit to reset."}

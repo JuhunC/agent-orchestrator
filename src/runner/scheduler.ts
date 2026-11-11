@@ -13,7 +13,7 @@ import { queueOrder } from "./queue-order.ts";
 import { fallbackModels } from "../runtime/options.ts";
 import { loadBoards } from "../boards/loader.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
-import { executeTask, recoverInterrupted } from "./run-task.ts";
+import { executeTask, notePausedCancelled, recoverInterrupted } from "./run-task.ts";
 import { settleInbox } from "./inbox.ts";
 
 /**
@@ -216,7 +216,11 @@ class Scheduler {
     }
     const task = getTask(taskId);
     if (task?.status === "queued") {
-      this.finishWithoutRunning(task, "cancelled", reason ?? "Cancelled from the admin UI before it started");
+      // One its agent had paused (wait_for) told the thread it would carry on: say that it won't.
+      const paused = Boolean(task.waitFor);
+      const why = reason ?? (paused ? "Cancelled from the admin UI while it was paused" : "Cancelled from the admin UI before it started");
+      this.finishWithoutRunning(task, "cancelled", why);
+      if (paused) void notePausedCancelled(task, why);
       return true;
     }
     return false;

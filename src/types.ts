@@ -9,6 +9,21 @@ export type TriggerKind = "mention" | "assignment" | "manual" | "retry" | "board
  * What the agent itself said about a task that ended without an error (report_outcome): all of it
  * done, part of it, blocked on a person or other work, or given up. Nothing reported counts as done.
  */
+/** What a paused task waits for (the agent's wait_for), since when and until when at the latest. */
+export interface WaitFor {
+  until: "sub_issues_done" | "blockers_closed" | "issues_closed" | "pull_merged" | "pull_reviewed" | "time";
+  /** The issues to be closed (issues_closed). */
+  issues: number[];
+  /** The pull request to be merged or reviewed. */
+  pull: number | null;
+  /** What the agent means to do when it resumes. */
+  note: string;
+  since: string;
+  deadline: string;
+  /** Set when it was woken: what happened. */
+  woke: string | null;
+}
+
 export type TaskOutcome = "done" | "partial" | "blocked" | "gave_up";
 export type EventKind = "status" | "tool" | "text" | "stderr" | "system" | "error" | "github";
 
@@ -47,10 +62,14 @@ export interface Task {
   commits: number | null;
   retryOf: number | null;
   forgotten: boolean;
-  /** Set while the task waits for a usage limit to reset. */
+  /** Set while the task waits: for a usage limit to reset, or (wake) until what its agent waits for happens, at the latest. */
   retryAt: string | null;
-  /** Why it waits for retryAt: the usage limit, a rate limit, or a start that failed and is tried again. */
-  waitReason: "usage_limit" | "rate_limit" | "setup" | null;
+  /** Why it waits for retryAt: the usage limit, a rate limit, a start that failed and is tried again, or its agent paused it (wait_for). */
+  waitReason: "usage_limit" | "rate_limit" | "setup" | "wake" | null;
+  /** What its agent paused it for (wait_for), while it waits and until it has resumed. */
+  waitFor: WaitFor | null;
+  /** How many times its agent paused it (up to TASK_MAX_WAITS). */
+  waits: number;
   /** How many times a usage limit paused the task. */
   attempts: number;
   /** Commit the first attempt started from, so retries count earlier commits. */

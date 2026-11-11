@@ -38,6 +38,8 @@ const STATUS: Record<TaskStatus, { label: string; variant: BadgeVariant }> = {
   cancelled: { label: "Cancelled", variant: "neutral" },
 };
 
+const PAUSED = { label: "Paused", variant: "purple" } as const;
+
 /** Tones the old pills used, mapped to Astryx badge variants. */
 const TONE: Record<string, BadgeVariant> = {
   queued: "warning",
@@ -61,8 +63,9 @@ const REPORTED: Record<string, { label: string; variant: BadgeVariant }> = {
   gave_up: { label: "Gave up", variant: "error" },
 };
 
-export function StatusPill({ status, outcome }: { status: TaskStatus; outcome?: TaskOutcome | null }) {
-  const shown = (status === "succeeded" && outcome && REPORTED[outcome]) || STATUS[status];
+/** `paused`: a queued task its agent paused until other work is done (api.ts `isPaused`). */
+export function StatusPill({ status, outcome, paused }: { status: TaskStatus; outcome?: TaskOutcome | null; paused?: boolean }) {
+  const shown = (status === "succeeded" && outcome && REPORTED[outcome]) || (status === "queued" && paused ? PAUSED : STATUS[status]);
   return <Badge variant={shown.variant} label={shown.label} />;
 }
 

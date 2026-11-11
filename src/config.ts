@@ -154,6 +154,12 @@ export const config = {
   // A task whose agent does nothing at all for this long (no reply, no tool call, no tool result)
   // is taken to hang: its turn is stopped and it counts as a failure to retry. 0 = never.
   taskStallMinutes: Math.max(0, num("TASK_STALL_MINUTES", 30)),
+  // An agent may pause its task until other work is done (wait_for): for at most this long, this
+  // many times per task; what the tasks wait for is looked at again every WAIT_CHECK_SECONDS (and
+  // when a webhook says something changed). WAIT_MAX_HOURS=0: agents can't pause.
+  waitMaxHours: Math.max(0, num("WAIT_MAX_HOURS", 72)),
+  taskMaxWaits: Math.max(1, int("TASK_MAX_WAITS", 3)),
+  waitCheckSeconds: Math.max(5, int("WAIT_CHECK_SECONDS", 120)),
   // What agents run instead of the Claude Code bundled with the Agent SDK. It must take the same
   // flags and speak the same stream-json protocol. Empty = the bundled one.
   claudeCodeExecutable: executable("CLAUDE_CODE_EXECUTABLE"),

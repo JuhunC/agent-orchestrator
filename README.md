@@ -54,6 +54,8 @@ When the service says it's getting too many requests at once (a rate limit, as o
 
 **When an agent couldn't do it all:** a task that ends without an error isn't always done. Agents are told to call `report_outcome` when they did only part of the work (`partial`), can't go on until a person or other work unblocks them (`blocked`), or tried and couldn't do it (`gave_up`), each with a one-line reason. The reply on GitHub then says so ("is blocked and needs someone 🚧" and why) instead of "finished ✅", the task shows as **Partly done**, **Blocked** or **Gave up** in the admin UI (the Tasks page can filter on them), and the outcomes report doesn't count it as done. Blocked and given-up tasks are listed on the Dashboard under **Waiting on a person** until the agent runs on that thread again, and are recorded as `task_blocked` incidents. On a board, a blocked or given-up agent's card moves to `needs_human` with the reason as its handoff, unless the agent moved the card itself. The next agent on the thread sees how the earlier run ended.
 
+**When an agent has to wait for other work:** an agent that can only go on once something else is done calls `wait_for` instead of finishing or checking again and again. It can wait until its issue's sub-issues are closed (`sub_issues_done`), the issues blocking it are closed (`blockers_closed`), issues it names are closed (`issues_closed`), a pull request is merged (`pull_merged`) or reviewed (`pull_reviewed`), or for some hours (`time`). The task is then **Paused**: it holds no agent slot, its comment on GitHub says what it waits for and why ("paused this task ⏳"), and a board card stays in its column. It carries on in the same session, with its working copy as it was, when that has happened (the webhook wakes it, and a check every `WAIT_CHECK_SECONDS` catches what no webhook told), when someone mentions or assigns the agent on the thread (it reads what they wrote first), when another agent writes to it with `start_related_agent`, when a person presses **Wake now** in the admin UI, or after `WAIT_MAX_HOURS` at the latest. The agent is told why it's back. A task can pause `TASK_MAX_WAITS` times; after that the agent has to finish or report itself blocked. Paused tasks are listed on the Dashboard under **Paused for other work** and on the Tasks page (status **Paused**); cancelling one says so on the thread. To wait for a person's answer, agents use `report_outcome` with `blocked` instead.
+
 ## Agent profiles
 
 Profiles are files, in `profiles/` (a git repository: every edit from the admin UI is a commit). Next to every file editor in the admin UI, **Options** lists what that kind of file can contain: each setting with its type, allowed values, default, an example to copy, and the skills, agents and roles that exist right now.
@@ -144,7 +146,8 @@ Every agent gets a `github` MCP server that runs inside the orchestrator. The in
 | `post_comment` | ask a question or share something mid-task |
 | `commit_and_push` | commit and push the task's branch (rebases once if the branch moved) |
 | `open_pull_request` | open or update the PR (`Closes #n` added) |
-| `report_outcome` | say that the task was only partly done, is blocked, or was given up, with a short reason (see below) |
+| `report_outcome` | say that the task was only partly done, is blocked, or was given up, with a short reason (see above) |
+| `wait_for` | pause the task until sub-issues, blocking issues or named issues are closed, a pull request is merged or reviewed, or some hours have passed; it resumes in the same session (see above) |
 | `get_ci_status` | check runs and statuses for the pushed commit |
 | `fetch_from_github` | `git fetch` with the orchestrator's credentials (the agent's shell has none), to pick up commits pushed mid-task |
 | `clone_repository` | read-only clone of another repo into `.deps/` |
@@ -334,6 +337,9 @@ See [`.env.example`](.env.example) for everything. The main ones:
 | `TASK_FAILURE_RETRIES` | `1` | A task that timed out, went silent or stopped with an error continues in the same session this many times, told what happened, before it fails (0 = it fails at once) |
 | `TASK_STALL_MINUTES` | `30` | A task whose agent does nothing at all for this long (no reply, tool call or tool result) is stopped and counts as a failure to retry (0 = never) |
 | `RESTART_RESUMES` | `2` | A task running when the orchestrator restarts (a deploy, a crash) is queued again and resumes its own session, with its uncommitted work, up to this many times; then it fails as before |
+| `WAIT_MAX_HOURS` | `72` | The longest a task stays paused after its agent called `wait_for`; then it resumes anyway and is told what is still missing (0 = agents can't pause tasks) |
+| `TASK_MAX_WAITS` | `3` | How often one task may be paused; after that the agent has to finish or report itself blocked |
+| `WAIT_CHECK_SECONDS` | `120` | How often the orchestrator looks on GitHub whether what paused tasks wait for has happened, for changes no webhook told it about |
 | `SHUTDOWN_WAIT_SECONDS` | `20` | On shutdown, nothing new starts and running tasks get this long to finish before they're stopped (and resumed after the restart). Keep it below Docker's `stop_grace_period` (30 s in the compose files) |
 | `QUEUE_AGING_MINUTES` | `30` | Queued tasks start in this order: people's requests (mentions, assignments, runs from the admin UI), then work agents started for each other and scheduled runs, then board stages; a task that has waited this long goes first. Boards can also cap their running cards with `limits.max_running` |
 | `GIT_SHARED_OBJECTS` | `on` | New checkouts borrow history from one shared copy of each repository (`DATA_DIR/mirrors`, never pruned), so each holds little more than its files and is quick to make. `off`: a full clone each |
@@ -366,7 +372,7 @@ Problems an administrator should hear about are recorded as incidents: failed ta
 
 - **GitHub's rate limits:** when GitHub says to slow down (its hourly quota, or its secondary limit on writing too fast), requests wait as long as it asks and are retried twice, progress edits pause, and a `github_rate_limit` incident is recorded (once per 10 minutes).
 - **Alerts:** set `ALERT_WEBHOOK_URL` to a Slack or Discord incoming webhook (or any URL that takes JSON) and each one is posted there, at most once per 10 minutes for the same problem. The JSON has `text` (Slack), `content` (Discord), and `kind`, `severity`, `message`, `url`, `task` and `at`. `ALERT_MIN_SEVERITY` (`info`, `warning` (default) or `critical`) sets the least severe that's posted.
-- **Metrics:** set `METRICS_TOKEN` and Prometheus can scrape `GET /metrics` with it as a bearer token. It has tasks by agent and status (`ao_tasks_total`), estimated spend and tokens by agent (`ao_cost_usd_total`, `ao_tokens_total`), running and queued tasks, whether the queue is paused or usage-limited, open sessions, today's and this month's spend, whether agents are isolated, incidents by kind and webhook deliveries by decision.
+- **Metrics:** set `METRICS_TOKEN` and Prometheus can scrape `GET /metrics` with it as a bearer token. It has tasks by agent and status (`ao_tasks_total`), estimated spend and tokens by agent (`ao_cost_usd_total`, `ao_tokens_total`), running, queued and paused tasks (`ao_tasks_paused`), whether the queue is paused or usage-limited, open sessions, today's and this month's spend, whether agents are isolated, incidents by kind and webhook deliveries by decision.
 
 ```yaml
 scrape_configs:

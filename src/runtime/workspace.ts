@@ -27,6 +27,8 @@ export interface Workspace {
   /** The agent may push (its profile allows it and the branch is pushable). */
   willPush: boolean;
   startSha: string;
+  /** The working copy was left as the last attempt left it, not refreshed from GitHub. */
+  kept: boolean;
 }
 
 export function workspaceDir(task: Pick<Task, "owner" | "repo" | "agent" | "threadKind" | "threadNumber"> & { dryRun?: boolean }): string {
@@ -142,9 +144,11 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   if (branch === thread.defaultBranch || branch === targetBranch) canPush = false;
   if (!(await refExists(dir, startPoint))) throw new Error(`Branch ${startPoint.replace("origin/", "")} not found (is the repository empty?)`);
 
-  // After a usage-limit pause, keep the interrupted attempt's work so the agent can carry on.
+  // After a usage-limit pause or a restart, keep the interrupted attempt's work so the agent can
+  // carry on. A task resumed from its own pause (wait_for) keeps it only when it holds work that
+  // isn't on GitHub: otherwise the branch is refreshed, so it has what was merged meanwhile.
   const current = await git(dir, ["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => "");
-  const keepWork = (task.attempts > 0 || task.restarts > 0) && current === branch;
+  const keepWork = current === branch && (task.waitFor ? canPush && profile.github.push && (await hasUnpublishedWork(dir, branch)) : task.attempts > 0 || task.restarts > 0);
   if (!keepWork) {
     await git(dir, ["checkout", "--force", "-B", branch, startPoint], { token });
     await git(dir, ["clean", "-fd", "-e", ".deps/"]);
@@ -155,7 +159,14 @@ export async function prepareWorkspace(task: Task, profile: Profile, thread: Thr
   await git(dir, ["config", "user.email", identity.email]);
   const startSha = keepWork && task.startSha ? task.startSha : await git(dir, ["rev-parse", "HEAD"]);
 
-  return { dir, branch, baseBranch, targetBranch, targetFrom: configured && targetBranch === configured ? base.from : null, canPush, willPush: canPush && profile.github.push, startSha };
+  return { dir, branch, baseBranch, targetBranch, targetFrom: configured && targetBranch === configured ? base.from : null, canPush, willPush: canPush && profile.github.push, startSha, kept: keepWork };
+}
+
+/** Uncommitted files, or commits that aren't on the branch on GitHub. */
+async function hasUnpublishedWork(dir: string, branch: string): Promise<boolean> {
+  if ((await git(dir, ["status", "--porcelain"])).trim()) return true;
+  if (!(await refExists(dir, `refs/remotes/origin/${branch}`))) return true;
+  return Number(await git(dir, ["rev-list", "--count", `origin/${branch}..HEAD`]).catch(() => "1")) > 0;
 }
 
 /**

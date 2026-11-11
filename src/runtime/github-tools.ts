@@ -12,7 +12,7 @@ import type { Profile } from "../profiles/types.ts";
 import { listWikiPages, readWikiPage, writeWikiPage } from "../github/wiki.ts";
 import { git, GitError } from "../runner/git.ts";
 import { mention } from "../runner/progress.ts";
-import type { EventKind, Task, TaskOutcome } from "../types.ts";
+import type { EventKind, Task, TaskOutcome, WaitFor } from "../types.ts";
 import { allowedMoves, canMove, type Board } from "../boards/loader.ts";
 import { HANDOFF_FIELDS, hasCardFields, renderHandoff, type HandoffField, type HandoffFields } from "../boards/rules.ts";
 import { setCardFields } from "../boards/engine.ts";
@@ -41,6 +41,7 @@ import { makeSharedDir } from "./isolation.ts";
 import { checkSubIssues, describeSubIssueWork, fetchBranch, isAncestor } from "./sub-issues.ts";
 import { ensureBaseBranch, excludeFromGit, parentBranchFor, type Workspace } from "./workspace.ts";
 import { recordIncident } from "../runner/incidents.ts";
+import { checkWait, describeWait, type WaitCheck } from "../runner/waits.ts";
 import { scheduleTools } from "../schedules/tools.ts";
 
 /** Set when the task came from a project board column. */
@@ -96,6 +97,8 @@ export interface ToolContext {
   relatedStarts?: RelatedStart[];
   /** What the agent said about its own work (report_outcome); nothing said counts as done. */
   outcome?: { outcome: TaskOutcome; note: string } | null;
+  /** What the agent asked to be paused for (wait_for): the task goes back to the queue when the turn ends. */
+  wait?: WaitFor | null;
   board: BoardContext | null;
 }
 
@@ -360,10 +363,12 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
             );
           }
           ctx.board.pendingMove = { to: target, note: renderHandoff(args.handoff, args.fields ?? {}) };
+          const unpaused = ctx.wait ? " The pause you asked for is off: moving the card ends your work on it." : "";
+          ctx.wait = null;
           ctx.onEvent("tool", `Will move the card to ${target}`);
           const rules = board.columns[target]?.rules;
           const frozen = rules?.evidence.length ? " Don't change files or push after this: the evidence is checked again before the card moves." : "";
-          return ok(`The card will move to "${target}" when you finish. Wrap up now.${frozen}`);
+          return ok(`The card will move to "${target}" when you finish. Wrap up now.${frozen}${unpaused}`);
         })(),
     ),
   );
@@ -497,12 +502,71 @@ export function createGithubServer(profile: Profile, current: () => ToolContext 
           }
           if (!note) return fail("Give a note: one or two sentences on what is missing, or what you are waiting for.");
           ctx.outcome = { outcome: args.outcome, note };
+          const unpaused = ctx.wait ? " The pause you asked for is off: the task ends with this report." : "";
+          ctx.wait = null;
           ctx.onEvent("system", `Reported the outcome: ${OUTCOME_WORDS[args.outcome as Exclude<TaskOutcome, "done">]} (${note})`);
           const parked = ctx.board?.board.needsHuman && args.outcome !== "partial" && !ctx.board.pendingMove ? ` Unless you move the card yourself, it goes to ${ctx.board.board.needsHuman} with your note when you finish.` : "";
-          return ok(`Noted: the task will be shown as ${OUTCOME_WORDS[args.outcome as Exclude<TaskOutcome, "done">]}.${parked} Finish with your summary as usual.`);
+          return ok(`Noted: the task will be shown as ${OUTCOME_WORDS[args.outcome as Exclude<TaskOutcome, "done">]}.${parked}${unpaused} Finish with your summary as usual.`);
         })(),
     ),
   );
+
+  if (config.waitMaxHours > 0) {
+    tools.push(
+      tool(
+        "wait_for",
+        "Pause this task until other work is done, instead of ending it or checking again and again. sub_issues_done: this issue's sub-issues are closed. blockers_closed: the issues blocking this one are closed. issues_closed: the issues you list are closed. pull_merged: a pull request is merged (or closed). pull_reviewed: someone reviews a pull request. time: some hours have passed. After calling it, end your turn with a short note on where things stand. The task holds no slot while it waits; you are resumed in this same session, with your working copy as you left it, when that has happened, when someone writes to you on the thread, or after `hours` at the latest. To wait for a person to answer or decide something, call report_outcome with blocked instead.",
+        {
+          until: z.enum(["sub_issues_done", "blockers_closed", "issues_closed", "pull_merged", "pull_reviewed", "time"]),
+          issues: z.array(z.number().int().positive()).max(20).optional().describe("issues_closed: the numbers of the issues to wait for, in this repository"),
+          pull: z.number().int().positive().optional().describe("pull_merged, pull_reviewed: the pull request's number (default: this task's pull request)"),
+          hours: z.number().positive().optional().describe(`time: how long to wait. Otherwise: the longest to wait before you are resumed anyway. At most ${config.waitMaxHours}, which is also the default.`),
+          note: z.string().max(600).describe("What you will do when you are resumed"),
+        },
+        (args) =>
+          withContext(async (ctx) => {
+            const { task } = ctx;
+            if (task.waits >= config.taskMaxWaits)
+              return fail(`This task has already been paused ${task.waits} time${task.waits === 1 ? "" : "s"}, the most allowed. Finish now; if you can't go on, call report_outcome with blocked.`);
+            if (ctx.board?.pendingMove) return fail("You already asked to move the card, which ends your work on it: the task can't also be paused.");
+            if (ctx.outcome) return fail(`You already reported this task as ${OUTCOME_WORDS[ctx.outcome.outcome as Exclude<TaskOutcome, "done">]}. Take that back with report_outcome done before you pause it.`);
+            const since = new Date();
+            const hours = Math.min(args.hours ?? config.waitMaxHours, config.waitMaxHours);
+            const wait: WaitFor = {
+              until: args.until,
+              issues: [],
+              pull: null,
+              note: args.note.trim(),
+              since: since.toISOString(),
+              deadline: new Date(since.getTime() + hours * 3_600_000).toISOString(),
+              woke: null,
+            };
+            if (args.until === "time") {
+              if (!args.hours) return fail("Say how long to wait: give hours.");
+            } else if (args.until === "issues_closed") {
+              wait.issues = [...new Set(args.issues ?? [])];
+              if (!wait.issues.length) return fail("Say which issues to wait for: give their numbers in issues.");
+            } else if (args.until === "pull_merged" || args.until === "pull_reviewed") {
+              wait.pull = args.pull ?? task.prNumber ?? (task.threadKind === "pull" ? task.threadNumber : null);
+              if (!wait.pull) return fail("This task has no pull request yet. Say which one to wait for: give its number in pull.");
+            } else if (task.threadKind !== "issue") {
+              return fail("Only an issue has sub-issues and blockers, and this task isn't on an issue. Wait for issues_closed, a pull request or a time instead.");
+            }
+            let check: WaitCheck;
+            try {
+              check = await checkWait(ctx.gh, task, wait, since.getTime());
+            } catch (error) {
+              return fail(`Couldn't look that up on GitHub: ${errorMessage(error)}`);
+            }
+            if (check.met) return ok(`No need to wait: ${check.text}. Carry on now.`);
+            ctx.wait = wait;
+            ctx.onEvent("system", `Asked to be paused until ${describeWait(wait)}`);
+            const latest = wait.until === "time" ? "" : ` (${check.text}), and at the latest at ${wait.deadline.slice(0, 16).replace("T", " ")} UTC`;
+            return ok(`This task will be paused until ${describeWait(wait)}${latest}. Someone writing to you on the thread wakes you sooner. End your turn now with a short note on where things stand; keep your full summary for when you are resumed.`);
+          })(),
+      ),
+    );
+  }
 
   tools.push(
     tool("get_ci_status", "Show CI check results for the commit you last pushed.", {}, () =>
@@ -985,6 +1049,7 @@ const WRITE_TOOLS = new Set([
   "link_issue",
   "merge_into_parent",
   "start_related_agent",
+  "wait_for",
   "write_wiki_page",
   "delete_wiki_page",
   "create_schedule",

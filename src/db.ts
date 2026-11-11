@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { config } from "./config.ts";
-import type { Delivery, EventKind, Schedule, Task, TaskEvent, TaskStatus, TaskUsage, ThreadKind, ThreadRef } from "./types.ts";
+import type { Delivery, EventKind, Schedule, Task, TaskEvent, TaskStatus, TaskUsage, ThreadKind, ThreadRef, WaitFor } from "./types.ts";
 
 mkdirSync(config.dataDir, { recursive: true });
 
@@ -120,6 +120,9 @@ addColumn("tasks", "restarts", "INTEGER NOT NULL DEFAULT 0");
 // Times the task was continued after a timeout, a stall or an error (see run-task.ts).
 addColumn("tasks", "recoveries", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "wait_reason", "TEXT");
+// What a task its agent paused is waiting for (wait_for; see runner/waits.ts), and how often it paused.
+addColumn("tasks", "wait_for", "TEXT");
+addColumn("tasks", "waits", "INTEGER NOT NULL DEFAULT 0");
 addColumn("tasks", "outcome", "TEXT");
 addColumn("tasks", "outcome_note", "TEXT");
 addColumn("tasks", "profile_version", "TEXT");
@@ -246,6 +249,8 @@ function toTask(row: Row): Task {
     restarts: Number(row.restarts ?? 0),
     recoveries: Number(row.recoveries ?? 0),
     waitReason: (row.wait_reason as Task["waitReason"]) ?? null,
+    waitFor: json<WaitFor | null>(row.wait_for, null),
+    waits: Number(row.waits ?? 0),
     outcome: (row.outcome as Task["outcome"]) ?? null,
     outcomeNote: (row.outcome_note as string | null) ?? null,
     profileVersion: (row.profile_version as string | null) ?? null,
@@ -351,6 +356,8 @@ const TASK_COLUMNS: Record<string, string> = {
   restarts: "restarts",
   recoveries: "recoveries",
   waitReason: "wait_reason",
+  waitFor: "wait_for",
+  waits: "waits",
   outcome: "outcome",
   outcomeNote: "outcome_note",
   profileVersion: "profile_version",
@@ -374,6 +381,8 @@ export interface TaskFilter {
   status?: string;
   /** What the agent reported: "partial", "blocked", "gave_up" (several with commas), or "any" of them. */
   outcome?: string;
+  /** true: only tasks their agent paused (wait_for); false: leave those out. */
+  waiting?: boolean;
   agent?: string;
   repo?: string;
   limit?: number;
@@ -393,6 +402,7 @@ export function listTasks(filter: TaskFilter = {}): Task[] {
     where.push(`status = 'succeeded' AND outcome IN (${outcomes.map(() => "?").join(",")})`);
     values.push(...outcomes);
   }
+  if (filter.waiting !== undefined) where.push(filter.waiting ? "status = 'queued' AND wait_reason = 'wake'" : "NOT (status = 'queued' AND wait_reason IS 'wake')");
   if (filter.agent) {
     where.push("agent = ?");
     values.push(filter.agent);
@@ -420,6 +430,21 @@ export function tasksNeedingPerson(since: string, limit = 20): Task[] {
       AND later.thread_kind = t.thread_kind AND later.thread_number = t.thread_number AND later.dry_run = 0)
     ORDER BY id DESC LIMIT ?`;
   return (db.prepare(sql).all(since, limit) as Row[]).map(toTask);
+}
+
+/** Tasks their agent paused until something happens (wait_for), oldest first; in one repository, or on one thread. */
+export function waitingTasks(where: { owner?: string; repo?: string; kind?: ThreadKind; number?: number } = {}): Task[] {
+  const conditions = ["status = 'queued'", "wait_reason = 'wake'"];
+  const values: SQLInputValue[] = [];
+  if (where.owner && where.repo) {
+    conditions.push("owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE");
+    values.push(where.owner, where.repo);
+  }
+  if (where.kind && where.number) {
+    conditions.push("thread_kind = ? AND thread_number = ?");
+    values.push(where.kind, where.number);
+  }
+  return (db.prepare(`SELECT * FROM tasks WHERE ${conditions.join(" AND ")} ORDER BY id`).all(...values) as Row[]).map(toTask);
 }
 
 export function queuedTasks(): Task[] {
