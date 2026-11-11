@@ -4,6 +4,15 @@ import { api, duration, KIND_LABEL, useNow, useStream, type Task, type TaskEvent
 import { A, Columns, Empty, KV, Meta, Notice, Panel, StatusPill, Tag, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
+/** Something that happened on GitHub while the agent works, which it hasn't been told yet. */
+interface WaitingNote {
+  author: string;
+  summary: string;
+  url: string;
+  mention: boolean;
+  fromAgent: boolean;
+}
+
 /** A task in a chain of agents starting each other. */
 interface ChainNode {
   id: number;
@@ -57,6 +66,7 @@ export function TaskDetail({ id }: { id: number }) {
   const [task, setTask] = useState<Task | null>(null);
   const [chain, setChain] = useState<{ ancestors: ChainNode[]; started: ChainNode[] } | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
+  const [inbox, setInbox] = useState<WaitingNote[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showStderr, setShowStderr] = useState(false);
   const [follow, setFollow] = useState(true);
@@ -68,10 +78,11 @@ export function TaskDetail({ id }: { id: number }) {
     setTask(null);
     setEvents([]);
     api
-      .get<{ task: Task; events: TaskEvent[]; chain?: { ancestors: ChainNode[]; started: ChainNode[] } }>(`/api/tasks/${id}`)
+      .get<{ task: Task; events: TaskEvent[]; inbox: WaitingNote[]; chain?: { ancestors: ChainNode[]; started: ChainNode[] } }>(`/api/tasks/${id}`)
       .then((data) => {
         setTask(data.task);
         setEvents(data.events);
+        setInbox(data.inbox);
         setChain(data.chain ?? null);
       })
       .catch((err) => setError((err as Error).message));
@@ -81,6 +92,13 @@ export function TaskDetail({ id }: { id: number }) {
     if (message.type === "task" && message.task.id === id) setTask(message.task);
     if (message.type === "event" && message.event.taskId === id) {
       setEvents((current) => (current.some((event) => event.id === message.event.id) ? current : [...current, message.event]));
+      // GitHub activity arrived for the agent, or it was just handed over: what's waiting changed.
+      if (message.event.kind === "github") {
+        void api
+          .get<{ inbox: WaitingNote[] }>(`/api/tasks/${id}?after=${message.event.id}`)
+          .then((data) => setInbox(data.inbox))
+          .catch(() => undefined);
+      }
     }
   });
 
@@ -141,6 +159,31 @@ export function TaskDetail({ id }: { id: number }) {
       {task.status === "queued" && task.retryAt && (
         <Notice title="Waiting for the usage limit to reset." action={<Button label="Run now" onClick={() => void api.post(`/api/tasks/${task.id}/run-now`)} />}>
           It continues automatically at {new Date(task.retryAt).toLocaleString()} (attempt {task.attempts + 1}).
+        </Notice>
+      )}
+
+      {active && inbox.length > 0 && (
+        <Notice tone="info" title={`${inbox.length} update${inbox.length === 1 ? "" : "s"} from GitHub waiting for the agent`}>
+          <VStack gap={1}>
+            <Text>
+              {task.status === "running"
+                ? "It's told at its next step."
+                : "It's told when the task starts again: updates are kept across restarts."}
+            </Text>
+            {inbox.map((note, index) => (
+              <HStack key={index} gap={2} vAlign="center" wrap="wrap">
+                <Text>
+                  {who(note.author)} {note.summary}
+                </Text>
+                {note.mention && <Tag>{note.fromAgent ? "from an agent" : "mention"}</Tag>}
+                {note.url && (
+                  <A to={note.url} external>
+                    view
+                  </A>
+                )}
+              </HStack>
+            ))}
+          </VStack>
         </Notice>
       )}
 

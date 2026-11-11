@@ -1,5 +1,5 @@
 import { bus } from "../bus.ts";
-import { addEvent, createTask, getTask, queuedTaskForThread, updateTask } from "../db.ts";
+import { addEvent, addInboxNote, createTask, getTask, inboxNotes, queuedTaskForThread, updateTask } from "../db.ts";
 import type { Task, ThreadKind, ThreadRef } from "../types.ts";
 
 /** Something a person did on an issue, pull request or discussion. */
@@ -132,18 +132,17 @@ export function activityFor(event: string, payload: Payload): Activity | null {
   return null;
 }
 
-/** Notes waiting for each running task's agent, by task id. */
-const inboxes = new Map<number, Note[]>();
-
 function emit(taskId: number, message: string): void {
   bus.publish({ type: "event", event: addEvent(taskId, "github", message) });
 }
 
-/** Queues the activity for an agent that's working on the thread; it sees it at its next step. */
+/**
+ * Queues the activity for an agent that's working on the thread; it sees it at its next step. The
+ * note is kept in the database until then, so it survives a restart: the task resumes and gets it.
+ */
 export function deliver(task: Task, activity: Activity, options: { trusted: boolean; mention?: boolean; startedByTask?: number }): void {
-  const box = inboxes.get(task.id) ?? [];
-  box.push({ ...activity, trusted: options.trusted, mention: options.mention ?? false, startedByTask: options.startedByTask ?? null });
-  inboxes.set(task.id, box);
+  const note: Note = { ...activity, trusted: options.trusted, mention: options.mention ?? false, startedByTask: options.startedByTask ?? null };
+  addInboxNote(task.id, note);
   const where = sameThread(task, activity.ref) ? "" : ` on #${activity.ref.number}`;
   emit(task.id, `@${activity.author} ${activity.summary}${where}${activity.body ? `: ${activity.body.split("\n")[0]!.slice(0, 160)}` : ""}`);
 }
@@ -152,11 +151,15 @@ function sameThread(task: Task, ref: ThreadRef): boolean {
   return task.threadKind === ref.kind && task.threadNumber === ref.number;
 }
 
+/** What's waiting for a task's agent, for the task page. */
+export function waitingNotes(taskId: number): { author: string; summary: string; url: string; mention: boolean; fromAgent: boolean }[] {
+  return inboxNotes<Note>(taskId).map((note) => ({ author: note.author, summary: note.summary, url: note.url, mention: note.mention, fromAgent: note.startedByTask !== null }));
+}
+
 /** Takes the waiting notes as a message for the agent, or null when there are none. */
 export function takeInbox(taskId: number): string | null {
-  const notes = inboxes.get(taskId);
-  if (!notes?.length) return null;
-  inboxes.delete(taskId);
+  const notes = inboxNotes<Note>(taskId, true);
+  if (!notes.length) return null;
   const task = getTask(taskId);
   const lines = notes.map((note) => {
     const where = task && !sameThread(task, note.ref) ? ` on #${note.ref.number}` : "";
@@ -179,8 +182,7 @@ export function takeInbox(taskId: number): string | null {
  * request isn't lost; other activity is on the thread for next time.
  */
 export function settleInbox(task: Task, startFollowUp: boolean): Task | null {
-  const notes = inboxes.get(task.id) ?? [];
-  inboxes.delete(task.id);
+  const notes = inboxNotes<Note>(task.id, true);
   const mentions = notes.filter((note) => note.mention);
   if (!startFollowUp || !mentions.length) return null;
   const text = mentions.map((note) => `@${note.author} asked (${note.url}):\n\n${note.body}`).join("\n\n---\n\n");

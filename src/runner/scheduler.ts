@@ -14,6 +14,7 @@ import { fallbackModels } from "../runtime/options.ts";
 import { loadBoards } from "../boards/loader.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
 import { executeTask, recoverInterrupted } from "./run-task.ts";
+import { settleInbox } from "./inbox.ts";
 
 /**
  * Runs queued tasks, up to the concurrency limit. Two tasks that share a workspace (same agent
@@ -198,6 +199,7 @@ class Scheduler {
   private finishWithoutRunning(task: Task, status: "cancelled" | "failed", reason: string): void {
     const updated = updateTask(task.id, { status, finishedAt: new Date().toISOString(), error: reason });
     bus.publish({ type: "task", task: updated });
+    settleInbox(updated, false); // what waited for a task that was interrupted and never resumed
     void boardTaskSettled(task.id).catch(() => undefined);
   }
 

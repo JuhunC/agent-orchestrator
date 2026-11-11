@@ -31,6 +31,7 @@ import { backUp, backupDir, listBackups } from "../runtime/backup.ts";
 import { isolationStatus } from "../runtime/isolation.ts";
 import { setSpendLimits, spendBlockReason, spendStatus } from "../runner/spend.ts";
 import { queueOrder } from "../runner/queue-order.ts";
+import { waitingNotes } from "../runner/inbox.ts";
 import { listIncidents, renderMetrics } from "../runner/incidents.ts";
 import { outcomeReport } from "../runner/outcomes.ts";
 import { MAX_COMMENTS_PER_TASK, MAX_SUB_ISSUES_PER_TASK } from "../runtime/github-tools.ts";
@@ -266,7 +267,7 @@ export function registerApi(app: FastifyInstance): void {
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/tasks/:id", async (request, reply) => {
     const task = getTask(Number(request.params.id));
     if (!task) return reply.code(404).send({ error: "Task not found" });
-    return { task, events: listEvents(task.id, Number(request.query.after ?? 0)), chain: request.query.after ? undefined : taskChain(task) };
+    return { task, events: listEvents(task.id, Number(request.query.after ?? 0)), chain: request.query.after ? undefined : taskChain(task), inbox: waitingNotes(task.id) };
   });
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (request, reply) => {

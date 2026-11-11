@@ -544,6 +544,7 @@ export async function recoverInterrupted(task: Task): Promise<void> {
 export async function markInterrupted(task: Task): Promise<void> {
   const updated = patch(task.id, { status: "failed", finishedAt: new Date().toISOString(), error: "Interrupted because the orchestrator restarted" });
   emit(task.id, "error", "Interrupted because the orchestrator restarted");
+  settleInbox(updated, true); // a mention it never saw still gets its run
   if (task.dryRun) return;
   try {
     const gh = await clientFor(task);

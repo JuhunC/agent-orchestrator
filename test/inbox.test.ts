@@ -33,6 +33,10 @@ model.script = async (request: ModelRequest) => {
     await gate;
     return say("First pass done");
   }
+  if (all.includes("RESTART_NOTE")) {
+    if (all.includes("New activity on GitHub")) return say(all.includes("use the staging database") ? "Used staging" : "Odd news");
+    return request.prompt.includes("You were interrupted") ? say("Resumed") : sleep(30);
+  }
   if (all.includes("MENTIONED")) {
     if (calls === 0) return sleep(3);
     return say(all.includes("also update the docs") ? "Updated the docs too" : "Missed the mention");
@@ -139,4 +143,22 @@ test("a mention the agent never saw becomes a follow-up task; activity on its PR
   assert.match(follow.requestText, /one more thing/);
   h.scheduler.kick();
   assert.equal((await h.waitForTask(follow.id)).status, "succeeded");
+});
+
+test("an update the agent hasn't seen survives a restart: the resumed task gets it", async () => {
+  const task = await h.mentionOnNewIssue(505, "aorch-worker", "RESTART_NOTE");
+  await untilRunning(task.id);
+  assert.equal((await comment(505, "bob", "use the staging database")).decision, "forwarded");
+  const page = (await h.app.inject({ url: `/api/tasks/${task.id}` })).json() as { inbox: { author: string; summary: string; url: string; mention: boolean }[] };
+  assert.deepEqual(page.inbox, [{ author: "bob", summary: "commented", url: page.inbox[0]!.url, mention: false, fromAgent: false }], "the task page lists what's waiting");
+
+  // A deploy before the agent's next step: the note is in the database, not in the process.
+  await h.scheduler.shutdown(0);
+  assert.equal(db.getTask(task.id)!.status, "queued");
+  assert.equal(db.inboxNotes(task.id).length, 1);
+  await h.scheduler.start();
+  const done = await h.waitForTask(task.id);
+  assert.equal(done.status, "succeeded", done.error ?? "");
+  assert.equal(done.resultText, "Used staging");
+  assert.equal(db.inboxNotes(task.id).length, 0);
 });

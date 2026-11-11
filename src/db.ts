@@ -542,6 +542,35 @@ export function listEvents(taskId: number, afterId = 0, limit = 2000): TaskEvent
   }));
 }
 
+// ---------- inbox ----------
+
+// What reached an agent that's working and it hasn't seen yet (runner/inbox.ts). Kept here, not in
+// memory, so a restart between a webhook and the agent's next step doesn't lose it.
+db.exec(`CREATE TABLE IF NOT EXISTS inbox_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  task_id INTEGER NOT NULL,
+  note TEXT NOT NULL,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS inbox_notes_task ON inbox_notes (task_id)`);
+
+export function addInboxNote(taskId: number, note: object): void {
+  db.prepare("INSERT INTO inbox_notes (task_id, note, ts) VALUES (?, ?, ?)").run(taskId, JSON.stringify(note), now());
+}
+
+/** The notes waiting for a task, oldest first; `take` also removes them. */
+export function inboxNotes<T>(taskId: number, take = false): T[] {
+  const rows = db.prepare("SELECT note FROM inbox_notes WHERE task_id = ? ORDER BY id").all(taskId) as Row[];
+  if (take && rows.length) db.prepare("DELETE FROM inbox_notes WHERE task_id = ?").run(taskId);
+  return rows.map((row) => json<T | null>(row.note, null)).filter((note): note is T => note !== null);
+}
+
+/** How many notes wait for each task that has some. */
+export function inboxCounts(): Record<number, number> {
+  const rows = db.prepare("SELECT task_id, COUNT(*) AS count FROM inbox_notes GROUP BY task_id").all() as Row[];
+  return Object.fromEntries(rows.map((row) => [Number(row.task_id), Number(row.count)]));
+}
+
 // ---------- thread links ----------
 
 export function linkThreads(owner: string, repo: string, a: { kind: ThreadKind; number: number }, b: { kind: ThreadKind; number: number }): void {
@@ -1029,6 +1058,7 @@ export function pruneTaskDetail(before: string): { tasks: number; events: number
   const old = "SELECT id FROM tasks WHERE status IN ('succeeded', 'failed', 'cancelled') AND COALESCE(finished_at, started_at, created_at) < ?";
   const events = db.prepare(`DELETE FROM task_events WHERE task_id IN (${old})`).run(before);
   const tasks = db.prepare(`UPDATE tasks SET prompt = NULL WHERE prompt IS NOT NULL AND id IN (${old})`).run(before);
+  db.prepare(`DELETE FROM inbox_notes WHERE task_id IN (${old})`).run(before);
   return { tasks: Number(tasks.changes), events: Number(events.changes) };
 }
 
