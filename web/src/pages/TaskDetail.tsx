@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Blockquote, Button, CheckboxInput, Code, CodeBlock, Heading, HStack, StackItem, Text, VStack } from "@astryxdesign/core";
-import { api, duration, KIND_LABEL, useNow, useStream, type Task, type TaskEvent } from "../api.ts";
+import { ago, api, duration, KIND_LABEL, useNow, useStream, type Task, type TaskEvent } from "../api.ts";
 import { A, Columns, Empty, KV, Meta, Notice, Panel, StatusPill, Tag, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
@@ -26,6 +26,7 @@ interface ChainNode {
   status: Task["status"];
   board: string | null;
   boardColumn: string | null;
+  createdAt?: string;
   started?: ChainNode[];
 }
 
@@ -62,10 +63,36 @@ function Chain({ task, chain }: { task: Task; chain: { ancestors: ChainNode[]; s
   );
 }
 
+/** Other agents' runs on the same thread: this agent's prompt tells it about them. */
+function Others({ others, task, now }: { others: ChainNode[]; task: Task; now: number }) {
+  if (!others.length) return null;
+  const working = others.filter((other) => other.status === "running").length;
+  return (
+    <Panel title="Other agents on this thread" hint={working ? `${working} working now · the agent is told about these runs` : "the agent is told about these runs"}>
+      <VStack gap={1.5}>
+        {others.map((other) => (
+          <HStack key={other.id} gap={2} vAlign="center" wrap="wrap">
+            <StatusPill status={other.status} />
+            <Text>
+              <A to={`/tasks/${other.id}`}>task #{other.id}</A> · {other.agent}
+              {other.threadNumber !== task.threadNumber ? ` on ${KIND_LABEL[other.threadKind]} #${other.threadNumber}` : ""}
+            </Text>
+            <Meta>
+              · {other.triggerKind === "board" && other.boardColumn ? `board stage (${other.boardColumn})` : other.triggerKind}
+              {other.createdAt ? ` · ${ago(other.createdAt, now)}` : ""}
+            </Meta>
+          </HStack>
+        ))}
+      </VStack>
+    </Panel>
+  );
+}
+
 export function TaskDetail({ id }: { id: number }) {
   const [task, setTask] = useState<Task | null>(null);
   const [chain, setChain] = useState<{ ancestors: ChainNode[]; started: ChainNode[] } | null>(null);
   const [events, setEvents] = useState<TaskEvent[]>([]);
+  const [others, setOthers] = useState<ChainNode[]>([]);
   const [inbox, setInbox] = useState<WaitingNote[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showStderr, setShowStderr] = useState(false);
@@ -78,11 +105,12 @@ export function TaskDetail({ id }: { id: number }) {
     setTask(null);
     setEvents([]);
     api
-      .get<{ task: Task; events: TaskEvent[]; inbox: WaitingNote[]; chain?: { ancestors: ChainNode[]; started: ChainNode[] } }>(`/api/tasks/${id}`)
+      .get<{ task: Task; events: TaskEvent[]; inbox: WaitingNote[]; others?: ChainNode[]; chain?: { ancestors: ChainNode[]; started: ChainNode[] } }>(`/api/tasks/${id}`)
       .then((data) => {
         setTask(data.task);
         setEvents(data.events);
         setInbox(data.inbox);
+        setOthers(data.others ?? []);
         setChain(data.chain ?? null);
       })
       .catch((err) => setError((err as Error).message));
@@ -90,6 +118,10 @@ export function TaskDetail({ id }: { id: number }) {
 
   useStream((message) => {
     if (message.type === "task" && message.task.id === id) setTask(message.task);
+    if (message.type === "task" && message.task.id !== id) {
+      const changed = message.task;
+      setOthers((current) => (current.some((other) => other.id === changed.id) ? current.map((other) => (other.id === changed.id ? { ...other, status: changed.status } : other)) : current));
+    }
     if (message.type === "event" && message.event.taskId === id) {
       setEvents((current) => (current.some((event) => event.id === message.event.id) ? current : [...current, message.event]));
       // GitHub activity arrived for the agent, or it was just handed over: what's waiting changed.
@@ -188,6 +220,7 @@ export function TaskDetail({ id }: { id: number }) {
       )}
 
       {chain && <Chain task={task} chain={chain} />}
+      <Others others={others} task={task} now={now} />
 
       <Columns>
         <Panel title="Request">

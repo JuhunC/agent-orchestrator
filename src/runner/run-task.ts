@@ -4,7 +4,7 @@ import { allowedMoves, getBoard } from "../boards/loader.ts";
 import { describeRules, hasCardFields, hasRules } from "../boards/rules.ts";
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { addEvent, addHandoff, addVote, getBoardItem, lastSessionId, listHandoffs, tasksInRound, threadHistory, updateTask } from "../db.ts";
+import { addEvent, addHandoff, addVote, getBoardItem, lastSessionId, listHandoffs, othersOnThread, tasksInRound, threadHistory, updateTask } from "../db.ts";
 import { agentAccount, clientFor } from "../github/accounts.ts";
 import type { GitHubClient } from "../github/app.ts";
 import { refText } from "../github/relations.ts";
@@ -157,6 +157,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
 
     const history = threadHistory(ref, profile.name, task.id);
     if (history.length) onEvent("system", `Loaded ${history.length} earlier run${history.length === 1 ? "" : "s"} as context`);
+    const others = othersOnThread(ref, profile.name, task.id);
+    if (others.length) onEvent("system", `Loaded what other agents did here as context (${[...new Set(others.map((other) => other.agent))].join(", ")})`);
     const workType = boardContext ? await cardWorkType({ gh, task }, boardContext.board).catch(() => null) : null;
     const moves = boardContext && column ? allowedMoves(boardContext.board, column.name, workType?.type) : [];
     const stage: BoardStage | null =
@@ -184,8 +186,8 @@ export async function executeTask(initial: Task, signal: AbortSignal): Promise<v
         : null;
     const schedule = scheduleRunInfo(task, profile);
     const prompts = {
-      full: buildPrompt({ agent: profile, task, thread, history, workspace, board: stage, schedule }),
-      followUp: buildFollowUpPrompt({ agent: profile, task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0 || task.restarts > 0, board: stage, schedule }),
+      full: buildPrompt({ agent: profile, task, thread, history, others, workspace, board: stage, schedule }),
+      followUp: buildFollowUpPrompt({ agent: profile, task, thread, workspace, since: history.at(-1)?.finishedAt ?? null, interrupted: task.attempts > 0 || task.restarts > 0, board: stage, schedule, others }),
     };
 
     const context: ToolContext = { task, profile, thread, workspace, gh, onEvent, onPullRequest: setPullRequest, comments: 0, pushes: 0, board: boardContext };

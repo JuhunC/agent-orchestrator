@@ -13,6 +13,7 @@ import {
   listEvents,
   listTasks,
   listThreads,
+  othersOnThread,
   setForgotten,
   setSetting,
   taskStats,
@@ -267,7 +268,15 @@ export function registerApi(app: FastifyInstance): void {
   app.get<{ Params: { id: string }; Querystring: { after?: string } }>("/api/tasks/:id", async (request, reply) => {
     const task = getTask(Number(request.params.id));
     if (!task) return reply.code(404).send({ error: "Task not found" });
-    return { task, events: listEvents(task.id, Number(request.query.after ?? 0)), chain: request.query.after ? undefined : taskChain(task), inbox: waitingNotes(task.id) };
+    const first = !request.query.after;
+    return {
+      task,
+      events: listEvents(task.id, Number(request.query.after ?? 0)),
+      chain: first ? taskChain(task) : undefined,
+      /** Other agents' runs on the same thread: what this agent was told about in its prompt. */
+      others: first ? othersOnThread({ owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber }, task.agent, task.id).map(chainEntry).reverse() : undefined,
+      inbox: waitingNotes(task.id),
+    };
   });
 
   app.post<{ Params: { id: string } }>("/api/tasks/:id/cancel", async (request, reply) => {

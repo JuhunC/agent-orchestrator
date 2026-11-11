@@ -414,6 +414,25 @@ export function threadHistory(ref: ThreadRef, agent: string, excludeTaskId?: num
   return rows.map(toTask).reverse();
 }
 
+/**
+ * What other agents did, or are doing, on a thread and the threads linked to it, oldest first:
+ * the context an agent's own history doesn't have.
+ */
+export function othersOnThread(ref: ThreadRef, agent: string, excludeTaskId?: number): Task[] {
+  const threads = [ref, ...linkedThreads(ref)];
+  const clauses = threads.map(() => "(thread_kind = ? AND thread_number = ?)").join(" OR ");
+  const values: SQLInputValue[] = [ref.owner, ref.repo, agent];
+  for (const thread of threads) values.push(thread.kind, thread.number);
+  const rows = db
+    .prepare(
+      `SELECT * FROM tasks WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND agent != ?
+         AND (${clauses}) AND forgotten = 0 AND dry_run = 0 AND id != ?
+       ORDER BY id DESC LIMIT ?`,
+    )
+    .all(...values, excludeTaskId ?? -1, config.historyLimit) as Row[];
+  return rows.map(toTask).reverse();
+}
+
 export function recentTaskForThread(ref: ThreadRef, agent: string, withinSeconds: number): Task | null {
   const since = new Date(Date.now() - withinSeconds * 1000).toISOString();
   const row = db

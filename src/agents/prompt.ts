@@ -121,6 +121,36 @@ function historyEntries(history: Task[]): string[] {
   });
 }
 
+/** What other agents did or are doing on the thread: who, when, how it ended and the start of what they said. */
+function otherEntries(others: Task[]): string[] {
+  return others.map((task) => {
+    const where = `${KIND_LABEL[task.threadKind]} #${task.threadNumber}`;
+    const active = task.status === "running" ? "working on it now" : task.status === "queued" ? "waiting to start" : null;
+    const lines = [
+      active
+        ? `### ${task.agent} — ${active} on ${where} (task ${task.id})`
+        : `### ${task.agent} — run ${task.id}, ${task.finishedAt?.slice(0, 16).replace("T", " ") ?? task.createdAt.slice(0, 16)} UTC on ${where} (${task.status})`,
+      `Asked by @${task.requestedBy}: ${clip(task.requestText, 400).split("\n").join(" ")}`,
+    ];
+    if (task.branch) lines.push(`Branch: \`${task.branch}\`${task.commits ? ` (${task.commits} commit${task.commits === 1 ? "" : "s"})` : ""}`);
+    if (task.prUrl) lines.push(`Pull request: #${task.prNumber} ${task.prUrl}`);
+    if (task.resultText) lines.push("Its reply began:", quote(clip(task.resultText, 1200)));
+    if (task.error && !active) lines.push(`Error: ${clip(task.error, 300)}`);
+    return lines.join("\n");
+  });
+}
+
+function othersSection(entries: string[], lost: number, sinceLastRun = false): string {
+  if (!entries.length) return "";
+  return [
+    sinceLastRun ? "## Other agents here since your last run" : "## Other agents' work here",
+    "Other agents work on this thread too. Build on what they did rather than repeating it, and don't undo it without saying why. If one is working now, don't change the same files it's likely to be changing.",
+    "",
+    ...leftOut(lost, "run"),
+    entries.join("\n\n"),
+  ].join("\n");
+}
+
 function historySection(entries: string[], lost: number): string {
   if (!entries.length) return "";
   return [
@@ -278,6 +308,8 @@ export function buildFollowUpPrompt(input: {
   interrupted: boolean;
   board?: BoardStage | null;
   schedule?: ScheduleRun | null;
+  /** Other agents' tasks on the thread (db.othersOnThread); those since this agent's last run are shown. */
+  others?: Task[];
 }): string {
   const { task, thread, workspace, since, interrupted } = input;
   const kind = KIND_LABEL[thread.kind];
@@ -308,15 +340,18 @@ export function buildFollowUpPrompt(input: {
   // When it's too long, the oldest comments and handoff notes go, never the end of the prompt.
   const comments = fresh.map(commentEntry);
   const notes = (input.board?.handoffs ?? []).map(handoffEntry);
+  const others = otherEntries((input.others ?? []).filter((other) => !other.finishedAt || !since || other.finishedAt > since));
   const room = MAX_PROMPT - head.join("\n").length - tail([]).join("\n").length - HEADINGS;
-  const [lostComments, lostNotes] = fit(
+  const [lostComments, lostNotes, lostOthers] = fit(
     [
-      { entries: comments, share: 0.7 },
-      { entries: notes, share: 0.3 },
+      { entries: comments, share: 0.6 },
+      { entries: notes, share: 0.25 },
+      { entries: others, share: 0.15 },
     ],
     room,
   );
   if (comments.length) head.push("", "## New on the thread since your last run (oldest first)", ...leftOut(lostComments!, "comment", `; the thread has them: ${thread.url}`), comments.join("\n\n"));
+  if (others.length) head.push("", othersSection(others, lostOthers!, Boolean(since)));
   return assemble(head, tail(notes, lostNotes));
 }
 
@@ -325,6 +360,8 @@ export function buildPrompt(input: {
   task: Task;
   thread: ThreadContext;
   history: Task[];
+  /** Other agents' tasks on the thread (db.othersOnThread). */
+  others?: Task[];
   workspace: WorkspaceInfo;
   board?: BoardStage | null;
   schedule?: ScheduleRun | null;
@@ -366,16 +403,18 @@ export function buildPrompt(input: {
   const tail = (notes: string[], lostNotes = 0) => [...(input.board ? ["", boardSection(input.board, notes, lostNotes)] : []), "", "## How to reply", REPLY_INSTRUCTIONS];
 
   // A long thread doesn't fit: the oldest comments go first, then the oldest inline comments,
-  // handoff notes and earlier runs. The request, the issue and the end of the prompt always stay.
+  // handoff notes, other agents' runs and its own earlier runs. The request, the issue and the end of the prompt always stay.
   const notes = (input.board?.handoffs ?? []).map(handoffEntry);
   const runs = historyEntries(history);
+  const others = otherEntries(input.others ?? []);
   const room = MAX_PROMPT - head.join("\n").length - tail([]).join("\n").length - HEADINGS;
-  const [lostComments, lostInline, lostNotes, lostRuns] = fit(
+  const [lostComments, lostInline, lostNotes, lostOthers, lostRuns] = fit(
     [
-      { entries: conversation, share: 0.5 },
+      { entries: conversation, share: 0.45 },
       { entries: inline, share: 0.15 },
       { entries: notes, share: 0.15 },
-      { entries: runs, share: 0.2 },
+      { entries: others, share: 0.1 },
+      { entries: runs, share: 0.15 },
     ],
     room,
   );
@@ -383,5 +422,6 @@ export function buildPrompt(input: {
   if (inline.length) head.push("", "## Inline review comments", ...leftOut(lostInline!, "inline comment"), inline.join("\n\n"));
   const historyText = historySection(runs, lostRuns!);
   if (historyText) head.push("", historyText);
+  if (others.length) head.push("", othersSection(others, lostOthers!));
   return assemble(head, tail(notes, lostNotes));
 }
