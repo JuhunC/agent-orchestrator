@@ -9,6 +9,7 @@ import {
   markBranchDeleted,
   outcomesByVersion,
   markPullChecked,
+  openAgentPulls,
   pullOutcomes,
   pullsToCheck,
   queuedTaskForThread,
@@ -160,6 +161,8 @@ export function notePullEvent(payload: Record<string, any>): void {
   const action = String(payload.action ?? "");
   const state = action === "closed" ? (pr.merged ? "merged" : "closed") : action === "reopened" ? "open" : null;
   if (pr.head?.ref) setPullBranch(owner, repo, Number(pr.number), String(pr.head.ref));
+  // Anyone's merge can leave agents' pull requests into the same branch in conflict.
+  if (action === "closed" && pr.merged && pr.base?.ref) scheduleConflictCheck(owner, repo, String(pr.base.ref), Number(payload.installation?.id) || undefined);
   if (state && setPullState(owner, repo, Number(pr.number), state, pr.merged_at ?? pr.closed_at ?? undefined)) {
     bus.publish({ type: "settings" });
     scheduler.kick(); // work held back by MAX_OPEN_AGENT_PRS_PER_REPO may start now
@@ -194,19 +197,52 @@ async function closeIssuesAfterMerge(payload: Record<string, any>, owner: string
 }
 
 const NUDGE_EVERY_MS = 24 * 60 * 60_000;
+/** A pull request whose branch changed since its last nudge has a new conflict: it may be nudged again this soon, */
+const NUDGE_AGAIN_MS = 30 * 60_000;
+/** but no more than this often in a day. */
+const MAX_NUDGES_PER_DAY = 4;
+
+/** When a pull request's agent was last asked to fix a conflict, and what its branch was at then. */
+interface Nudged {
+  at: number;
+  sha: string | null;
+  /** The first nudge of the day this one belongs to, and how many there have been since. */
+  first: number;
+  count: number;
+}
+
+function lastNudge(key: string): Nudged {
+  const raw = getSetting(key);
+  // Before conflicts were checked after merges, only the time was kept.
+  if (raw && /^\d+$/.test(raw)) return { at: Number(raw), sha: null, first: Number(raw), count: 1 };
+  try {
+    if (raw) return JSON.parse(raw) as Nudged;
+  } catch {
+    // unreadable: as if never nudged
+  }
+  return { at: 0, sha: null, first: 0, count: 0 };
+}
 
 /**
  * An agent's pull request conflicts with its base: start the agent that opened it to merge the
- * base in, once a day at most per pull request, unless it's already working on it.
+ * base in, unless it's already working on it. Once a day per pull request; sooner only when its
+ * branch has changed since (the last conflict was dealt with, so this is a new one), and then at
+ * most MAX_NUDGES_PER_DAY times, half an hour apart.
  */
-function nudgeConflicted(pull: PullOutcome, base: string, installationId: number): boolean {
+function nudgeConflicted(pull: PullOutcome, base: string, installationId: number, headSha: string | null = null): boolean {
   const profile = loadProfiles().agents.find((agent) => agent.name === pull.agent);
   if (!profile?.enabled || profile.errors.length || !profile.github.push) return false;
   const key = `conflict_nudged:${pull.owner}/${pull.repo}#${pull.number}`.toLowerCase();
-  if (Date.now() - Number(getSetting(key) ?? 0) < NUDGE_EVERY_MS) return false;
+  const now = Date.now();
+  const last = lastNudge(key);
+  const sameDay = now - last.first < NUDGE_EVERY_MS;
+  if (now - last.at < NUDGE_EVERY_MS) {
+    const changed = Boolean(headSha && last.sha && headSha !== last.sha);
+    if (!changed || now - last.at < NUDGE_AGAIN_MS || (sameDay && last.count >= MAX_NUDGES_PER_DAY)) return false;
+  }
   const ref = { owner: pull.owner, repo: pull.repo, kind: "pull" as const, number: pull.number };
   if (queuedTaskForThread(ref, profile.name) || runningTasksForThread(ref).some((task) => task.agent === profile.name)) return false;
-  setSetting(key, String(Date.now()));
+  setSetting(key, JSON.stringify({ at: now, sha: headSha, first: sameDay ? last.first : now, count: sameDay ? last.count + 1 : 1 } satisfies Nudged));
   const task = createTask({
     agent: profile.name,
     installationId,
@@ -238,13 +274,65 @@ export async function checkOpenPulls(before = new Date(Date.now() - 60 * 60_000)
       if (data.state === "closed") setPullState(pull.owner, pull.repo, pull.number, data.merged ? "merged" : "closed", data.merged_at ?? data.closed_at ?? undefined);
       else {
         markPullChecked(pull.owner, pull.repo, pull.number);
-        if (config.rebaseConflictedPulls && data.mergeable_state === "dirty" && nudged < 5 && nudgeConflicted(pull, data.base.ref, installationId)) nudged++;
+        if (config.rebaseConflictedPulls && data.mergeable_state === "dirty" && nudged < 5 && nudgeConflicted(pull, data.base.ref, installationId, data.head.sha)) nudged++;
       }
     } catch (error) {
       markPullChecked(pull.owner, pull.repo, pull.number);
       log.warn("Couldn't check a pull request's state", { pull: `${pull.owner}/${pull.repo}#${pull.number}`, error: errorMessage(error) });
     }
   }
+}
+
+const conflictChecks = new Map<string, NodeJS.Timeout>();
+
+/**
+ * A pull request was merged into `base`: agents' open pull requests into that branch may conflict
+ * with it now. Looks CONFLICT_CHECK_SECONDS later (GitHub needs a moment to work out what still
+ * merges), once per branch however many merges land meanwhile, instead of at the next hourly check.
+ */
+function scheduleConflictCheck(owner: string, repo: string, base: string, installationId?: number): void {
+  if (!config.rebaseConflictedPulls || !config.conflictCheckSeconds) return;
+  const key = `${owner}/${repo}@${base}`.toLowerCase();
+  if (conflictChecks.has(key)) return;
+  const timer = setTimeout(() => {
+    conflictChecks.delete(key);
+    void checkConflictsInto(owner, repo, base, installationId).catch((error) => log.warn("Conflict check after a merge failed", { branch: key, error: errorMessage(error) }));
+  }, config.conflictCheckSeconds * 1000);
+  timer.unref();
+  conflictChecks.set(key, timer);
+}
+
+/**
+ * Agents' open pull requests into `base`: starts the agent of each one that conflicts with it
+ * (see nudgeConflicted). Returns how many it started.
+ */
+export async function checkConflictsInto(owner: string, repo: string, base: string, installationId?: number, askAgainMs = 5000): Promise<number> {
+  const pulls = openAgentPulls(owner, repo);
+  if (!pulls.length) return 0;
+  const installation = installationId ?? (await findInstallation(owner, repo));
+  const gh = await installationClient(installation);
+  let nudged = 0;
+  for (const pull of pulls) {
+    if (nudged >= 5) break;
+    try {
+      let { data } = await gh.rest.pulls.get({ owner: pull.owner, repo: pull.repo, pull_number: pull.number });
+      if (data.state === "closed") {
+        setPullState(pull.owner, pull.repo, pull.number, data.merged ? "merged" : "closed", data.merged_at ?? data.closed_at ?? undefined);
+        continue;
+      }
+      if (data.base.ref !== base) continue;
+      // GitHub works this out in the background after a merge: when it hasn't yet, ask once more.
+      if (data.mergeable_state === "unknown" && askAgainMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, askAgainMs));
+        ({ data } = await gh.rest.pulls.get({ owner: pull.owner, repo: pull.repo, pull_number: pull.number }));
+      }
+      if (data.mergeable_state === "dirty" && nudgeConflicted(pull, base, installation, data.head.sha)) nudged++;
+    } catch (error) {
+      log.warn("Couldn't check a pull request for conflicts", { pull: `${pull.owner}/${pull.repo}#${pull.number}`, error: errorMessage(error) });
+    }
+  }
+  if (nudged) log.info("Pull requests conflict after a merge: asked their agents to merge the base in", { branch: `${owner}/${repo}@${base}`, count: nudged });
+  return nudged;
 }
 
 const AGENT_BRANCH = /^(agent\/[^/]+\/(issue|pull|discussion)-\d+|ao\/(issue|discussion)-\d+)$/;

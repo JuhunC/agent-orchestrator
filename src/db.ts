@@ -963,6 +963,13 @@ export function pullOutcomes(since: string, agent?: string): PullOutcome[] {
   return (db.prepare(`SELECT * FROM pull_outcomes WHERE opened_at >= ? ${agent ? "AND agent = ?" : ""}`).all(...(agent ? [since, agent] : [since])) as Row[]).map(toOutcome);
 }
 
+/** Agents' open pull requests in a repository, the one checked longest ago first. */
+export function openAgentPulls(owner: string, repo: string, limit = 50): PullOutcome[] {
+  return (
+    db.prepare("SELECT * FROM pull_outcomes WHERE owner = ? COLLATE NOCASE AND repo = ? COLLATE NOCASE AND state = 'open' ORDER BY COALESCE(checked_at, ''), number LIMIT ?").all(owner, repo, limit) as Row[]
+  ).map(toOutcome);
+}
+
 /** Agents' pull requests open in a repository. */
 export function openAgentPullCount(owner: string, repo: string): number {
   return Number((db.prepare("SELECT COUNT(*) AS count FROM pull_outcomes WHERE owner = ? AND repo = ? AND state = 'open'").get(owner, repo) as Row).count);

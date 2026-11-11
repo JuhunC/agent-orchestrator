@@ -1,10 +1,11 @@
 import { bus } from "../bus.ts";
 import { config } from "../config.ts";
-import { getSetting, getTask, lastStarts, openAgentPullCount, queuedTasks, setSetting, tasksWithStatus, threadHasOpenAgentPull, updateTask } from "../db.ts";
+import { addEvent, getSetting, getTask, lastStarts, linkedThreads, openAgentPullCount, queuedTasks, setSetting, tasksWithStatus, threadHasOpenAgentPull, updateTask } from "../db.ts";
 import { recordIncident } from "./incidents.ts";
 import { errorMessage, log } from "../log.ts";
 import type { Task } from "../types.ts";
 import { loadProfiles } from "../profiles/loader.ts";
+import type { Profile } from "../profiles/types.ts";
 import { sessions } from "../runtime/manager.ts";
 import { workspaceDir } from "../runtime/workspace.ts";
 import { clearLimit, getLimit } from "./limit-store.ts";
@@ -23,8 +24,21 @@ export function startOrder(queued: Task[], running: Task[], now = Date.now()): T
 }
 
 /**
+ * What a task's agent changes when it pushes: its thread, and the threads linked to it (an issue's
+ * pull request works on the same branch, and so does a pull request's issue).
+ */
+function workKeys(task: Task): string[] {
+  const ref = { owner: task.owner, repo: task.repo, kind: task.threadKind, number: task.threadNumber };
+  return [ref, ...linkedThreads(ref)].map((thread) => `${task.owner}/${task.repo} ${thread.kind}#${thread.number}`.toLowerCase());
+}
+
+/** Does this task change a branch? Its agent pushes, and it isn't a dry run. An agent that's gone counts, to be safe. */
+const writes = (task: Task, profile: Profile | undefined) => !task.dryRun && (profile?.github.push ?? true);
+
+/**
  * Runs queued tasks, up to the concurrency limit. Two tasks that share a workspace (same agent
- * on the same thread) never run at the same time.
+ * on the same thread) never run at the same time, and neither do two agents that push on the
+ * same thread (ONE_WRITER_PER_THREAD).
  */
 class Scheduler {
   private running = new Map<number, { controller: AbortController; workspace: string }>();
@@ -68,6 +82,43 @@ class Scheduler {
     return true;
   }
   private pullLimitNoted = new Map<string, number>();
+
+  /** ONE_WRITER_PER_THREAD: the threads being changed now, with the running task changing each. */
+  private writing(profiles: Profile[], running: Task[]): Map<string, Task> {
+    const held = new Map<string, Task>();
+    if (!config.oneWriterPerThread) return held;
+    for (const task of running) {
+      if (!writes(task, profiles.find((profile) => profile.name === task.agent))) continue;
+      for (const key of workKeys(task)) if (!held.has(key)) held.set(key, task);
+    }
+    return held;
+  }
+
+  /**
+   * For each of these queued tasks that has to wait for it: the running task whose agent is
+   * changing the same thread (or its pull request). Agents that don't push run alongside.
+   */
+  writersAhead(queued: Task[]): Map<number, Task> {
+    const ahead = new Map<number, Task>();
+    if (!config.oneWriterPerThread || !queued.length || !this.running.size) return ahead;
+    const profiles = loadProfiles().agents;
+    const held = this.writing(profiles, this.runningIds().map((id) => getTask(id)).filter((task): task is Task => Boolean(task)));
+    if (!held.size) return ahead;
+    for (const task of queued) {
+      if (!writes(task, profiles.find((profile) => profile.name === task.agent))) continue;
+      const other = workKeys(task).map((key) => held.get(key)).find((holder) => holder && holder.id !== task.id);
+      if (other) ahead.set(task.id, other);
+    }
+    return ahead;
+  }
+
+  /** Says once in a waiting task's log whose turn it is on the thread. */
+  private noteWriterAhead(task: Task, other: Task): void {
+    if (this.writerNoted.get(task.id) === other.id) return;
+    this.writerNoted.set(task.id, other.id);
+    bus.publish({ type: "event", event: addEvent(task.id, "system", `Waiting for ${other.agent} (task #${other.id}) to finish on ${other.threadKind === task.threadKind && other.threadNumber === task.threadNumber ? "this thread" : `${other.threadKind === "pull" ? "pull request" : other.threadKind} #${other.threadNumber}`}: agents that push take turns, so two never change the same branch at once`) });
+  }
+  private writerNoted = new Map<number, number>();
 
   /** How many tasks may run at once now: the setting, or less while recovering from rate limits. */
   effectiveConcurrent(now = Date.now()): number {
@@ -151,6 +202,8 @@ class Scheduler {
       perRepo.set(repoKey(running), (perRepo.get(repoKey(running)) ?? 0) + 1);
       if (running.board) perBoard.set(running.board, (perBoard.get(running.board) ?? 0) + 1);
     }
+    const writing = queued.length ? this.writing(profiles, active) : new Map<string, Task>();
+    for (const id of this.writerNoted.keys()) if (!queued.some((task) => task.id === id)) this.writerNoted.delete(id);
     for (const task of startOrder(queued, active, now)) {
       if (this.running.size >= this.effectiveConcurrent(now)) break;
       const workspace = workspaceDir(task);
@@ -174,6 +227,14 @@ class Scheduler {
         wakeAt = Math.min(wakeAt, blockedUntil);
         continue;
       }
+      // Another agent is changing this thread's branch: this one goes after it, on what it pushed.
+      const keys = config.oneWriterPerThread && writes(task, profile) ? workKeys(task) : [];
+      const writer = keys.map((key) => writing.get(key)).find(Boolean);
+      if (writer) {
+        this.noteWriterAhead(task, writer);
+        continue;
+      }
+      for (const key of keys) writing.set(key, task);
       busy.add(workspace);
       perAgent.set(profile.name, (perAgent.get(profile.name) ?? 0) + 1);
       perRepo.set(repoKey(task), (perRepo.get(repoKey(task)) ?? 0) + 1);

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Blockquote, Button, CheckboxInput, Code, CodeBlock, Heading, HStack, StackItem, Text, VStack } from "@astryxdesign/core";
 import { ago, api, duration, fromNow, isPaused, KIND_LABEL, useNow, useStream, waitText, type Task, type TaskEvent } from "../api.ts";
-import { A, Columns, Empty, KV, Meta, Notice, Panel, PrioritySelect, PriorityTag, StatusPill, Tag, who } from "../components/ui.tsx";
+import { A, Columns, Empty, KV, LinkButton, Meta, Notice, Panel, PrioritySelect, PriorityTag, StatusPill, Tag, who } from "../components/ui.tsx";
 import { navigate } from "../router.ts";
 
 /** Something that happened on GitHub while the agent works, which it hasn't been told yet. */
@@ -17,6 +17,8 @@ interface WaitingNote {
 interface QueuePlace {
   ahead: number;
   why: string;
+  /** The running task whose agent is changing the same thread: this one starts after it. */
+  behind: { id: number; agent: string } | null;
 }
 
 /** A task in a chain of agents starting each other. */
@@ -253,7 +255,12 @@ export function TaskDetail({ id }: { id: number }) {
           It was woken because {task.waitFor.woke}.
         </Notice>
       )}
-      {task.status === "queued" && !isPaused(task) && !task.retryAt && queue && (
+      {task.status === "queued" && !isPaused(task) && !task.retryAt && queue?.behind && (
+        <Notice tone="info" title={`Waiting for ${queue.behind.agent} to finish on this thread.`} action={<LinkButton to={`/tasks/${queue.behind.id}`} label={`Task #${queue.behind.id}`} size="sm" />}>
+          Agents that push take turns on a thread and its pull request, so two never change the same branch at once. This one starts when {queue.behind.agent} is done, on what it pushed.
+        </Notice>
+      )}
+      {task.status === "queued" && !isPaused(task) && !task.retryAt && queue && !queue.behind && (
         <Notice tone="info" title={queue.ahead === 0 ? "Next in the queue: it starts as soon as a slot is free." : `In the queue, with ${queue.ahead} task${queue.ahead === 1 ? "" : "s"} ahead of it.`}>
           {queue.why} Set its priority (top right) to move it: high goes before the rest, low after it.
         </Notice>

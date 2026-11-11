@@ -7,9 +7,11 @@ import { navigate } from "../router.ts";
 import { UsageSummary } from "../components/Usage.tsx";
 
 /** Under a queued task's agent: how long it has waited, who asked, and what holds it if something does. */
-function queueNote(task: Task, now: number): string {
+function queueNote(task: Task, now: number, behind?: { id: number; agent: string }): string {
   if (task.waitFor) return "resuming after a pause";
-  const held = task.retryAt && Date.parse(task.retryAt) > now ? (task.waitReason === "setup" ? " · tries again shortly" : " · waits for a usage limit") : "";
+  let held = task.retryAt && Date.parse(task.retryAt) > now ? (task.waitReason === "setup" ? " · tries again shortly" : " · waits for a usage limit") : "";
+  // Agents that push take turns on a thread.
+  if (!held && behind) held = ` · after ${behind.agent} finishes there (#${behind.id})`;
   return `${ago(task.createdAt, now)} · ${who(task.requestedBy)}${held}`;
 }
 
@@ -257,12 +259,15 @@ export function Dashboard() {
                   <TableRow key={task.id} className="ao-clickable" onClick={() => navigate(`/tasks/${task.id}`)}>
                     <TableCell>
                       <HStack gap={3} vAlign="center">
-                        <span className="ao-queue-place" title={index === 0 ? "Starts next" : `${index} ahead of it`}>
+                        <span
+                          className={data.behind?.[task.id] ? "ao-queue-place ao-queue-held" : "ao-queue-place"}
+                          title={data.behind?.[task.id] ? `Waits for ${data.behind[task.id]!.agent} (task #${data.behind[task.id]!.id}) to finish on the same thread` : index === 0 ? "Starts next" : `${index} ahead of it`}
+                        >
                           {index + 1}
                         </span>
                         <VStack gap={0.5}>
                           <Text weight="semibold">{task.agent}</Text>
-                          <Meta>{queueNote(task, now)}</Meta>
+                          <Meta>{queueNote(task, now, data.behind?.[task.id])}</Meta>
                         </VStack>
                       </HStack>
                     </TableCell>

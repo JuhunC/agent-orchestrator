@@ -248,14 +248,20 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   // ---------- overview ----------
+  /** Queued tasks waiting for another agent's turn on their thread (ONE_WRITER_PER_THREAD): task id → the task ahead. */
+  const behindOf = (queued: Task[]): Record<number, { id: number; agent: string }> =>
+    Object.fromEntries([...scheduler.writersAhead(queued)].map(([id, other]) => [id, { id: other.id, agent: other.agent }]));
+
   app.get("/api/overview", async () => {
     const stats = taskStats();
+    const queued = startOrder(listTasks({ status: "queued", waiting: false, limit: 100 }), listTasks({ status: "running", limit: 50 }));
     return {
       agents: loadProfiles().agents.map((agent) => ({ ...agentView(agent), stats: stats[agent.name] ?? null })),
       sessions: sessions.list(),
       model: modelView(),
       running: listTasks({ status: "running", limit: 50 }),
-      queued: startOrder(listTasks({ status: "queued", waiting: false, limit: 100 }), listTasks({ status: "running", limit: 50 })),
+      queued,
+      behind: behindOf(queued),
       /** Tasks their agents paused until other work is done (wait_for), the one that resumes first on top. */
       waiting: listTasks({ waiting: true, limit: 100 }).sort((a, b) => (a.retryAt ?? "").localeCompare(b.retryAt ?? "")),
       incidents: listIncidents(20).filter((incident) => Date.now() - Date.parse(incident.ts) < 7 * 86_400_000),
@@ -267,11 +273,11 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   /** Where a queued task stands: how many start before it, and why it's placed there. */
-  const queuePlace = (task: Task): { ahead: number; why: string } | null => {
+  const queuePlace = (task: Task): { ahead: number; why: string; behind: { id: number; agent: string } | null } | null => {
     if (task.status !== "queued" || task.waitReason === "wake") return null;
     const order = startOrder(listTasks({ status: "queued", waiting: false, limit: 500 }), listTasks({ status: "running", limit: 50 }));
     const ahead = order.findIndex((other) => other.id === task.id);
-    return ahead < 0 ? null : { ahead, why: rankReason(task) };
+    return ahead < 0 ? null : { ahead, why: rankReason(task), behind: behindOf([task])[task.id] ?? null };
   };
 
   // ---------- tasks ----------
@@ -758,6 +764,8 @@ export function registerApi(app: FastifyInstance): void {
         { name: "Pauses per task", setting: "TASK_MAX_WAITS", value: String(config.taskMaxWaits), what: "times one task may pause for other work before it has to finish or report it's blocked" },
         { name: "Agents at once", setting: "MAX_CONCURRENT_TASKS", value: String(scheduler.maxConcurrent), what: "tasks running at the same time" },
         { name: "Agents at once per repository", setting: "MAX_RUNNING_PER_REPO", value: config.maxRunningPerRepo ? String(config.maxRunningPerRepo) : "no limit", what: "tasks running at the same time in one repository; the rest of its queue waits, and other repositories' work starts" },
+        { name: "One writer per thread", setting: "ONE_WRITER_PER_THREAD", value: config.oneWriterPerThread ? "on" : "off", what: "agents that push take turns on a thread and its pull request; one that only reads or comments runs alongside" },
+        { name: "Conflict check after a merge", setting: "CONFLICT_CHECK_SECONDS", value: config.conflictCheckSeconds ? `${config.conflictCheckSeconds} s` : "hourly only", what: "after a pull request is merged, agents' open pull requests into the same branch are checked for conflicts, and the agent of one that conflicts is started to merge the base in" },
         { name: "Time between scheduled runs", setting: "SCHEDULE_MIN_MINUTES", value: `${config.scheduleMinMinutes} min`, what: "the shortest gap a schedule may have between two runs" },
         { name: "Schedules per agent", setting: "SCHEDULES_PER_AGENT", value: config.schedulesPerAgent ? String(config.schedulesPerAgent) : "no limit", what: "schedules one agent may have, its agent.md ones included" },
         { name: "Failed runs before a schedule pauses", setting: "SCHEDULE_PAUSE_AFTER_FAILURES", value: config.schedulePauseAfterFailures ? String(config.schedulePauseAfterFailures) : "never", what: "a schedule whose runs fail this many times in a row is paused until someone switches it back on" },

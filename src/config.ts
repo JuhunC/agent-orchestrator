@@ -205,6 +205,12 @@ export const config = {
   // At most this many tasks run at once in one repository (0 = no limit), so a busy repository
   // leaves room for the others.
   maxRunningPerRepo: Math.max(0, int("MAX_RUNNING_PER_REPO", 0)),
+  // Agents that push take turns on a thread (an issue and its pull request count as one): the
+  // next starts when the one before has finished, on what it pushed. off: they run side by side.
+  oneWriterPerThread: env("ONE_WRITER_PER_THREAD", "on").toLowerCase() !== "off",
+  // After a pull request is merged, agents' open pull requests into the same branch are checked
+  // for conflicts this many seconds later, instead of at the next hourly check. 0 = hourly only.
+  conflictCheckSeconds: Math.max(0, int("CONFLICT_CHECK_SECONDS", 60)),
   workspaceRetentionDays: Math.max(0, int("WORKSPACE_RETENTION_DAYS", 14)),
   // Checkouts of closed issues and pull requests go sooner: after this many days unused.
   workspaceClosedRetentionDays: Math.max(0, int("WORKSPACE_CLOSED_RETENTION_DAYS", 2)),

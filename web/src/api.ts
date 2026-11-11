@@ -497,6 +497,8 @@ export interface Overview {
   agents: Agent[];
   running: Task[];
   queued: Task[];
+  /** Queued tasks waiting for another agent's turn on their thread (agents that push take turns): task id → the task ahead. */
+  behind: Record<number, { id: number; agent: string }>;
   /** Tasks their agents paused until other work is done, the one that resumes first on top. */
   waiting: Task[];
   recent: Task[];

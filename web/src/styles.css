@@ -51,6 +51,12 @@ body {
   color: var(--color-text-secondary);
 }
 
+/* A queued task that waits for another agent's turn on its thread, whatever its place. */
+.ao-queue-held {
+  text-decoration: line-through;
+  opacity: 0.6;
+}
+
 /* Agent steps on the dashboard's running tasks. */
 .ao-steps {
   list-style: none;
