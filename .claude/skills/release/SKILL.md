@@ -7,7 +7,7 @@ description: Release an agent-orchestrator version (vX.Y.Z) once a change is com
 Versions are git tags only (package.json stays 0.1.0). Next version: patch-bump `git tag --sort=-v:refname | head -1`. Work is committed straight on `main`; each item the user asks for is its own commit and release.
 
 1. **Commit**: first line is the change in plain words; then why, then `- ` bullets; end with the attribution line from the system reminder.
-2. **Full suite on that commit**, in a scratch worktree so editing can go on (≈12 min for ~85 tests; never two suites at once, timing tests flake):
+2. **Full suite on that commit**, in a scratch worktree so editing can go on (≈12 min for ~160 tests; never two suites at once, timing tests flake):
    ```bash
    WT=<scratchpad>/wt-<ver>; git worktree add -q --detach "$WT" <sha> && ln -s "$PWD/node_modules" "$WT/node_modules"
    (cd "$WT" && npm run typecheck && npm test) > "$WT.log" 2>&1; echo "exit $?" >> "$WT.log"   # run_in_background
@@ -21,4 +21,5 @@ Versions are git tags only (package.json stays 0.1.0). Next version: patch-bump 
    git worktree remove --force "$WT"
    ```
    Several releases: tag each commit in order and push main to the newest. CI deploys only main's tip, one deploy at a time.
+   Push at most three tags in one `git push`: GitHub starts no runs for more than three at once, so those versions get no image. For a tag that got no run: `gh workflow run deploy.yml --ref <tag>` (it builds the version's image and deploys nothing unless the tag is main's tip).
 4. **CI**: `gh run list --limit 10 --json headBranch,status,conclusion`; wait with `gh run watch <id> --exit-status --interval 30` in the background. The test job also runs `test/docker/isolation.docker-test.ts` inside the built image. A cancelled *deploy* job on an older tag is the guard making way for a newer one. While `DEPLOY_HOST`/`DEPLOY_SSH_KEY` are unset the deploy is skipped: the user updates with `docker compose pull && docker compose up -d`.
