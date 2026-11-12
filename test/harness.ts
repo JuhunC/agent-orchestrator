@@ -83,6 +83,8 @@ export async function startHarness(profiles: Record<string, string>, env: Record
     GIT_REMOTE_TEMPLATE: `file://${remotes}/{owner}/{repo}.git`,
     AUTH_DISABLED: "true",
     PROGRESS_UPDATE_SECONDS: "5",
+    // How much memory the machine running the tests has free shouldn't decide what starts.
+    HOST_MIN_FREE_MEMORY_MB: "0",
     WEB_DIST_DIR: join(root, "no-ui"),
     ...env,
   });

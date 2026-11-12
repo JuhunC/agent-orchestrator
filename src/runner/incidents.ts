@@ -7,7 +7,7 @@ import { errorMessage, log } from "../log.ts";
 /**
  * Problems an administrator should hear about: failed tasks, tasks whose agent said it's blocked
  * or gave up, loop guards that stopped agents, spending and usage limits, agents that aren't
- * isolated, rejected webhooks. They're kept in the database (the last 1000) for the Dashboard, and
+ * isolated, rejected webhooks, a host too short of memory to start more agents. They're kept in the database (the last 1000) for the Dashboard, and
  * posted to ALERT_WEBHOOK_URL when it's set.
  */
 
@@ -23,7 +23,8 @@ export type IncidentKind =
   | "account_token"
   | "backup"
   | "github_rate_limit"
-  | "schedule";
+  | "schedule"
+  | "host_pressure";
 
 const RANK = { info: 0, warning: 1, critical: 2 } as const;
 /** The same problem isn't posted again within this long. */
@@ -78,7 +79,7 @@ const escape = (value: string) => value.replace(/\\/g, "\\\\").replace(/"/g, '\\
 const labels = (pairs: Record<string, string>) => `{${Object.entries(pairs).map(([key, value]) => `${key}="${escape(value)}"`).join(",")}}`;
 
 /** /metrics in the Prometheus text format. */
-export function renderMetrics(live: { atOnce?: number; running: number; queued: number; waiting?: number; paused: boolean; sessions: number; limited: boolean; spendToday: number; spendMonth: number; isolated: boolean }): string {
+export function renderMetrics(live: { atOnce?: number; running: number; queued: number; waiting?: number; paused: boolean; sessions: number; limited: boolean; spendToday: number; spendMonth: number; isolated: boolean; host?: { freeMb: number; loadPerCpu: number | null; holding: boolean } }): string {
   const lines: string[] = [];
   const metric = (name: string, type: "counter" | "gauge", help: string, samples: [Record<string, string>, number][]) => {
     lines.push(`# HELP ${name} ${help}`, `# TYPE ${name} ${type}`);
@@ -109,6 +110,11 @@ export function renderMetrics(live: { atOnce?: number; running: number; queued: 
   metric("ao_spend_today_usd", "gauge", "Estimated spend today (UTC).", [[{}, live.spendToday]]);
   metric("ao_spend_month_usd", "gauge", "Estimated spend this month (UTC).", [[{}, live.spendMonth]]);
   metric("ao_agents_isolated", "gauge", "1 when agents run as a separate user.", [[{}, live.isolated ? 1 : 0]]);
+  if (live.host) {
+    metric("ao_host_memory_free_bytes", "gauge", "Memory free for another agent on the host.", [[{}, Math.round(live.host.freeMb * 1024 * 1024)]]);
+    if (live.host.loadPerCpu !== null) metric("ao_host_load_per_cpu", "gauge", "The host's 1-minute load average per CPU.", [[{}, live.host.loadPerCpu]]);
+    metric("ao_host_pressure", "gauge", "1 while queued tasks wait for memory or CPU on the host.", [[{}, live.host.holding ? 1 : 0]]);
+  }
   metric("ao_incidents_total", "counter", "Problems recorded, by kind (the last 1000 are kept).", Object.entries(incidentCounts()).map(([kind, count]) => [{ kind }, count]));
   metric("ao_webhook_deliveries_total", "counter", "Webhook deliveries by decision (the last 2000 are kept).", Object.entries(deliveryCounts()).map(([decision, count]) => [{ decision }, count]));
   return `${lines.join("\n")}\n`;

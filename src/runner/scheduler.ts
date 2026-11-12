@@ -14,7 +14,8 @@ import { queueOrder } from "./queue-order.ts";
 import { fallbackModels } from "../runtime/options.ts";
 import { loadBoards } from "../boards/loader.ts";
 import { boardTaskSettled } from "../boards/engine.ts";
-import { executeTask, notePausedCancelled, recoverInterrupted } from "./run-task.ts";
+import { notePausedCancelled, recoverInterrupted } from "./run-task.ts";
+import { executor } from "./executor.ts";
 import { settleInbox } from "./inbox.ts";
 
 /** The queue in the order it will start now: what's running and who had a turn last count (queue-order.ts). */
@@ -32,13 +33,19 @@ function workKeys(task: Task): string[] {
   return [ref, ...linkedThreads(ref)].map((thread) => `${task.owner}/${task.repo} ${thread.kind}#${thread.number}`.toLowerCase());
 }
 
+/** While the host is short of memory or busy, the queue looks again this often. */
+const HOST_RECHECK_MS = 15_000;
+/** The host being under pressure is recorded as a problem at most this often. */
+const HOST_INCIDENT_MS = 3_600_000;
+
 /** Does this task change a branch? Its agent pushes, and it isn't a dry run. An agent that's gone counts, to be safe. */
 const writes = (task: Task, profile: Profile | undefined) => !task.dryRun && (profile?.github.push ?? true);
 
 /**
  * Runs queued tasks, up to the concurrency limit. Two tasks that share a workspace (same agent
  * on the same thread) never run at the same time, and neither do two agents that push on the
- * same thread (ONE_WRITER_PER_THREAD).
+ * same thread (ONE_WRITER_PER_THREAD). Where a task runs is the executor's business
+ * (executor.ts): it also says when the host has no room for one more.
  */
 class Scheduler {
   private running = new Map<number, { controller: AbortController; workspace: string }>();
@@ -120,6 +127,29 @@ class Scheduler {
   }
   private writerNoted = new Map<number, number>();
 
+  /** Why queued tasks wait for the host now (HOST_MIN_FREE_MEMORY_MB, HOST_MAX_LOAD), or null. */
+  hostHold: string | null = null;
+  private hostNoted = new Set<number>();
+  private hostIncidentAt = 0;
+
+  private setHostHold(reason: string | null): void {
+    const changed = (this.hostHold === null) !== (reason === null);
+    this.hostHold = reason;
+    if (changed) bus.publish({ type: "settings" });
+  }
+
+  /** The host has no room for this task yet: says so once in its log, and tells an administrator now and then. */
+  private holdForHost(task: Task, reason: string, now: number): void {
+    this.setHostHold(reason);
+    if (!this.hostNoted.has(task.id)) {
+      this.hostNoted.add(task.id);
+      bus.publish({ type: "event", event: addEvent(task.id, "system", `Waiting for the host: ${reason}. It starts when a running agent finishes or the host has room again`) });
+    }
+    if (now - this.hostIncidentAt < HOST_INCIDENT_MS) return;
+    this.hostIncidentAt = now;
+    recordIncident("host_pressure", "warning", `The host is holding queued tasks back: ${reason}. Running agents carry on, and one task always runs. Give the host more memory or CPU, lower MAX_CONCURRENT_TASKS, or change the limit.`, { taskId: task.id });
+  }
+
   /** How many tasks may run at once now: the setting, or less while recovering from rate limits. */
   effectiveConcurrent(now = Date.now()): number {
     if (this.rateCap === null) return this.maxConcurrent;
@@ -168,7 +198,7 @@ class Scheduler {
   }
 
   kick(): void {
-    if (this.paused || this.stopping) return;
+    if (this.paused || this.stopping) return this.setHostHold(null);
     const now = Date.now();
     let wakeAt = Infinity;
     const queued = queuedTasks();
@@ -178,7 +208,7 @@ class Scheduler {
       if (this.wakeTimer) clearTimeout(this.wakeTimer);
       this.wakeTimer = setTimeout(() => this.kick(), Math.min(Math.max(1000, Date.parse(spend.blocked.until) - now + 1000), 2 ** 31 - 1));
       this.wakeTimer.unref();
-      return;
+      return this.setHostHold(null);
     }
     const profiles = queued.length ? loadProfiles().agents : [];
     // Boards with limits.max_running work at most that many of their cards at once.
@@ -204,6 +234,10 @@ class Scheduler {
     }
     const writing = queued.length ? this.writing(profiles, active) : new Map<string, Task>();
     for (const id of this.writerNoted.keys()) if (!queued.some((task) => task.id === id)) this.writerNoted.delete(id);
+    for (const id of this.hostNoted) if (!queued.some((task) => task.id === id)) this.hostNoted.delete(id);
+    // Short of memory or CPU, the host takes no further task next to the ones running.
+    const pressure = queued.length ? executor.pressure() : null;
+    let held = false;
     for (const task of startOrder(queued, active, now)) {
       if (this.running.size >= this.effectiveConcurrent(now)) break;
       const workspace = workspaceDir(task);
@@ -234,6 +268,13 @@ class Scheduler {
         this.noteWriterAhead(task, writer);
         continue;
       }
+      // One task always runs, whatever the host says: otherwise a full host would stop the queue for good.
+      if (pressure && this.running.size > 0) {
+        this.holdForHost(task, pressure, now);
+        held = true;
+        wakeAt = Math.min(wakeAt, now + HOST_RECHECK_MS);
+        break;
+      }
       for (const key of keys) writing.set(key, task);
       busy.add(workspace);
       perAgent.set(profile.name, (perAgent.get(profile.name) ?? 0) + 1);
@@ -241,6 +282,7 @@ class Scheduler {
       if (task.board) perBoard.set(task.board, (perBoard.get(task.board) ?? 0) + 1);
       this.launch(task, workspace);
     }
+    if (!held) this.setHostHold(null);
     // Recovering from rate limits: a slot comes back every two minutes, so look again then.
     if (this.rateCap !== null && queued.length) wakeAt = Math.min(wakeAt, now + 120_000);
     if (this.wakeTimer) clearTimeout(this.wakeTimer);
@@ -265,7 +307,8 @@ class Scheduler {
     const controller = new AbortController();
     this.running.set(task.id, { controller, workspace });
     log.info("Starting task", { task: task.id, agent: task.agent, repo: `${task.owner}/${task.repo}`, thread: `${task.threadKind}#${task.threadNumber}` });
-    const run = executeTask(task, controller.signal)
+    const run = executor
+      .run(task, controller.signal)
       .catch((error) => log.error("Task crashed", { task: task.id, error: errorMessage(error) }))
       .then(() => boardTaskSettled(task.id))
       .catch((error) => log.error("Board follow-up failed", { task: task.id, error: errorMessage(error) }))

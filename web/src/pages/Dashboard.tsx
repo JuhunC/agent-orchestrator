@@ -156,6 +156,12 @@ export function Dashboard() {
         </Notice>
       )}
 
+      {data.settings.host.holding && (
+        <Notice title="Queued tasks are waiting for the host." action={<LinkButton to="/settings" label="Host" />}>
+          {data.settings.host.holding}. Running agents carry on, and the next task starts when one finishes or the host has room again.
+        </Notice>
+      )}
+
       <StatGrid>
         <StatTile label="Working now" value={<>{data.running.length} <Meta>/ {data.settings.maxConcurrent}</Meta></>} />
         <StatTile label="Queued" value={data.queued.length} />

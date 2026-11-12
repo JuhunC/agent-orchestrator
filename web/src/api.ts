@@ -418,6 +418,8 @@ export interface Settings {
   liveActivity: boolean;
   /** Routing: the triage agent for new issues that name no agent, the repositories it triages (empty: all), and why it wouldn't start. */
   routing: { agent: string | null; repos: string[]; problem: string | null };
+  /** The host agents run on: memory (MB) and load now, the limits under which no further task starts (0: not checked), whether it's short of room (pressure), and why queued tasks wait for it (holding). */
+  host: { executor: string; cpus: number; totalMb: number; freeMb: number; loadPerCpu: number | null; limits: { minFreeMemoryMb: number; maxLoad: number }; pressure: string | null; holding: string | null };
 }
 
 /** What agents' work came to: tasks, pull requests merged or closed, cards sent to a person. */

@@ -31,22 +31,23 @@ export function Guards() {
           <TableRow>
             <Th>Guard</Th>
             <Th>Set to</Th>
-            <Th>Setting</Th>
-            <Th>What it does</Th>
           </TableRow>
         </TableHeader>
         <TableBody>
+          {/* What it does and its setting sit under the name: the panel is half the page wide. */}
           {data.global.map((guard) => (
             <TableRow key={guard.name}>
-              <TableCell>{guard.name}</TableCell>
+              <TableCell>
+                <Text weight="medium">{guard.name}</Text>
+                <Meta block>{guard.what}</Meta>
+                <Meta block>
+                  <span className="ao-setting">
+                    <Code size="inherit">{guard.setting}</Code>
+                  </span>
+                </Meta>
+              </TableCell>
               <TableCell>
                 <Text textWrap="nowrap">{guard.value}</Text>
-              </TableCell>
-              <TableCell>
-                <Code size="inherit">{guard.setting}</Code>
-              </TableCell>
-              <TableCell>
-                <Meta>{guard.what}</Meta>
               </TableCell>
             </TableRow>
           ))}

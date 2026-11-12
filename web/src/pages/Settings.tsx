@@ -5,6 +5,7 @@ import { Backups } from "../components/Backups.tsx";
 import { BaseBranches } from "../components/BaseBranches.tsx";
 import { BlockedUsers } from "../components/BlockedUsers.tsx";
 import { Guards } from "../components/Guards.tsx";
+import { HostPanel } from "../components/Host.tsx";
 import { LiveActivityPanel } from "../components/LiveActivity.tsx";
 import { RoutingPanel } from "../components/Routing.tsx";
 import { api, useApi, type Installation, type ModelInfo, type Settings as SettingsData, type Setup } from "../api.ts";
@@ -321,6 +322,7 @@ export function Settings() {
         <LivePanel settings={data} onSave={update} />
         <BaseBranches />
         <Workspaces info={data.workspaces} onDone={() => void reload()} />
+        <HostPanel host={data.host} onRefresh={() => void reload()} />
         <Guards />
         <Backups />
         <AuditLog />

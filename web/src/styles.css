@@ -28,6 +28,10 @@ body {
 .ao-table td {
   vertical-align: top;
 }
+/* A setting's name under a guard: on a phone it may break anywhere rather than widen the table. */
+.ao-table .ao-setting code {
+  overflow-wrap: anywhere;
+}
 .ao-clickable {
   cursor: pointer;
 }

@@ -19,6 +19,8 @@ interface QueuePlace {
   why: string;
   /** The running task whose agent is changing the same thread: this one starts after it. */
   behind: { id: number; agent: string } | null;
+  /** Why queued tasks wait for the host now (memory, load), or null. */
+  host?: string | null;
 }
 
 /** A task in a chain of agents starting each other. */
@@ -260,7 +262,8 @@ export function TaskDetail({ id }: { id: number }) {
         </Notice>
       )}
       {task.status === "queued" && !isPaused(task) && !task.retryAt && queue && !queue.behind && (
-        <Notice tone="info" title={queue.ahead === 0 ? "Next in the queue: it starts as soon as a slot is free." : `In the queue, with ${queue.ahead} task${queue.ahead === 1 ? "" : "s"} ahead of it.`}>
+        <Notice tone="info" title={queue.ahead === 0 ? (queue.host ? "Next in the queue: it starts when the host has room." : "Next in the queue: it starts as soon as a slot is free.") : `In the queue, with ${queue.ahead} task${queue.ahead === 1 ? "" : "s"} ahead of it.`}>
+          {queue.host ? `The host is holding new tasks back: ${queue.host}. ` : ""}
           {queue.why} Set its priority (top right) to move it: high goes before the rest, low after it.
         </Notice>
       )}

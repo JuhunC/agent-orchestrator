@@ -205,6 +205,11 @@ export const config = {
   // At most this many tasks run at once in one repository (0 = no limit), so a busy repository
   // leaves room for the others.
   maxRunningPerRepo: Math.max(0, int("MAX_RUNNING_PER_REPO", 0)),
+  // The host itself: while less memory than this is free (MB), or the load per CPU is above
+  // HOST_MAX_LOAD, no further task starts next to the ones running (one always may). 0 = not
+  // checked. Memory is checked on Linux only by default: macOS counts memory it can free as used.
+  hostMinFreeMemoryMb: Math.max(0, int("HOST_MIN_FREE_MEMORY_MB", process.platform === "linux" ? 256 : 0)),
+  hostMaxLoad: Math.max(0, num("HOST_MAX_LOAD", 0)),
   // Agents that push take turns on a thread (an issue and its pull request count as one): the
   // next starts when the one before has finished, on what it pushed. off: they run side by side.
   oneWriterPerThread: env("ONE_WRITER_PER_THREAD", "on").toLowerCase() !== "off",

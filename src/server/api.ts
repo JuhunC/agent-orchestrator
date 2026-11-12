@@ -38,6 +38,7 @@ import { rankReason } from "../runner/queue-order.ts";
 import { waitingNotes } from "../runner/inbox.ts";
 import { wakeTask } from "../runner/waits.ts";
 import { listIncidents, renderMetrics } from "../runner/incidents.ts";
+import { executor, megabytes } from "../runner/executor.ts";
 import { outcomeReport } from "../runner/outcomes.ts";
 import { MAX_COMMENTS_PER_TASK, MAX_SUB_ISSUES_PER_TASK } from "../runtime/github-tools.ts";
 import { MAX_RELATED_STARTS_PER_TASK, MAX_ROUTES_PER_TASK } from "../runtime/related-agents.ts";
@@ -156,6 +157,8 @@ function settingsView() {
     liveActivity: liveActivityDefault(),
     /** The triage agent for new issues that name no agent, and why it wouldn't start. */
     routing: { ...routing(), problem: triageProblem() },
+    /** Where tasks run, its memory and load, and why queued tasks wait for it (null: they don't). */
+    host: { ...executor.status(), holding: scheduler.hostHold },
   };
 }
 
@@ -278,11 +281,11 @@ export function registerApi(app: FastifyInstance): void {
   });
 
   /** Where a queued task stands: how many start before it, and why it's placed there. */
-  const queuePlace = (task: Task): { ahead: number; why: string; behind: { id: number; agent: string } | null } | null => {
+  const queuePlace = (task: Task): { ahead: number; why: string; behind: { id: number; agent: string } | null; host: string | null } | null => {
     if (task.status !== "queued" || task.waitReason === "wake") return null;
     const order = startOrder(listTasks({ status: "queued", waiting: false, limit: 500 }), listTasks({ status: "running", limit: 50 }));
     const ahead = order.findIndex((other) => other.id === task.id);
-    return ahead < 0 ? null : { ahead, why: rankReason(task), behind: behindOf([task])[task.id] ?? null };
+    return ahead < 0 ? null : { ahead, why: rankReason(task), behind: behindOf([task])[task.id] ?? null, host: scheduler.hostHold };
   };
 
   // ---------- tasks ----------
@@ -786,6 +789,8 @@ export function registerApi(app: FastifyInstance): void {
         { name: "Pauses per task", setting: "TASK_MAX_WAITS", value: String(config.taskMaxWaits), what: "times one task may pause for other work before it has to finish or report it's blocked" },
         { name: "Agents at once", setting: "MAX_CONCURRENT_TASKS", value: String(scheduler.maxConcurrent), what: "tasks running at the same time" },
         { name: "Agents at once per repository", setting: "MAX_RUNNING_PER_REPO", value: config.maxRunningPerRepo ? String(config.maxRunningPerRepo) : "no limit", what: "tasks running at the same time in one repository; the rest of its queue waits, and other repositories' work starts" },
+        { name: "Free memory to start another agent", setting: "HOST_MIN_FREE_MEMORY_MB", value: config.hostMinFreeMemoryMb ? megabytes(config.hostMinFreeMemoryMb) : "not checked", what: "with less memory free on the host, no further task starts next to the ones running; one task always runs" },
+        { name: "Load to start another agent", setting: "HOST_MAX_LOAD", value: config.hostMaxLoad ? `${config.hostMaxLoad} per CPU` : "not checked", what: "with the host's 1-minute load above this per CPU, no further task starts next to the ones running" },
         { name: "One writer per thread", setting: "ONE_WRITER_PER_THREAD", value: config.oneWriterPerThread ? "on" : "off", what: "agents that push take turns on a thread and its pull request; one that only reads or comments runs alongside" },
         { name: "Conflict check after a merge", setting: "CONFLICT_CHECK_SECONDS", value: config.conflictCheckSeconds ? `${config.conflictCheckSeconds} s` : "hourly only", what: "after a pull request is merged, agents' open pull requests into the same branch are checked for conflicts, and the agent of one that conflicts is started to merge the base in" },
         { name: "Time between scheduled runs", setting: "SCHEDULE_MIN_MINUTES", value: `${config.scheduleMinMinutes} min`, what: "the shortest gap a schedule may have between two runs" },
@@ -828,6 +833,7 @@ export function registerApi(app: FastifyInstance): void {
       spendToday: spend.today,
       spendMonth: spend.month,
       isolated: isolationStatus().mode !== "off",
+      host: { ...executor.status(), holding: scheduler.hostHold !== null },
     });
   });
 
