@@ -35,6 +35,11 @@ Checking what a tool returned: read the `tool_result` blocks in `request.body.me
 - Octokit spaces GitHub writes a second apart across the whole process, so with other work going on a webhook can take several seconds to be recorded (`sendWebhook` waits up to 15 s).
 - macOS temp paths: compare with `realpathSync` (`/var` vs `/private/var`).
 - Tasks go through the scheduler: `db.createTask(...)` then `h.scheduler.kick()`; `h.scheduler.shutdown(0)` / `start()` to simulate a restart.
+- `waitForTask(id)` also waits for `scheduler.idle()`, so it hangs while any other task is held at a gate in the model script: poll the task's events or status instead (`until(check, what)` in test/host.test.ts), release the gate, then wait. Release gates in `after` too (`after(() => (release(), h.stop()))`): stopping waits for running agents. Run a file that might hang with `--test-timeout=150000` into a log file (piped greps show nothing until it ends).
+- `config` (`await import("../src/config.ts")`) is a plain object: set a value for one test and put it back in `finally`. The harness sets `HOST_MIN_FREE_MEMORY_MB=0`, so the machine's free memory doesn't decide what starts.
+- A task started by a mention in a new issue has the request text "title\n\nbody". `GET /api/incidents` returns an array (`?kind=`).
+- Agent tools in scripts: `mcp__github__report_outcome`, `wait_for`, `route_to_agent`, `start_related_agent`. A paused task is `queued` with `waitReason: "wake"` (`waitForTask(id, ["queued"], (task) => task?.waitReason === "wake")`).
+- Fake GitHub extras: `fake.badGateway = n` (the next n issue reads get 502), `fake.reviews`, replaceable `fake.branchSha`.
 - Wait for all agents: loop until no queued/running task, then `await h.scheduler.idle()` (`quiet()` in test/sub-issues.test.ts).
 - Task log: `GET /api/tasks/:id` → `events[].message`.
 - Schedules: don't wait for real time; call `runDueSchedules(new Date(nextRunAt + 1 s))` from `src/schedules/runner.ts` (it also syncs agent.md schedules). Any due schedule runs, so keep other schedules' timings out of the window (test/schedules.test.ts). An agent.md with an error (a bad schedule too) doesn't run at all.
